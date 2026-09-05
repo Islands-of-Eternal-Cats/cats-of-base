@@ -7473,10 +7473,10 @@ function mkWindow(el, title, onClose, narrow) {
 function orderNewFirst(list, buttons, kind, heads) {
   if (!list) return;
   const fresh = newlyOpen(kind);
-  // Строки витрины (§12.137) в эти две группы не идут: их забирает
-  // `orderLockedLast`, и не вычти мы их здесь — «Остальное» встало бы
-  // заголовком над пустотой. У «Найма» класса `locked` нет вовсе, так что
-  // фильтр там ничего не меняет.
+  // Строки витрины (§12.137) в эти две группы не идут: их забирает хвост
+  // ниже, и не вычти мы их здесь — «Остальное» встало бы заголовком над
+  // пустотой. У «Найма» класса `locked` нет вовсе, так что фильтр там ничего
+  // не меняет.
   const shown = (b) => !b.hidden && !b.classList.contains("locked");
   const live = buttons.filter((b, i) => shown(b) && fresh.has(i));
   const rest = buttons.filter((b, i) => shown(b) && !fresh.has(i));
@@ -7492,16 +7492,39 @@ function orderNewFirst(list, buttons, kind, heads) {
   if (live.length) order.push(heads.fresh, ...live, heads.rest);
   else order.push(heads.fresh, heads.rest);
   order.push(...rest);
-  // Скрытые строки держим в конце: узел остаётся на месте, а прятать его
-  // удалением значило бы пересобирать список (§12.118).
-  order.push(...buttons.filter((b) => !shown(b)));
+  // Витрина и скрытые строки — тем же списком, а не вторым проходом
+  // (§12.201): раскладку решает **одно** выражение, потому что `orderChildren`
+  // молчит, только когда `want` совпал с детьми **целиком**, — а два прохода
+  // спорили друг с другом и перекладывали окно каждые 16 мс.
+  order.push(...lockedTail(buttons, heads));
   orderChildren(list, order);
+}
+
+// Хвост списка реестра: «пустая» подпись, витрина (§12.137) и скрытые строки.
+//
+// ⚠️ **Возвращает всех детей, которых не назвали выше, — заголовки в том
+// числе** (§12.201). `orderChildren` сверяет `want` с `box.children` и
+// сдаётся при первом же несовпадении длин: забытый в `want` заголовок значит
+// перекладку списка каждым кадром, то есть мёртвые кнопки в Chrome (§12.84 —
+// `mousedown` в один узел, `mouseup` в уже переставленный).
+function lockedTail(buttons, heads) {
+  const locked = heads.locked
+    ? buttons.filter((b) => !b.hidden && b.classList.contains("locked"))
+    : [];
+  if (heads.locked) heads.locked.hidden = !locked.length;
+  return [
+    heads.empty,
+    ...(heads.locked ? [heads.locked] : []),
+    ...locked,
+    // Скрытые строки держим в конце: узел остаётся на месте, а прятать его
+    // удалением значило бы пересобирать список (§12.118).
+    ...buttons.filter((b) => b.hidden),
+  ];
 }
 
 function syncSciWindow() {
   if (!sciWinOpen || !sciHeads) return;
   orderNewFirst(sciList, topicButtons, "topic", sciHeads);
-  orderLockedLast(sciList, topicButtons, sciHeads);
   // **Пустой список обязан назвать, чего ждать** (§12.151). До сих пор он знал
   // одну причину — «всё изучено», — потому что второй не бывало: дверь с пустым
   // списком просто пряталась. Теперь она пускает, и на старте партии сюда
@@ -7518,25 +7541,26 @@ function syncSciWindow() {
   );
 }
 
-// Третья группа окна «Наука» (§12.137) — темы про артефакт, до которого база
-// ещё не доросла. Ставится **после** обычной раскладки, потому что переставляет
-// уже разложенное: `orderNewFirst` про них не знает и знать не должен —
-// «Найму» такая группа не нужна.
+// Раскладка витрины **без** деления на «только что открылись» — окно
+// «Покупка» (§12.150): группа там одна, витринная, и группировать по новизне
+// нечего. «Наука» этой функции не зовёт: у неё обе группы разом, и делает их
+// `orderNewFirst` одним проходом (§12.201).
 //
 // Заголовок прячется вместе с пустой группой, как и два других (§12.73):
 // подпись над ничем — шум ровно там, где всё в порядке.
 function orderLockedLast(list, buttons, heads) {
   if (!list || !heads?.locked) return;
-  const locked = buttons.filter(
-    (b) => !b.hidden && b.classList.contains("locked"),
+  const plain = buttons.filter(
+    (b) => !b.hidden && !b.classList.contains("locked"),
   );
-  heads.locked.hidden = !locked.length;
-  if (!locked.length) return;
-  list.appendChild(heads.locked);
-  for (const b of locked) list.appendChild(b);
-  // Скрытые снова уходят в хвост — иначе они встанут между группой и её
-  // заголовком при следующей перекладке (§12.118).
-  for (const b of buttons.filter((v) => v.hidden)) list.appendChild(b);
+  // Одним `orderChildren`, как и в «Науке» (§12.201): пока `want` не совпал с
+  // детьми целиком, список перекладывается каждым кадром.
+  orderChildren(list, [
+    heads.fresh,
+    heads.rest,
+    ...plain,
+    ...lockedTail(buttons, heads),
+  ]);
 }
 
 function syncHireWindow() {
