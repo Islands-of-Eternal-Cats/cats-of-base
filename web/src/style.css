@@ -1482,7 +1482,10 @@ main#stage.mode-cursor #mode-banner {
 .raidwin-box {
   display: flex;
   flex-direction: column;
-  width: min(900px, calc(100vw - 60px));
+  /* Три колонки с §12.199: к составу и заказам прибавилась карта. 900 px на
+     троих давали граф в спичечный коробок — имена участков не читались, а
+     соседство ради этого и рисуют. */
+  width: min(1180px, calc(100vw - 60px));
   max-height: calc(100vh - 80px);
   padding: 16px 18px;
   background: var(--panel);
@@ -1520,8 +1523,9 @@ main#stage.mode-cursor #mode-banner {
   color: var(--accent);
 }
 
-/* Две колонки, и левая уже: список котов — это имена, а карточка заказа —
-   пять строк цифр. Скроллятся они порознь: длинный ростер не должен угонять
+/* Три колонки (§12.199), и крайние уже: список котов — это имена, карта — это
+   кружки, а карточка заказа — пять строк цифр и все слова, которыми §12.80
+   держит цену на виду. Скроллятся порознь: длинный ростер не должен угонять
    заказы за нижний край. */
 /* `flex: 1 1 auto` вместе с `min-height: 0` обязательны оба: без первого тело
    растёт по содержимому и вылезает за коробку целиком, без второго флекс-элемент
@@ -1548,9 +1552,30 @@ main#stage.mode-cursor #mode-banner {
   border-right: 1px solid var(--line);
   padding-right: 14px;
 }
+/* Карта — средняя колонка (§12.199). Ширина фиксированная, как у состава: граф
+   не тянется по содержимому, а колонка заказов обязана оставаться самой широкой
+   — в ней живут все слова, ради которых §12.80 держит цену на виду. Своей
+   прокрутки у неё нет: граф вписывается целиком, а подпись под ним короткая. */
+.raidwin-map {
+  flex: 0 0 340px;
+  border-right: 1px solid var(--line);
+  padding-right: 14px;
+  overflow-y: hidden;
+}
 .raidwin-jobs {
   flex: 1 1 auto;
   min-width: 0;
+}
+/* Узкому экрану три колонки не по силам: карта уходит совсем, а не сжимается в
+   нечитаемую кашу. ⚠️ Цена этого — не только картинка: вместе с кружками
+   пропадает **выбор цели**, и зачистка уходит на самый запущенный очаг (тот,
+   что выбирает «авто», §12.199). Ответ «где горит» остаётся словами в причине
+   отказа под заказом (§12.53). Понадобится карта и здесь — ей нужен свой ярус
+   над колонками, а не четверть ширины между ними. */
+@media (max-width: 1100px) {
+  .raidwin-map {
+    display: none;
+  }
 }
 .raidwin-h {
   color: var(--muted);
@@ -2472,3 +2497,84 @@ main#stage.mode-cursor #mode-banner {
   font-size: 12px;
   opacity: 0.65;
 }
+
+/* Карта внешнего мира (§12.198) — витрина соседства, а не пульт.
+   Кнопок отправки здесь нет намеренно: решение живёт в штабе, где рядом состав
+   и прогноз (§12.75). */
+.map-holder {
+  display: flex;
+  flex: 0 1 auto;
+  justify-content: center;
+  min-height: 0;
+  padding: 2px 0 8px;
+}
+.map-svg {
+  width: 100%;
+  max-height: 42vh;
+}
+/* Ребро — это «куда очаг может пойти», а не дорога: `travel` у заказа с длиной
+   отрезка не связан вовсе (§12.198). Поэтому линия тонкая и приглушённая: она
+   называет соседство, а не путь. */
+.map-link {
+  stroke: var(--line);
+  stroke-width: 2;
+  opacity: 0.5;
+}
+.map-site {
+  cursor: pointer;
+}
+.map-ring {
+  fill: var(--panel);
+  stroke: var(--line);
+  stroke-width: 2;
+}
+/* Заражённый участок красится заливкой, а густота её — доля ступени к пределу
+   (см. `syncRaidMap`): ступеней у породы бывает сколько угодно, и словаря
+   цветов под них не завести. */
+.map-site.hot .map-ring {
+  fill: var(--bad);
+  stroke: var(--bad);
+}
+.map-site.on .map-ring {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+.map-stage {
+  fill: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+  text-anchor: middle;
+  pointer-events: none;
+}
+.map-name {
+  fill: var(--muted);
+  font-size: 12px;
+  text-anchor: middle;
+  pointer-events: none;
+}
+/* Куда идёт отряд — именем под участком (§12.199). Своим цветом, а не цветом
+   очага: это про нас, а не про угрозу. */
+.map-squad {
+  fill: var(--accent);
+  font-size: 11px;
+  text-anchor: middle;
+  pointer-events: none;
+}
+.map-site.mine .map-ring {
+  stroke-dasharray: 4 3;
+}
+.map-note {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.map-h {
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Стили целей зачистки убраны вместе со столбиком кнопок (§12.199): цель
+   называет карта, и кнопка у заказа снова одна — обычная. */
