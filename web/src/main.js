@@ -514,6 +514,31 @@ world.addChild(workLayer);
 world.addChild(overlay);
 app.stage.addChild(world);
 
+// Кучи, чертежи и сделки рисуются **в свой постоянный `Graphics`, который
+// чистится каждым кадром**, а не в новый (§12.84).
+//
+// Это седьмое лицо тех же граблей, и самое дорогое из всех. Три слоя из снимка
+// пересобираются каждые 16 мс — данные в них и правда меняются каждый тик, тут
+// пересборка законна, — но `removeChildren()` **не разрушает** снятый узел, а
+// `Graphics` в Pixi v8 держит `GraphicsContext` с оттесселированной геометрией
+// на стороне рендерера, и та живёт до `destroy()`. Выброшенный из дерева, но не
+// разрушенный узел остаётся в кэше рендерера навсегда: на базе с полутысячей
+// куч это ~280 КБ в кадр, то есть **17 МБ в секунду** на ×10 и потолок кучи в
+// четыре гигабайта примерно через три минуты. Видно это не падением, а
+// удушьем: FPS сползает к четырём, счётчик тиков отстаёт, потом вкладка
+// замирает совсем. Рефреш не помогает — партия поднимается из автосейва, и
+// утечка начинается заново с той же скоростью.
+//
+// `clear()` вместо нового узла оставляет тот же контекст и переписывает его на
+// месте: работы столько же, мусора — нисколько. Так уже нарисованы `cellMarker`
+// и `hoverRect`; ⚠️ покадровый `new Graphics()` в мировых слоях заводить нельзя.
+const scrapGfx = new Graphics();
+scrapLayer.addChild(scrapGfx);
+const bpGfx = new Graphics();
+bpLayer.addChild(bpGfx);
+const dealGfx = new Graphics();
+dealLayer.addChild(dealGfx);
+
 const hoverRect = new Graphics();
 // Кольца выбора здесь больше нет: с §12.140 оно ребёнок узла кота, потому что
 // кот едет между клетками, а оверлей знает только клетки.
@@ -1020,7 +1045,12 @@ function tileRegions() {
 
 function drawMap(map) {
   mapCells = map.cells;
-  tileLayer.removeChildren();
+  // ⚠️ `removeChildren` узлы **не разрушает**, а `Graphics` держит геометрию в
+  // кэше рендерера до `destroy()` (см. `scrapGfx`). Здесь узлы приходится
+  // пересобирать — их число и форма зависят от самой карты, — поэтому снятые
+  // разрушаем явно. Зовётся `drawMap` только на росте `map_version`
+  // (инвариант 3), но за партию это сотни вызовов: каждый достроенный тайл.
+  for (const n of tileLayer.removeChildren()) n.destroy();
   const g = new Graphics();
   for (let y = 0; y < meta.height; y++) {
     for (let x = 0; x < meta.width; x++) {
@@ -1138,9 +1168,9 @@ function itemColor(item) {
 }
 
 function drawScrap(list) {
-  scrapLayer.removeChildren();
+  const g = scrapGfx;
+  g.clear();
   if (!list || !list.length) return;
-  const g = new Graphics();
   for (const s of list) {
     const x = s.x * TILE;
     const y = s.y * TILE;
@@ -1161,7 +1191,6 @@ function drawScrap(list) {
       });
     }
   }
-  scrapLayer.addChild(g);
 }
 
 // Сделка в ячейке торгового поста (§12.68). Словарь **один на обе стороны**:
@@ -1173,9 +1202,11 @@ function drawScrap(list) {
 // товар ложится обычной кучей и рисует его уже `drawScrap`. Продажа, наоборот,
 // наполняется на глазах и уезжает целиком.
 function drawDeals(list) {
-  dealLayer.removeChildren();
+  // Цифры сроков (`dealLabels`) — дети того же слоя, и снимать их нечем: они
+  // живут по клетке и убираются своим `destroy()` ниже. Чистится только контур.
+  const g = dealGfx;
+  g.clear();
   if (list && list.length) {
-    const g = new Graphics();
     for (const d of list) {
       const x = d.x * TILE;
       const y = d.y * TILE;
@@ -1195,7 +1226,6 @@ function drawDeals(list) {
         alpha: 0.9,
       });
     }
-    dealLayer.addChild(g);
   }
   // Цифра — только когда срок реально идёт. У неполной продажи его нет вовсе
   // (§12.68), и ноль на карте читался бы как «вот-вот уедет».
@@ -1404,9 +1434,9 @@ function drawWork(snap) {
 }
 
 function drawBlueprints(list) {
-  bpLayer.removeChildren();
+  const g = bpGfx;
+  g.clear();
   if (!list || !list.length) return;
-  const g = new Graphics();
   for (const b of list) {
     const x = b.x * TILE;
     const y = b.y * TILE;
@@ -1462,7 +1492,6 @@ function drawBlueprints(list) {
       });
     }
   }
-  bpLayer.addChild(g);
 }
 
 // --- календарь (§12.46) ----------------------------------------------------
