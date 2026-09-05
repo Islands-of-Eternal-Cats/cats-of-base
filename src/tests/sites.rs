@@ -241,6 +241,13 @@ fn a_blighted_site_closes_its_orders() {
     sim.seed_blight(site, kind);
     assert!(!sim.raid_gates(m).reachable, "заражено — заказ закрыт");
     assert!(!sim.launch(m, squad(&["a", "b"])), "и заявка отклонена");
+    // ⚠️ Но **из списка не пропадает** (§12.79, §12.199): заражение временно и
+    // чинится решением игрока, то есть это цель, к которой он идёт, — а не
+    // «такого сейчас не существует», как у зачистки без очагов.
+    assert!(
+        sim.raid_is_open(m),
+        "заказ остаётся на виду, с причиной словом"
+    );
 }
 
 /// Заказ без места не закрывается никогда: вылазка за своим идёт за котом, а не
@@ -269,11 +276,13 @@ fn a_cleanup_order_lives_where_the_blight_is() {
     let site = sim.set_site("Свалка", (0, 0), &[]);
     sim.set_mission_cleanses(m, kind);
 
-    assert!(!sim.raid_gates(m).reachable, "очага нет — заказа нет");
+    assert!(!sim.raid_gates(m).possible, "очага нет — цели нет");
+    assert!(!sim.raid_is_open(m), "и заказа в списке нет вовсе");
     assert!(sim.raid_gates(m).targets.is_empty());
 
     sim.seed_blight(site, kind);
-    assert!(sim.raid_gates(m).reachable, "очаг есть — есть и заказ");
+    assert!(sim.raid_gates(m).possible, "очаг есть — есть и цель");
+    assert!(sim.raid_is_open(m), "и заказ появился в списке");
     assert_eq!(
         sim.raid_gates(m).targets,
         vec![site],
