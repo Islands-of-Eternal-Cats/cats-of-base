@@ -32,6 +32,7 @@ use crate::hauling::spill;
 use crate::map::BaseMap;
 use crate::path::find_path;
 use crate::relay::{duty_gain, relay_force};
+use crate::sites::stage_danger;
 use crate::skills::{SKILL_RAID, SKILL_RELAY, level_of};
 use crate::slots::{Owners, slot_cells};
 
@@ -71,6 +72,9 @@ pub(crate) struct RaidRules<'w> {
     /// Лежит здесь, а не шестнадцатым параметром системы, по той же причине,
     /// по которой свёрнуты остальные четыре.
     pub(crate) health: Res<'w, HealthRules>,
+    /// Породы очагов: по ним считается надбавка за ступень (§12.198). Здесь же
+    /// и по той же причине — система и без них у предела параметров.
+    pub(crate) blights: Res<'w, BlightRules>,
 }
 
 /// Параметр, которым отряд режет опасность вылазки (§12.70). Имя, а не номер:
@@ -140,9 +144,14 @@ fn capped_paws(rule: &MissionRule, paws: usize) -> usize {
 /// Шанса здесь нет: «чем меньше котов, тем выше вероятность» отвергнуто в
 /// §12.113 по доводу §12.23 — с броском кубика игрок не отличит «взял слишком
 /// много» от «не повезло».
-pub(crate) fn crew_danger(rule: &MissionRule, guide: i32, paws: usize) -> i32 {
+///
+/// `extra` — надбавка за ступень очага там, куда отряд идёт (§12.198). Она
+/// складывается со сложностью заказа **до** деления на проводника: заражённый
+/// участок это то же место, только хуже, и опытный проводник помогает против
+/// него ровно так же. Ноль = карты нет или участок чист.
+pub(crate) fn crew_danger(rule: &MissionRule, extra: i32, guide: i32, paws: usize) -> i32 {
     let paws = capped_paws(rule, paws);
-    let danger = raid_danger(rule.danger, guide);
+    let danger = raid_danger(rule.danger + extra, guide);
     if rule.stealth {
         // Пустой отряд считается за одну лапу: множитель не должен обнулять
         // опасность — «удаётся всегда» это свойство заказа, а не состава.
@@ -440,6 +449,7 @@ pub(crate) fn run_missions(
     mut fame: ResMut<Fame>,
     mut standing: ResMut<Standing>,
     mut raids: ResMut<Raids>,
+    mut blights: ResMut<Blights>,
     mut commands: Commands,
     mut missions: Query<(Entity, &mut Mission)>,
     mut crew: Query<(
@@ -490,6 +500,7 @@ pub(crate) fn run_missions(
         stats: stat_rules,
         items,
         health: hurts,
+        blights: blight_rules,
     } = raid_rules;
     let raid = skill_rules.index_of(SKILL_RAID);
     let comms = skill_rules.index_of(SKILL_RELAY);
@@ -576,7 +587,11 @@ pub(crate) fn run_missions(
             // Считается тем же выражением, что и в прогнозе для панели: игрок
             // обязан получить то, что ему показали.
             let guide = squad.iter().map(|&(.., g)| g).max().unwrap_or(0);
-            let out = outcome(crew_danger(rule, guide, squad.len()), force);
+            // Надбавка за очаг там, куда ходили (§12.198). Цель заморожена в
+            // момент заявки, а ступень берётся **сейчас**: отряд встретил то,
+            // что успело вырасти за дорогу, — в этом и цена промедления.
+            let extra = stage_danger(&blight_rules, mission.site.and_then(|s| blights.at(s)));
+            let out = outcome(crew_danger(rule, extra, guide, squad.len()), force);
 
             // Кто из отряда остался там (§12.40). Выбор — **первый по `id`**, и
             // это намеренно ничего не значит: причины плена игра не называет.
@@ -712,6 +727,22 @@ pub(crate) fn run_missions(
             // «сходил и вернулся ни с чем» — не поступок, за который дают цель.
             if !out.failed && !raids.0.contains(&mission.def) {
                 raids.0.push(mission.def);
+            }
+            // Зачистка снимает очаг **целиком и только на успехе** (§12.198).
+            // Без долей — по тому же доводу, по которому успех вылазки за своим
+            // возвращает всех пленных сразу (§12.40): доля меряет добычу, а
+            // половины очага не бывает. Цену промедления уже назначила ступень:
+            // чем дольше ждали, тем тяжелее было прийти.
+            //
+            // Породу сверяем **на месте**: пока отряд шёл, очаг могли зачистить
+            // с соседнего гаража, а на освободившийся участок могло сесть
+            // что-то другое. Снять чужой очаг «за компанию» значило бы отдать
+            // игроку работу, которой он не делал.
+            if let (Some(kind), Some(site)) = (rule.cleanses, mission.site)
+                && !out.failed
+                && blights.at(site).is_some_and(|b| b.def == kind)
+            {
+                blights.clear(site);
             }
             // Репутация расходится **по сделанному** — тем же выражением, что и
             // добыча с известностью (§12.43). Отсюда её главное свойство: у

@@ -1198,7 +1198,7 @@ fn a_manual_launch_elsewhere_pauses_the_node_rule() {
     sim.enlist("a", 1, 2);
     sim.set_auto_raid(usual as i32, 1, 2);
 
-    assert!(sim.launch_node(other, 1, 2), "игрок отправил отряд сам");
+    assert!(sim.launch_node(other, 1, 2, -1), "игрок отправил отряд сам");
     assert!(!sim.auto_raid_is_on(1, 2), "правило усыплено приказом");
     assert_eq!(sim.auto_raid_at(1, 2), Some(usual), "но заказ помнится");
 
@@ -1286,7 +1286,10 @@ fn a_manual_launch_of_the_same_mission_keeps_the_rule() {
     sim.enlist("a", 1, 2);
     sim.set_auto_raid(def as i32, 1, 2);
 
-    assert!(sim.launch_node(def, 1, 2), "отправили руками тот же заказ");
+    assert!(
+        sim.launch_node(def, 1, 2, -1),
+        "отправили руками тот же заказ"
+    );
     assert_eq!(sim.auto_raid_at(1, 2), Some(def), "правило на месте");
 }
 

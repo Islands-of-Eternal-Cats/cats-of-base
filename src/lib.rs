@@ -72,6 +72,7 @@ mod save;
 mod schedule;
 mod seen;
 mod sim;
+mod sites;
 mod skills;
 mod slots;
 mod snapshot;

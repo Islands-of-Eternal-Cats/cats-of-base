@@ -31,6 +31,7 @@ mod relay;
 mod research;
 mod save;
 mod seen;
+mod sites;
 mod skills;
 mod stats;
 mod structures;
@@ -53,6 +54,7 @@ use std::collections::BTreeMap;
 use crate::ruleset::{ItemDef, TileDef};
 use crate::schedule::build_schedule;
 use crate::sim::Sim;
+use crate::sites::{Step, aim_of, next_step};
 use crate::timeline::{ready_for, revealed};
 
 /// Тиков на один тайл при нулевом навыке. Работа считается в очках (§12.17),
@@ -157,6 +159,14 @@ fn sim_from(rows: &[&str]) -> Sim {
     world.insert_resource(Techs::default());
     world.insert_resource(TimelineRules::default());
     world.insert_resource(Chronicle::default());
+    // Карты внешнего мира у схемы нет: участки и очаги — контент рулсета
+    // (§12.198), ровно как фракции и рынок. Пустые `SiteRules` значат «заказы
+    // живут списком», пустые `Blights` — «расти негде», и это поведение до
+    // §12.198, на котором стоят все чужие тесты. Заводят карту `set_site` и
+    // `set_blight`.
+    world.insert_resource(SiteRules::default());
+    world.insert_resource(BlightRules::default());
+    world.insert_resource(Blights::default());
     world.insert_resource(Fame::default());
     // Фракций в схеме нет, как нет вылазок, навыков и голода: репутация — это
     // контент рулсета, и тесты чужих механик о ней не знают (§12.43). Заводит
@@ -227,6 +237,10 @@ fn sim_from(rows: &[&str]) -> Sim {
         perks: Vec::new(),
         factions: Vec::new(),
         missions: Vec::new(),
+        // Палитры карты пусты, как и всё остальное: у схемы `sim_from` карты
+        // внешнего мира нет (§12.198), её заводят `set_site` и `set_blight_kind`.
+        sites: Vec::new(),
+        blights: Vec::new(),
         recruits: Vec::new(),
         research: Vec::new(),
         recipes: Vec::new(),
@@ -1193,6 +1207,7 @@ impl Sim {
             gift: gift.to_vec(),
             fame,
             toll,
+            seeds: Vec::new(),
         });
         rules.0.len() - 1
     }
@@ -1901,6 +1916,147 @@ impl Sim {
     /// Вернёт её индекс — им же зовётся `launch`.
     fn set_mission(&mut self, squad: usize, ticks: i32, loot: &[(usize, i32)]) -> usize {
         self.set_risky_mission(squad, ticks, 0, 0, loot)
+    }
+
+    // ── Карта внешнего мира (§12.198) ────────────────────────────────────
+
+    /// Завести участок: подпись, где рисовать и соседи по индексу.
+    ///
+    /// Связь **симметрична**, как и в рулсете: назвал соседа один раз — обратная
+    /// дописывается сама. Ссылаться можно только на уже заведённые участки:
+    /// индекс, которого ещё нет, — это опечатка теста, а не карта.
+    fn set_site(&mut self, label: &str, at: (i32, i32), links: &[usize]) -> usize {
+        let mut rules = self.world.resource_mut::<SiteRules>();
+        let me = rules.0.len();
+        let _ = (label, at); // подпись и координаты — подача, ядро их не читает
+        rules.0.push(SiteRule {
+            links: links.to_vec(),
+        });
+        for &n in links {
+            if let Some(other) = rules.0.get_mut(n)
+                && !other.links.contains(&me)
+            {
+                other.links.push(me);
+            }
+        }
+        // Состояние идёт следом за палитрой: очагов ровно столько же слотов,
+        // сколько участков, — то же правило, что и в `Sim::new`.
+        self.world.resource_mut::<Blights>().0.push(None);
+        me
+    }
+
+    /// Завести породу очага: тиков на ступень, предел, расползается ли и
+    /// насколько ступень тяжелее для зачистки.
+    fn set_blight_kind(&mut self, grows: u64, stages: i32, spreads: bool, danger: i32) -> usize {
+        let mut rules = self.world.resource_mut::<BlightRules>();
+        rules.0.push(BlightRule {
+            grows,
+            stages,
+            spreads,
+            danger,
+        });
+        rules.0.len() - 1
+    }
+
+    /// Посадить очаг на участок — то же, что делает стартовый посев рулсета и
+    /// событие таймлайна.
+    fn seed_blight(&mut self, site: usize, kind: usize) -> bool {
+        self.world.resource_mut::<Blights>().seed(site, kind)
+    }
+
+    /// Что на участке: `(порода, ступень)`; `None` — чисто.
+    fn blight_at(&self, site: usize) -> Option<(usize, i32)> {
+        self.world
+            .resource::<Blights>()
+            .at(site)
+            .map(|b| (b.def, b.stage))
+    }
+
+    /// Сколько тиков очаг живёт на нынешней ступени — им меряется, сбросился ли
+    /// счётчик после шага.
+    fn blight_age(&self, site: usize) -> u64 {
+        self.world
+            .resource::<Blights>()
+            .at(site)
+            .map_or(0, |b| b.age)
+    }
+
+    /// Привязать заказ к участку (§12.198): заражённый участок свои заказы
+    /// закрывает.
+    fn set_mission_site(&mut self, def: usize, site: usize) {
+        if let Some(rule) = self.world.resource_mut::<MissionRules>().0.get_mut(def) {
+            rule.site = Some(site);
+        }
+    }
+
+    /// Сделать заказ зачисткой этой породы: он открыт там, где очаг, и его
+    /// сложность растёт со ступенью.
+    fn set_mission_cleanses(&mut self, def: usize, kind: usize) {
+        if let Some(rule) = self.world.resource_mut::<MissionRules>().0.get_mut(def) {
+            rule.cleanses = Some(kind);
+        }
+    }
+
+    /// Прогноз участка ровно так, как его видит снимок (§12.198): что будет
+    /// следующим шагом, через сколько тиков и куда расползётся.
+    fn site_step(&self, site: usize) -> Option<(Step, u64)> {
+        next_step(
+            self.world.resource::<BlightRules>(),
+            self.world.resource::<SiteRules>(),
+            self.world.resource::<Blights>(),
+            site,
+        )
+    }
+
+    /// Первый гараж по обходу карты — тот же, что берёт `launch` без узла.
+    fn gate_cell(&mut self) -> Option<(i32, i32)> {
+        let owners = self.owners();
+        crate::missions::gate_cells(
+            self.world.resource::<BaseMap>(),
+            self.world.resource::<TileRules>(),
+            &owners,
+        )
+        .first()
+        .copied()
+    }
+
+    /// Кто на базе, по `id` и по алфавиту — порядок обхода ECS недетерминирован.
+    fn unit_ids(&mut self) -> Vec<String> {
+        let mut q = self.world.query::<&UnitId>();
+        let mut out: Vec<String> = q.iter(&self.world).map(|u| u.0.clone()).collect();
+        out.sort();
+        out
+    }
+
+    /// Прогноз заказа на зачистку по конкретной цели — ровно так, как его видит
+    /// кнопка в штабе: `(сложность, доля, провал)`.
+    fn aim_forecast(
+        &mut self,
+        at: (i32, i32),
+        def: usize,
+        site: usize,
+    ) -> Option<(i32, i32, bool)> {
+        self.node_aims(at.0, at.1)
+            .into_iter()
+            .find(|a| a.def == def && a.site == site)
+            .map(|a| (a.danger, a.share, a.failed))
+    }
+
+    /// Куда пойдёт этот заказ, если игрок не назвал участок, — тем же
+    /// выражением, каким цель выберет заявка и правило автовылазки.
+    fn raid_aim(&self, def: usize) -> Option<usize> {
+        aim_of(
+            self.world.resource::<MissionRules>(),
+            self.world.resource::<Blights>(),
+            def,
+            None,
+        )
+    }
+
+    /// Куда отряд ушёл на самом деле — замороженная цель идущей вылазки.
+    fn mission_site(&mut self) -> Option<usize> {
+        let mut q = self.world.query::<&Mission>();
+        q.iter(&self.world).next().and_then(|m| m.site)
     }
 
     /// Миссия со сложностью и платой — для тестов исхода (§12.23).

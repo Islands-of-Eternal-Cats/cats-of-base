@@ -55,7 +55,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 31;
+pub(crate) const FORMAT: u32 = 32;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -141,6 +141,10 @@ pub(crate) const SAVED: &[&str] = &[
     // на карте и продолжают работать, только принимают снова всё, и разложенная
     // игроком база молча перемешивается за десяток тиков.
     "Bins",
+    // Очаги на карте (§12.198) — состояние мира, а не правило: рулсет знает
+    // только стартовый посев. Забыть его тише всех: загруженная партия
+    // встретила бы игрока чистой картой вместо кольца пожаров.
+    "Blights",
     // Закладки игрока в окне «Склад» (§12.100). Не правила — сами по себе они
     // ничего не делают, — но состояние партии: игрок решил, что держать на
     // виду, и после загрузки это решение обязано быть на месте. Держать их в JS
@@ -213,6 +217,11 @@ pub(crate) const SKIPPED: &[(&str, &str)] = &[
         "TimelineRules",
         "правила: пересобирает `Sim::new` из рулсета",
     ),
+    ("SiteRules", "правила: пересобирает `Sim::new` из рулсета"),
+    (
+        "BlightRules",
+        "правила: пересобирает `Sim::new` из рулсета — как растёт очаг, знает          контент, а где он сидит сейчас, помнит `Blights` (§12.198)",
+    ),
     ("GoalRules", "правила: пересобирает `Sim::new` из рулсета"),
     (
         "AutoRules",
@@ -279,6 +288,16 @@ pub(crate) struct StateDto {
     /// наборов здесь не бывает — «принимает всё» это отсутствие записи.
     #[serde(default)]
     pub(crate) bins: Vec<(i32, i32, Vec<usize>)>,
+    /// Очаги на карте: по записи на участок, `(порода, ступень, возраст)`
+    /// (§12.198). Состояние мира, а не правило: рулсет знает только стартовый
+    /// посев, а где очаг сидит сейчас и докуда дорос — история партии.
+    ///
+    /// Забыть его тише всего: карта после загрузки вычистилась бы сама собой,
+    /// и партия, которую игрок оставил в кольце пожаров, встретила бы его
+    /// нетронутой. Длина равна числу участков — тем же, что задаёт `Sim::new`;
+    /// снимок с другим рулсетом сюда не доедет (`fingerprint`).
+    #[serde(default)]
+    pub(crate) blights: Vec<Option<(usize, i32, u64)>>,
     /// Правило излишка: предмет, **куда** его девать и сколько штук база
     /// придерживает (§12.87, §12.88, §12.115).
     ///
@@ -605,6 +624,11 @@ pub(crate) struct MissionDto {
     /// он посчитан по числу дошедших лап, и из рулсета его уже не вывести.
     #[serde(default)]
     pub(crate) span: i32,
+    /// Куда отряд ушёл — индекс участка (§12.198). Состояние, а не правило:
+    /// цель заморожена в момент заявки, и из рулсета её не вывести — заказ на
+    /// зачистку ходит по очагам, а не стоит на месте.
+    #[serde(default)]
+    pub(crate) site: Option<usize>,
 }
 
 // ── Снять снимок ──────────────────────────────────────────────────────────
@@ -744,6 +768,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                     left: m.left,
                     span: m.span,
                     covered: m.covered,
+                    site: m.site,
                 }),
             }
         })
@@ -765,6 +790,12 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
             stocking: world.resource::<Stocking>().0.clone(),
             auto_raids: world.resource::<AutoRaids>().0.clone(),
             bins: world.resource::<Bins>().0.clone(),
+            blights: world
+                .resource::<Blights>()
+                .0
+                .iter()
+                .map(|slot| slot.map(|b| (b.def, b.stage, b.age)))
+                .collect(),
             selling: world
                 .resource::<Selling>()
                 .0
@@ -904,6 +935,18 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
     world.resource_mut::<Stocking>().0 = s.stocking.clone();
     world.resource_mut::<AutoRaids>().0 = s.auto_raids.clone();
     world.resource_mut::<Bins>().0 = s.bins.clone();
+    // Длину держит рулсет, а не снимок: у мира ровно столько участков, сколько
+    // их в `sites:`, и приехавший список кладётся поверх — короткий не укоротит
+    // карту, длинный не удлинит. Отпечаток рулсета (`fingerprint`) уже отверг бы
+    // чужой контент, так что расхождение здесь означает только старый формат.
+    for (site, slot) in s.blights.iter().enumerate() {
+        let Some(&(def, stage, age)) = slot.as_ref() else {
+            continue;
+        };
+        if let Some(cell) = world.resource_mut::<Blights>().0.get_mut(site) {
+            *cell = Some(Blight { def, stage, age });
+        }
+    }
     world.resource_mut::<Selling>().0 = s
         .selling
         .iter()
@@ -1173,6 +1216,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
                 gate: m.gate,
                 left: m.left,
                 span: m.span,
+                site: m.site,
             });
         }
     }

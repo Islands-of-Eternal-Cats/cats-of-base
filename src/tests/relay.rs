@@ -235,8 +235,11 @@ fn one_radio_covers_every_raid_at_once() {
     sim.enlist("b", 2, 2);
     sim.post_relay("d", 3, 2);
 
-    assert!(sim.launch_node(first, 1, 2), "первый гараж отправил отряд");
-    assert!(sim.launch_node(second, 2, 2), "второй тоже");
+    assert!(
+        sim.launch_node(first, 1, 2, -1),
+        "первый гараж отправил отряд"
+    );
+    assert!(sim.launch_node(second, 2, 2, -1), "второй тоже");
     sim.tick_n(30);
     assert_eq!(sim.duty_of("d"), Some((3, 2)), "связист на месте");
 
@@ -257,7 +260,7 @@ fn a_second_manned_radio_doubles_the_link() {
         let (mut sim, m) = sim_with_two_gates_one_radio(2, 200);
         sim.enlist("a", 1, 2);
         sim.post_relay("d", 3, 2);
-        sim.launch_node(m, 1, 2);
+        sim.launch_node(m, 1, 2, -1);
         sim.tick_n(40);
         sim.covered_of(m).expect("идёт")
     };
@@ -267,7 +270,7 @@ fn a_second_manned_radio_doubles_the_link() {
         sim.enlist("a", 1, 2);
         sim.post_relay("d", 3, 2);
         sim.post_relay("c", 4, 2);
-        sim.launch_node(m, 1, 2);
+        sim.launch_node(m, 1, 2, -1);
         sim.tick_n(40);
         sim.covered_of(m).expect("идёт")
     };
@@ -281,7 +284,7 @@ fn a_second_manned_radio_doubles_the_link() {
 fn an_empty_ether_costs_nothing_but_the_bonus() {
     let (mut sim, m) = sim_with_two_gates_one_radio(2, 200);
     sim.enlist("a", 1, 2);
-    sim.launch_node(m, 1, 2);
+    sim.launch_node(m, 1, 2, -1);
     sim.tick_n(40);
 
     assert_eq!(sim.covered_of(m), Some(0), "связи нет, а вылазка идёт");
@@ -296,8 +299,8 @@ fn duty_outlasts_the_first_raid_and_ends_with_the_last() {
     sim.enlist("a", 1, 2);
     sim.enlist("b", 2, 2);
     sim.post_relay("d", 3, 2);
-    sim.launch_node(short, 1, 2);
-    sim.launch_node(long, 2, 2);
+    sim.launch_node(short, 1, 2, -1);
+    sim.launch_node(long, 2, 2, -1);
     sim.tick_n(60);
 
     assert_eq!(sim.raid_left(short), None, "короткая вылазка закрылась");
@@ -386,7 +389,7 @@ fn a_node_sends_its_own_crew() {
     let (mut sim, m) = sim_with_two_nodes();
     assert!(sim.enlist("b", 1, 2), "зачислили в отряд первого узла");
 
-    assert!(sim.launch_node(m, 1, 2), "отряд узла ушёл");
+    assert!(sim.launch_node(m, 1, 2, -1), "отряд узла ушёл");
     sim.tick_n(20);
 
     assert!(sim.is_away("b"), "ушёл тот, кто числится");
@@ -400,7 +403,7 @@ fn a_node_sends_its_own_crew() {
 fn a_crew_outlives_its_raid() {
     let (mut sim, m) = sim_with_two_nodes();
     sim.enlist("b", 1, 2);
-    sim.launch_node(m, 1, 2);
+    sim.launch_node(m, 1, 2, -1);
     sim.tick_n(80);
 
     assert!(!sim.is_away("b"), "вылазка кончилась");
@@ -409,7 +412,7 @@ fn a_crew_outlives_its_raid() {
         vec!["b".to_string()],
         "состав на месте"
     );
-    assert!(sim.launch_node(m, 1, 2), "и уходит снова без пересбора");
+    assert!(sim.launch_node(m, 1, 2, -1), "и уходит снова без пересбора");
 }
 
 /// Пустой узел никого не отправляет: заказу нужен ровно `squad` котов, и
@@ -417,11 +420,11 @@ fn a_crew_outlives_its_raid() {
 #[test]
 fn an_empty_node_launches_nobody() {
     let (mut sim, m) = sim_with_two_nodes();
-    assert!(!sim.launch_node(m, 1, 2), "отряда на узле нет");
+    assert!(!sim.launch_node(m, 1, 2, -1), "отряда на узле нет");
 
     sim.enlist("a", 1, 2);
     sim.enlist("b", 1, 2);
-    assert!(!sim.launch_node(m, 1, 2), "а теперь их слишком много");
+    assert!(!sim.launch_node(m, 1, 2, -1), "а теперь их слишком много");
 }
 
 /// **Заказ назначается отряду целиком, а уход откладывается** (§12.191,
@@ -443,7 +446,7 @@ fn a_node_waits_for_its_sleeping_crew() {
     sim.tick_n(6);
     assert!(sim.is_resting("b"), "вымотанный лёг спать");
 
-    assert!(sim.launch_node(m, 1, 2), "заявку принимают и со спящим");
+    assert!(sim.launch_node(m, 1, 2, -1), "заявку принимают и со спящим");
     assert!(sim.is_resting("b"), "и спящего она не будит (§12.51)");
     sim.tick_n(3);
     assert!(!sim.is_away("a") && !sim.is_away("b"), "отряд ждёт у шлюза");
@@ -467,7 +470,10 @@ fn dismissing_the_unfit_cat_lets_the_rest_go() {
     sim.tick_n(6);
 
     sim.dismiss("b");
-    assert!(sim.launch_node(m, 1, 2), "отряд из одного готового ушёл");
+    assert!(
+        sim.launch_node(m, 1, 2, -1),
+        "отряд из одного готового ушёл"
+    );
     sim.tick_n(20);
     assert!(sim.is_away("a") && !sim.is_away("b"));
 }
@@ -494,8 +500,8 @@ fn each_node_sends_its_own_squad() {
     sim.enlist("a", 1, 2);
     sim.enlist("c", 2, 2);
 
-    assert!(sim.launch_node(first, 1, 2));
-    assert!(sim.launch_node(second, 2, 2));
+    assert!(sim.launch_node(first, 1, 2, -1));
+    assert!(sim.launch_node(second, 2, 2, -1));
     sim.tick_n(20);
 
     assert!(sim.is_away("a") && sim.is_away("c"), "оба отряда в поле");
@@ -510,9 +516,9 @@ fn a_busy_node_launches_nothing() {
     let (mut sim, first) = sim_with_two_nodes();
     let second = sim.set_mission(1, 40, &[(0, 5)]);
     sim.enlist("a", 1, 2);
-    assert!(sim.launch_node(first, 1, 2));
+    assert!(sim.launch_node(first, 1, 2, -1));
 
-    assert!(!sim.launch_node(second, 1, 2), "узел уже ведёт вылазку");
+    assert!(!sim.launch_node(second, 1, 2, -1), "узел уже ведёт вылазку");
 }
 
 /// Зачисляют только в клетку с рацией — как приписывают только к ней (§12.60).
@@ -530,7 +536,7 @@ fn enlisting_needs_a_node() {
 fn a_departed_cat_cannot_be_enlisted_elsewhere() {
     let (mut sim, m) = sim_with_two_nodes();
     sim.enlist("a", 1, 2);
-    sim.launch_node(m, 1, 2);
+    sim.launch_node(m, 1, 2, -1);
 
     assert!(!sim.enlist("a", 2, 2), "заявка уже подана");
     assert_eq!(sim.enlisted_at("a"), Some((1, 2)));
@@ -542,7 +548,7 @@ fn a_departed_cat_cannot_be_enlisted_elsewhere() {
 fn dismissing_touches_config_only() {
     let (mut sim, m) = sim_with_two_nodes();
     sim.enlist("a", 1, 2);
-    sim.launch_node(m, 1, 2);
+    sim.launch_node(m, 1, 2, -1);
     sim.tick_n(20);
 
     assert!(sim.dismiss("a"), "вычеркнули");

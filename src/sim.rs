@@ -42,21 +42,22 @@ use crate::movement::{Busy, is_stuck};
 use crate::path::{Reach, find_path};
 use crate::relay::relay_force;
 use crate::ruleset::{
-    EventDef, FactionDef, GoalDef, ItemDef, MissionDef, PerkDef, RecipeDef, RecruitDef,
-    ResearchDef, Ruleset, SkillDef, StatDef, TileDef,
+    BlightDef, EventDef, FactionDef, GoalDef, ItemDef, MissionDef, PerkDef, RecipeDef, RecruitDef,
+    ResearchDef, Ruleset, SiteDef, SkillDef, StatDef, TileDef,
 };
 use crate::save::{FORMAT, SaveFile, capture, fingerprint, note, restore};
 use crate::schedule::build_schedule;
 use crate::seen::note_seen;
+use crate::sites::{Step, aim_danger, aim_of, next_step, site_is_clear, stage_danger, targets_of};
 use crate::skills::{
     Desk, SKILL_RAID, SKILL_SCIENCE, desk_cap, desk_gate, level_cap_of, level_of, xp_ceiling,
 };
 use crate::slots::{Owners, seats_at, slot_cells};
 use crate::snapshot::{
-    AutoGateNames, BaseMapDto, BinSnap, BlueprintSnap, CraftSnap, DealSnap, EntitySnap, GoalSnap,
-    MapMeta, MissionSnap, NeedSnap, NewsSnap, NodeSnap, NoteSnap, PriceSnap, RaidGates, RaidSnap,
-    RecipeSnap, RecruitSnap, ResearchSnap, SaleSnap, SkillSnap, Snapshot, StackSnap, StockSnap,
-    StructureSnap, TallySnap, TickerSnap, TopicSnap,
+    AimSnap, AutoGateNames, BaseMapDto, BinSnap, BlueprintSnap, CraftSnap, DealSnap, EntitySnap,
+    GoalSnap, MapMeta, MissionSnap, NeedSnap, NewsSnap, NodeSnap, NoteSnap, PriceSnap, RaidGates,
+    RaidSnap, RecipeSnap, RecruitSnap, ResearchSnap, SaleSnap, SiteSnap, SkillSnap, Snapshot,
+    StackSnap, StockSnap, StructureSnap, TallySnap, TickerSnap, TopicSnap,
 };
 use crate::timeline::{ready_for, revealed};
 
@@ -72,6 +73,11 @@ pub struct Sim {
     pub(crate) perks: Vec<PerkDef>,
     pub(crate) factions: Vec<FactionDef>,
     pub(crate) missions: Vec<MissionDef>,
+    /// Палитры карты внешнего мира (§12.198): участки и породы очагов. Держим
+    /// их здесь, а не только в ресурсах, по той же причине, что и остальные
+    /// палитры, — `map_meta` отдаёт их виду один раз, целиком из рулсета.
+    pub(crate) sites: Vec<SiteDef>,
+    pub(crate) blights: Vec<BlightDef>,
     pub(crate) recruits: Vec<RecruitDef>,
     pub(crate) research: Vec<ResearchDef>,
     pub(crate) recipes: Vec<RecipeDef>,
@@ -235,10 +241,24 @@ impl Sim {
         let Some(rule) = self.world.resource::<MissionRules>().0.get(def).cloned() else {
             return RaidGates::default();
         };
+        // Куда пойдёт этот заказ (§12.198). У зачистки список целей и есть
+        // ответ на «можно ли взяться»: нет очага — нет и заказа. У обычного
+        // заказа целей нет, а место одно, и закрывает его сидящий там очаг.
+        let targets = targets_of(
+            self.world.resource::<MissionRules>(),
+            self.world.resource::<Blights>(),
+            def,
+        );
+        let reachable = match rule.cleanses.is_some() {
+            true => !targets.is_empty(),
+            false => site_is_clear(self.world.resource::<Blights>(), rule.site),
+        };
         RaidGates {
             unlocked: self.world.resource::<Fame>().0 >= rule.requires,
             welcome: self.world.resource::<Standing>().covers(&rule.needs),
             possible: !rule.rescue || self.has_captive(),
+            reachable,
+            targets,
             // Медленный край срока — свойство заказа, а не отряда (§12.71): тем
             // же `duration`, каким срок замёрзнет на уходе. Нужен там, где
             // отряда ещё нет и считать не на кого.
@@ -761,7 +781,7 @@ impl Sim {
 
     /// Разметка карты по объектам (§12.161). Близнец `plan()`: тот собирает
     /// «как будет» по чертежам, этот — «чьё это» по штампам.
-    fn owners(&mut self) -> Owners {
+    pub(crate) fn owners(&mut self) -> Owners {
         let mut q = self.world.query::<&Structure>();
         let list: Vec<(usize, (i32, i32), u8)> = q
             .iter(&self.world)
@@ -1219,6 +1239,11 @@ impl Sim {
         let (w, h) = (rs.grid.width, rs.grid.height);
         let tile_index = |id: &str| rs.tiles.iter().position(|t| t.id == id).map(|i| i as i16);
         let item_index = |id: &str| rs.items.iter().position(|i| i.id == id);
+        // Участки и породы очагов — такие же палитры по индексу записи
+        // (§12.198). Стоят здесь, а не у сборки самой карты, потому что первым
+        // на них ссылается расписание: событие сеет очаг по адресу.
+        let site_index = |id: &str| rs.sites.iter().position(|s| s.id == id);
+        let blight_index = |id: &str| rs.blights.iter().position(|b| b.id == id);
 
         let mut map = BaseMap::empty(w, h);
         for b in &rs.build {
@@ -1375,6 +1400,13 @@ impl Sim {
                         .collect(),
                     fame: e.fame,
                     toll: e.toll,
+                    seeds: e
+                        .seeds
+                        .iter()
+                        .filter_map(|(site, blight)| {
+                            Some((site_index(site)?, blight_index(blight)?))
+                        })
+                        .collect(),
                 })
                 .collect(),
         ));
@@ -1505,6 +1537,56 @@ impl Sim {
         ));
         world.insert_resource(Standing::default());
         world.insert_resource(Money::default());
+        // Карта внешнего мира (§12.198). Собирается до заказов: заказ ссылается
+        // на участок, а участок на заказ — нет.
+        world.insert_resource(BlightRules(
+            rs.blights
+                .iter()
+                .map(|b| BlightRule {
+                    grows: b.grows,
+                    stages: b.stages,
+                    spreads: b.spreads,
+                    danger: b.danger,
+                })
+                .collect(),
+        ));
+        // Соседство **симметрично** (§12.198): рулсет пишет связь один раз, а
+        // ядро разворачивает её в обе стороны. Односторонняя запись читалась бы
+        // на игре как очаг, ползущий только в одну сторону, — то есть как баг,
+        // причём молчаливый. Сортировка после добавления обратных связей
+        // оставляет порядок детерминированным (§11): сперва то, что назвал
+        // рулсет, потом дописанное ядром — и то и другое по индексу.
+        let mut links: Vec<Vec<usize>> = rs
+            .sites
+            .iter()
+            .map(|s| s.links.iter().filter_map(|id| site_index(id)).collect())
+            .collect();
+        for from in 0..links.len() {
+            for i in 0..links[from].len() {
+                let to = links[from][i];
+                if to != from && !links[to].contains(&from) {
+                    links[to].push(from);
+                }
+            }
+        }
+        world.insert_resource(SiteRules(
+            rs.sites
+                .iter()
+                .enumerate()
+                .map(|(i, _)| SiteRule {
+                    links: links[i].clone(),
+                })
+                .collect(),
+        ));
+        // Стартовый посев (§12.198): мир не обязан начинаться чистым, ровно как
+        // база не начинается голым полом (`build:`).
+        let mut blights = Blights(vec![None; rs.sites.len()]);
+        for (i, s) in rs.sites.iter().enumerate() {
+            if let Some(def) = blight_index(&s.blight) {
+                blights.seed(i, def);
+            }
+        }
+        world.insert_resource(blights);
         world.insert_resource(MissionRules(
             rs.missions
                 .iter()
@@ -1533,6 +1615,8 @@ impl Sim {
                         .iter()
                         .filter_map(|(id, &n)| faction_index(id).map(|f| (f, n)))
                         .collect(),
+                    site: site_index(&m.site),
+                    cleanses: blight_index(&m.cleanses),
                 })
                 .collect(),
         ));
@@ -1768,6 +1852,8 @@ impl Sim {
             perks: rs.perks,
             factions: rs.factions,
             missions: rs.missions,
+            sites: rs.sites,
+            blights: rs.blights,
             recruits: rs.recruits,
             research: rs.research,
             recipes: rs.recipes,
@@ -1820,6 +1906,8 @@ impl Sim {
             news: self.news,
             palette: self.palette.clone(),
             structures: self.structures.clone(),
+            sites: self.sites.clone(),
+            blights: self.blights.clone(),
             items: self.items.clone(),
             skills: self.skills.clone(),
             stats: self.stats.clone(),
@@ -2398,7 +2486,14 @@ impl Sim {
     #[cfg(test)]
     pub(crate) fn launch(&mut self, def: usize, units: Vec<String>) -> bool {
         note(&mut self.world, format!("launch {def} {}", units.join(",")));
-        self.launch_at(def, units, None)
+        self.launch_at(def, units, None, None)
+    }
+
+    /// То же, но с названным участком (§12.198) — для тестов зачистки.
+    #[cfg(test)]
+    pub(crate) fn launch_to(&mut self, def: usize, units: Vec<String>, site: usize) -> bool {
+        note(&mut self.world, format!("launch_to {def} {site}"));
+        self.launch_at(def, units, None, Some(site))
     }
 
     /// Отправить в вылазку отряд, приписанный к гаражу `(x, y)` (§12.61,
@@ -2418,8 +2513,13 @@ impl Sim {
     ///
     /// Вернёт false, если в клетке не гараж, гараж уже занят вылазкой или его
     /// отряд не подходит заказу — всё то же, что и у `launch`.
-    pub fn launch_node(&mut self, def: usize, x: i32, y: i32) -> bool {
-        note(&mut self.world, format!("launch_node {def} {x} {y}"));
+    /// `site` — куда идти (§12.198): индекс участка, `-1` = «не назван».
+    /// Обычному заказу называть нечего — место у него своё; у заказа на
+    /// зачистку это и есть решение игрока, а «не назван» значит «на самый
+    /// запущенный очаг» (`aim_of`), то есть ровно то, что делает правило
+    /// автовылазки.
+    pub fn launch_node(&mut self, def: usize, x: i32, y: i32, site: i32) -> bool {
+        note(&mut self.world, format!("launch_node {def} {x} {y} {site}"));
         if !self.is_gate_at(x, y) || !self.node_is_free(x, y) {
             return false;
         }
@@ -2436,7 +2536,8 @@ impl Sim {
         // `run_auto_raids`): оно принимает решение без присмотра и занимало бы
         // слот на всё время сна.
         let units = self.roster_of(x, y);
-        if !self.launch_at(def, units, Some((x, y))) {
+        let aim = usize::try_from(site).ok();
+        if !self.launch_at(def, units, Some((x, y)), aim) {
             return false;
         }
         // Отправили этот узел **на другой** заказ — правило автовылазки
@@ -2552,10 +2653,24 @@ impl Sim {
         // и прогноз обязан показать этот рост до нажатия.
         let paws = self.ready_roster_of(x, y).len();
         let rules = self.world.resource::<MissionRules>();
+        let blights = self.world.resource::<Blights>();
+        let brules = self.world.resource::<BlightRules>();
+        // Надбавка за очаг — там, куда **пошёл бы** этот заказ (§12.198): у
+        // зачистки это самый запущенный очаг, у обычного заказа — его
+        // собственное место. То же выражение, каким цель выберет заявка, иначе
+        // прогноз считался бы по одному участку, а отряд ушёл бы на другой.
         rules
             .0
             .iter()
-            .map(|r| crew_danger(r, guide, paws))
+            .enumerate()
+            .map(|(def, r)| {
+                crew_danger(
+                    r,
+                    aim_danger(rules, brules, blights, def, None),
+                    guide,
+                    paws,
+                )
+            })
             .collect()
     }
 
@@ -2598,6 +2713,50 @@ impl Sim {
             out.iter().map(|o| o.share).collect(),
             out.iter().map(|o| o.failed).collect(),
         )
+    }
+
+    /// Прогноз по **каждой цели** заказа на зачистку (§12.198).
+    ///
+    /// Заведён потому, что у такого заказа целей несколько, а сложность у них
+    /// разная — она растёт со ступенью очага. Один прогноз на карточку обещал
+    /// бы исход самого запущенного очага и на кнопке свежего: игрок читал бы
+    /// «провал» там, где отряд справится. Инвариант 14 требует не «одно число
+    /// на заказ», а **одно выражение**: `outcome` здесь тот же, каким исход
+    /// посчитается на возвращении, просто спрошенный по каждой цели.
+    ///
+    /// Порядок целей задаёт ядро (`targets_of`) — от запущенного к свежему.
+    pub(crate) fn node_aims(&mut self, x: i32, y: i32) -> Vec<AimSnap> {
+        let forces = self.node_forces(x, y);
+        let guide = self.node_guide_step(x, y);
+        let paws = self.ready_roster_of(x, y).len();
+        let rules = self.world.resource::<MissionRules>().0.clone();
+        let mut out = Vec::new();
+        for (def, rule) in rules.iter().enumerate() {
+            if rule.cleanses.is_none() {
+                continue;
+            }
+            let targets = targets_of(
+                self.world.resource::<MissionRules>(),
+                self.world.resource::<Blights>(),
+                def,
+            );
+            for site in targets {
+                let extra = stage_danger(
+                    self.world.resource::<BlightRules>(),
+                    self.world.resource::<Blights>().at(site),
+                );
+                let danger = crew_danger(rule, extra, guide, paws);
+                let o = outcome(danger, crew_force(rule, forces.iter().copied()));
+                out.push(AimSnap {
+                    def,
+                    site,
+                    danger,
+                    share: o.share,
+                    failed: o.failed,
+                });
+            }
+        }
+        out
     }
 
     /// Ступень проводника среди готовых уйти — лучшая «Реакция» (§12.70).
@@ -2646,10 +2805,37 @@ impl Sim {
             .collect()
     }
 
-    fn launch_at(&mut self, def: usize, units: Vec<String>, node: Option<(i32, i32)>) -> bool {
+    fn launch_at(
+        &mut self,
+        def: usize,
+        units: Vec<String>,
+        node: Option<(i32, i32)>,
+        asked: Option<usize>,
+    ) -> bool {
         let Some(rule) = self.world.resource::<MissionRules>().0.get(def).cloned() else {
             return false;
         };
+        // Куда идём (§12.198). Одно выражение на заявку игрока, на правило
+        // автовылазки и на прогноз в панели: «куда пойдёт этот отряд» обязано
+        // отвечаться одинаково всем троим (инвариант 14).
+        let aim = aim_of(
+            self.world.resource::<MissionRules>(),
+            self.world.resource::<Blights>(),
+            def,
+            asked,
+        );
+        // Ворота места, и их двое — по одному на каждый вид заказа (§12.198).
+        // Заказ на зачистку без цели — это заказ, которого нет: очаг зачистили,
+        // пока отряд собирался, и идти больше некуда. Обычный заказ на
+        // заражённом участке закрыт, и это вся цена бездействия: игрок теряет
+        // возможности, а не котов.
+        if rule.cleanses.is_some() {
+            if aim.is_none() {
+                return false;
+            }
+        } else if !site_is_clear(self.world.resource::<Blights>(), rule.site) {
+            return false;
+        }
         // Больше предела бригада не уводит: вилку задаёт заказ, а не приписка
         // (§12.70). Отказ здесь молчаливый и лечится вычёркиванием кота с узла —
         // подрезать список самим значило бы решать за игрока, кто останется.
@@ -2746,6 +2932,7 @@ impl Sim {
         let mission_e = self.world.spawn(Mission {
             def,
             gate,
+            site: aim,
             // Срок пока неизвестен: он зависит от того, сколько лап дойдёт до
             // шлюза, и замерзает в момент ухода (§12.70).
             left: 0,
@@ -3325,7 +3512,12 @@ impl Sim {
             if !self.auto_outcome_full(x, y, def) {
                 continue;
             }
-            self.launch_node(def, x, y);
+            // Участок не назван (§12.198): обычный заказ идёт к себе домой, а
+            // заказ на зачистку — на **самый запущенный очаг**. В этом и весь
+            // смысл правила после §12.198: оно перестало быть «повтори эту
+            // кнопку» и стало «держи район чистым», — а самая запущенная
+            // ступень и есть та, что вот-вот расползётся.
+            self.launch_node(def, x, y, -1);
         }
     }
 
@@ -4867,6 +5059,14 @@ impl Sim {
             let skill_rules = self.world.resource::<SkillRules>();
             let stat_rules = self.world.resource::<StatRules>();
             let items = self.world.resource::<ItemRules>();
+            // Надбавка за очаг по каждому участку — снятая **числами**, а не
+            // ссылкой: дальше идут `world.query`, а живой заём ресурса не даёт
+            // взять мир мутабельно. Тем же выражением, что и на возвращении.
+            let site_extra: Vec<i32> = {
+                let brules = self.world.resource::<BlightRules>();
+                let blights = self.world.resource::<Blights>();
+                blights.0.iter().map(|b| stage_danger(brules, *b)).collect()
+            };
             // Вклад кота в силу отряда считается ровно как в `run_missions`:
             // сам он стоит единицу, уровень «Вылазки» — сверху, надетое — ещё
             // сверху. Прогноз и результат обязаны быть одним выражением (§12.23).
@@ -4903,10 +5103,14 @@ impl Sim {
                 // инвариант 14). Наружу едет уже урезанная — игрок должен
                 // видеть то, с чем коты столкнутся, а исходную рядом показывает
                 // панель по `danger_base`.
-                let base = rule.map_or(0, |r| r.danger);
+                // Надбавка за очаг: цель у идущей вылазки заморожена
+                // (§12.198), а ступень берётся свежая — отряд встретит то, что
+                // выросло, пока он шёл.
+                let extra = m.site.and_then(|s| site_extra.get(s).copied()).unwrap_or(0);
+                let base = rule.map_or(0, |r| r.danger + extra);
                 let guide = mine().map(|&(.., g, _)| g).max().unwrap_or(0);
                 let paws = mine().count();
-                let danger = rule.map_or(0, |r| crew_danger(r, guide, paws));
+                let danger = rule.map_or(0, |r| crew_danger(r, extra, guide, paws));
                 // Связь входит в **ту же** силу, что и отряд, и считается тем же
                 // выражением, что на возвращении (§12.60, инвариант 14). Число
                 // это «что будет, если связь оборвётся прямо сейчас»: она копится
@@ -4934,6 +5138,9 @@ impl Sim {
                     squad: mine().map(|(_, id, ..)| id.clone()).collect(),
                     size: rule.map_or(0, |r| r.squad),
                     away: mine().any(|&(_, _, away, ..)| away),
+                    // Куда ушли (§12.199): цель заморожена в заявке, и по ней
+                    // карта в штабе метит участок. `-1` — заказ без места.
+                    site: m.site.map_or(-1, |s| s as i32),
                     // Стадия — только у ушедшего отряда: пока он собирается у
                     // шлюза, никакой дороги ещё нет, а «идут к месту» под
                     // стоящей на базе бригадой читается как поломка — ровно та
@@ -4977,6 +5184,41 @@ impl Sim {
         let raids: Vec<RaidSnap> = {
             let count = self.world.resource::<MissionRules>().0.len();
             (0..count).map(|def| self.raid_gates(def)).collect()
+        };
+
+        // Карта внешнего мира (§12.198). Прогноз считает ядро — тем же
+        // `next_step`, каким шагает система роста: посчитай его вид, и карта
+        // однажды пообещает одно, а очаг сядет в другое место (инвариант 14).
+        let sites: Vec<SiteSnap> = {
+            let rules = self.world.resource::<SiteRules>();
+            let brules = self.world.resource::<BlightRules>();
+            let blights = self.world.resource::<Blights>();
+            rules
+                .0
+                .iter()
+                .enumerate()
+                .map(|(i, site)| {
+                    let blight = blights.at(i);
+                    let step = next_step(brules, rules, blights, i);
+                    SiteSnap {
+                        links: site.links.clone(),
+                        blight: blight.map(|b| b.def),
+                        stage: blight.map_or(0, |b| b.stage),
+                        top: blight.map_or(0, |b| brules.top_stage(b.def)),
+                        step: match step.map(|(s, _)| s) {
+                            Some(Step::Grow(_)) => "grow".into(),
+                            Some(Step::Spread(_)) => "spread".into(),
+                            Some(Step::Held) => "held".into(),
+                            None => String::new(),
+                        },
+                        step_in: step.map_or(0, |(_, t)| t),
+                        step_to: match step.map(|(s, _)| s) {
+                            Some(Step::Spread(to)) => Some(to),
+                            _ => None,
+                        },
+                    }
+                })
+                .collect()
         };
 
         let fame = self.world.resource::<Fame>().0;
@@ -5170,6 +5412,7 @@ impl Sim {
                         ready: self.ready_roster_of(x, y),
                         spans: self.node_spans(x, y),
                         dangers: self.node_dangers(x, y),
+                        aims: self.node_aims(x, y),
                         force: forces.iter().sum(),
                         forces,
                         shares,
@@ -5461,6 +5704,7 @@ impl Sim {
             gates,
             comms_now,
             nodes,
+            sites,
             fame,
             standing,
             money,
