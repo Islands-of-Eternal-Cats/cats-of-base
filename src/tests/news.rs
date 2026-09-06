@@ -402,3 +402,87 @@ fn an_item_a_recipe_already_makes_is_never_news() {
         sim.news(),
     );
 }
+
+/// Правило игрока становится новостью на изучении своей технологии (§12.202).
+///
+/// Довод §12.126 и §12.136 в третий раз, и здесь он сильнее всего: постройка
+/// хотя бы удлиняет палитру, предмет — заводит строку на складе, а автоматика
+/// не кладёт на карту **ничего**. «Автопродажа» даёт полоску «сбывать сверх N»
+/// в окне «Склад», «Автовылазки» — тумблер «↻» в карточке заказа; оба места
+/// закрыты модалом, и на главном экране не меняется ни пиксель. Соседней
+/// новости, за которой событие можно было бы заметить, у этих тем тоже нет:
+/// построек и рецептов они не открывают.
+#[test]
+fn a_rule_opens_with_its_technology() {
+    let mut sim = sim_bare();
+    // В схеме `sim_from` ворот нет вовсе, то есть все три правила открыты с
+    // самого начала и молча уходят в базовую линию. Закрываем сбыт.
+    sim.set_auto_gates("logistics", "", "");
+    sim.tick_n(2);
+    assert!(sim.news().is_empty(), "без технологии правила нет вовсе");
+
+    sim.set_tech("logistics");
+    sim.tick_n(1);
+    // `def` — индекс в палитре `automation:`, тот же, что у `auto_gates_open`.
+    assert_eq!(sim.news(), vec![(NewsKind::Rule, 0, true)]);
+}
+
+/// Каждое правило отвечает за себя: изученный сбыт не объявляет автовылазку.
+///
+/// Тот же довод, по которому §12.93 развела три флага по именованным полям —
+/// перепутать их местами по индексу проще, чем кажется.
+#[test]
+fn each_rule_announces_only_itself() {
+    let mut sim = sim_bare();
+    sim.set_auto_gates("logistics", "planning", "callsigns");
+    sim.tick_n(2);
+    sim.set_tech("callsigns");
+    sim.tick_n(1);
+    assert_eq!(sim.news(), vec![(NewsKind::Rule, 2, true)]);
+}
+
+/// Закрытий у правила не бывает — ворота одна технология, а технологии не
+/// забываются (§12.18). Ровно то же свойство, что у рецепта и у постройки.
+#[test]
+fn a_rule_never_closes() {
+    let mut sim = sim_bare();
+    sim.set_auto_gates("logistics", "", "");
+    sim.set_tech("logistics");
+    sim.tick_n(2);
+    let after_open = sim.news().len();
+    sim.tick_n(50);
+    assert_eq!(sim.news().len(), after_open, "правило закрыться не может");
+}
+
+/// На боевом рулсете три темы автоматики объявляют три разных правила, и ни
+/// одно из них не приходит на старте: `automation:` в `core.yaml` закрыт
+/// технологиями целиком (§12.93), то есть базой сперва управляют руками.
+#[test]
+fn the_shipped_ruleset_announces_its_automation() {
+    let mut sim = Sim::new(CORE).expect("мир");
+    sim.without_timeline();
+    sim.tick_n(5);
+    assert!(
+        !sim.news().iter().any(|&(k, ..)| k == NewsKind::Rule),
+        "автоматика открыта с начала: {:?}",
+        sim.news()
+    );
+
+    for gate in sim.auto_gates() {
+        sim.set_tech(&gate);
+    }
+    sim.tick_n(1);
+    let mut rules: Vec<usize> = sim
+        .news()
+        .iter()
+        .filter(|&&(k, _, o)| k == NewsKind::Rule && o)
+        .map(|&(_, def, _)| def)
+        .collect();
+    rules.sort_unstable();
+    assert_eq!(
+        rules,
+        vec![0, 1, 2],
+        "объявлены не все правила: {:?}",
+        rules
+    );
+}

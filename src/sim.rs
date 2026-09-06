@@ -54,7 +54,7 @@ use crate::skills::{
 };
 use crate::slots::{Owners, seats_at, slot_cells};
 use crate::snapshot::{
-    AimSnap, AutoGateNames, BaseMapDto, BinSnap, BlueprintSnap, CraftSnap, DealSnap, EntitySnap,
+    AimSnap, AutoGateName, BaseMapDto, BinSnap, BlueprintSnap, CraftSnap, DealSnap, EntitySnap,
     GoalSnap, MapMeta, MissionSnap, NeedSnap, NewsSnap, NodeSnap, NoteSnap, PriceSnap, RaidGates,
     RaidSnap, RecipeSnap, RecruitSnap, ResearchSnap, SaleSnap, SiteSnap, SkillSnap, Snapshot,
     StackSnap, StockSnap, StructureSnap, TallySnap, TickerSnap, TopicSnap,
@@ -399,6 +399,22 @@ impl Sim {
             .any(|r| r.gives.iter().any(|&(i, _)| i == def) && techs.covers(&r.requires))
     }
 
+    /// Открыто ли правило игрока — **та же `opens`, какой считает ворота
+    /// снимок** (§12.93, §12.202), и тот же порядок `def`, каким едут ярлыки в
+    /// `meta.auto_gates`: и то и другое берётся из `AutoRules::gates`.
+    ///
+    /// Второй перечень трёх правил рядом с первым — это ровно то «приглашение
+    /// перепутать их местами», ради которого §12.93 развела флаги по именованным
+    /// полям; здесь у ленты выбора нет (`def` — число), поэтому порядок и живёт
+    /// в одном месте.
+    ///
+    /// Закрытий не бывает: ворота — одна технология, а технологии не
+    /// забываются (§12.18), — как у рецепта и у тайла.
+    pub(crate) fn rule_is_open(&self, def: usize) -> bool {
+        let techs = self.world.resource::<Techs>();
+        self.world.resource::<AutoRules>().open_at(def, techs)
+    }
+
     /// Наблюдатель ленты новостей (§12.120): что открылось и что закрылось за
     /// этот тик.
     ///
@@ -422,6 +438,10 @@ impl Sim {
             self.world.resource::<CraftRules>().0.len(),
             self.world.resource::<TileRules>().0.len(),
             self.items.len(),
+            // Правила автоматики: палитра у них не из рулсета, а сама
+            // `automation:` — три записи, и число живёт рядом с воротами
+            // (§12.202).
+            AutoRules::COUNT,
         ];
         // Базовая линия снимается молча: партия начинается с открытой первой
         // ступени, и объявлять её новостью не о чем. У загруженной партии линия
@@ -459,6 +479,10 @@ impl Sim {
                     // (§12.145). Закрытий тут не бывает по обеим сторонам:
                     // `Seen` только растёт, технологии не забываются (§12.18).
                     NewsKind::Item => self.item_is_open(def),
+                    // Правило игрока (§12.202): изученная автоматика не кладёт
+                    // на карту ничего, и без ленты её появление невидимо
+                    // целиком — довод §12.126 и §12.136 в третий раз.
+                    NewsKind::Rule => self.rule_is_open(def),
                 };
                 let was = self.world.resource::<News>().was_open(kind, def);
                 // **Открывшийся рецепт объявляет себя сам** (§12.145): он
@@ -1935,7 +1959,10 @@ impl Sim {
             // а не «нужна какая-то наука». Ищем тему по `id` из рулсета — имён
             // технологий в ядре нет, они контент.
             auto_gates: {
-                let gates = self.world.resource::<AutoRules>();
+                // Порядок — из `AutoRules::gates`, и он же `def` новости о
+                // правиле (§12.202): второй список из трёх строк в JS увёл бы
+                // клик по новости не в ту дверь.
+                let gates = self.world.resource::<AutoRules>().gates();
                 let name = |id: &str| {
                     if id.is_empty() {
                         return String::new();
@@ -1945,11 +1972,13 @@ impl Sim {
                         .find(|t| t.id == id)
                         .map_or_else(|| id.to_string(), |t| t.label.clone())
                 };
-                AutoGateNames {
-                    sales: name(&gates.sales.clone()),
-                    crafting: name(&gates.crafting.clone()),
-                    raids: name(&gates.raids.clone()),
-                }
+                gates
+                    .iter()
+                    .map(|&(kind, gate)| AutoGateName {
+                        kind,
+                        tech: name(gate),
+                    })
+                    .collect()
             },
             perks: self.perks.clone(),
             factions: self.factions.clone(),
@@ -5689,6 +5718,7 @@ impl Sim {
                     NewsKind::Recipe => "recipe",
                     NewsKind::Tile => "tile",
                     NewsKind::Item => "item",
+                    NewsKind::Rule => "rule",
                 },
                 def: n.def,
                 opened: n.opened,

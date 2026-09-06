@@ -707,11 +707,39 @@ let postLot = 0;
 // один раз в `meta.auto_gates`, потому что имя темы это контент.
 let autoOpen = { sales: true, crafting: true, raids: true };
 
+// Как правило зовётся на экране. Подача, а не механика, поэтому живёт в виде
+// (§12.46): ядро о словах не знает, оно возит ключ.
+const AUTO_LABEL = {
+  crafting: "запас в мастерской",
+  sales: "сбыт излишков",
+  raids: "автовылазки",
+};
+
+// За какой дверью правилом пользуются (§12.202): порог сбыта и порог запаса —
+// полоски в строке предмета в окне «Склад», автовылазка — тумблер «↻» в
+// карточке заказа в штабе. По этому же делению правило носит метку на дверь и
+// гаснет, когда игрок её открыл и закрыл.
+const RULE_DOOR = { sales: "stock", crafting: "stock", raids: "raid" };
+
+// Ключ правила по индексу палитры. ⚠️ **Порядок приезжает из ядра**
+// (`AutoRules::gates`, §12.202) и здесь не переписан: по нему же считается
+// `def` новости, и второй список из трёх строк увёл бы клик не в ту дверь.
+function autoKind(def) {
+  return (meta?.auto_gates ?? [])[def]?.kind ?? "";
+}
+
+// Правила, живущие за этой дверью, — индексами палитры.
+function ruleDefsAt(door) {
+  return (meta?.auto_gates ?? []).flatMap((g, i) =>
+    RULE_DOOR[g.kind] === door ? [i] : [],
+  );
+}
+
 // Отказ ворот автоматики словом (§12.53): «нужна какая-то наука» не говорит
 // ничего, поэтому называем тему по имени. `null` — ворота открыты.
 function autoGateHint(kind) {
   if (autoOpen[kind]) return null;
-  const name = (meta?.auto_gates ?? {})[kind];
+  const name = (meta?.auto_gates ?? []).find((g) => g.kind === kind)?.tech;
   return name ? `Нужно исследование «${name}»` : "Нужно исследование";
 }
 // Зажат ли Shift: он удваивает не смысл кнопки, а её размер (пять штук против
@@ -7260,9 +7288,17 @@ function markNewsSeen(keys) {
 
 // Непрочитанные новости этого вида. Метка на двери и группа в окне живут
 // именно по ним: тикер гаснет по времени, а «я это ещё не смотрел» — нет.
-function newsPending(kind) {
+//
+// ⚠️ **`defs` — не украшение, а необходимость у правил** (§12.202): три правила
+// автоматики живут за двумя разными дверями, и «прочитал» у одной не значит
+// «прочитал» у другой. Без среза закрытый «Склад» гасил бы и метку штаба —
+// то есть стирал бы новость, которую игрок не видел.
+function newsPending(kind, defs = null) {
   return (lastSnap?.news ?? []).filter(
-    (n) => n.kind === kind && !newsSeen.has(newsKey(n)),
+    (n) =>
+      n.kind === kind &&
+      (defs === null || defs.includes(n.def)) &&
+      !newsSeen.has(newsKey(n)),
   );
 }
 
@@ -7278,8 +7314,8 @@ function newlyOpen(kind) {
 
 // Открыл список — значит прочитал: гасим и метку, и тикеры этого вида. По
 // наведению мыши не гасим: провёл курсором мимо — это не «посмотрел».
-function readNews(kind) {
-  markNewsSeen(newsPending(kind).map(newsKey));
+function readNews(kind, defs = null) {
+  markNewsSeen(newsPending(kind, defs).map(newsKey));
 }
 
 // Слово новости. Существительное со значком не годится (§12.109): «новое» —
@@ -7314,6 +7350,27 @@ function newsText(n) {
     return n.opened
       ? ["в палитре появилась постройка", label]
       : ["постройка закрылась", label];
+  }
+  if (n.kind === "rule") {
+    // Правило игрока (§12.202). Довод §12.126 и §12.136 в третий раз, и здесь
+    // он сильнее всего: постройка хотя бы удлиняет палитру, предмет заводит
+    // строку на складе, а изученная автоматика не кладёт на карту **ничего** —
+    // полоска «сбывать сверх N» и тумблер «↻» стоят за закрытым модалом, и на
+    // главном экране не меняется ни пиксель. Соседней новости, за которой
+    // событие можно было бы заметить, у этих трёх тем тоже нет: ни построек,
+    // ни рецептов они не открывают.
+    //
+    // Слово берём то же, каким тема обещала правило в строке «Открывает:
+    // правила …» (`opensOf`): разойдись они, и новость отвечает не на то
+    // обещание, ради которого игрок тему и брал.
+    //
+    // Закрытий не бывает — ворота одна технология, а технологии не забываются
+    // (§12.18); ветку пишем по доводу рецепта и постройки: молчаливое «?» на
+    // экране объяснить было бы нечем.
+    const label = AUTO_LABEL[autoKind(n.def)] ?? "автоматика";
+    return n.opened
+      ? ["открылось правило", label]
+      : ["правило закрылось", label];
   }
   if (n.kind === "item") {
     // Новость про **вещь**, а не про умение (§12.136): она приехала на базу
@@ -7352,7 +7409,7 @@ function newsText(n) {
 // у реестров это закрытие окна (пока оно открыто, группа «Только что открылись»
 // и есть весь ответ), у заказов — штаб. Гасить здесь значило бы стереть метку
 // тем же движением, которым игрок пошёл смотреть.
-function openNewsTarget(kind) {
+function openNewsTarget(kind, def) {
   // Новость об открывшемся заказе ведёт **в штаб** (§12.120): заказы стоят
   // только там (§12.75). Узел вид не называет — его выберет само окно (первый
   // свободный, иначе первый по порядку `nodes`, §12.66), а вкладку игрок
@@ -7367,7 +7424,15 @@ function openNewsTarget(kind) {
   // раздел тулбара — единственное место, где новую кнопку видно вместе с
   // соседями и где ею тут же можно размечать.
   else if (kind === "tile") openOnly("Постройка");
-  else openSciWindow();
+  // Правило ведёт туда, где им пользуются (§12.202): порог сбыта и порог
+  // запаса — полоски в строке предмета в окне «Склад», автовылазка — тумблер
+  // «↻» в карточке заказа. Указателя в шапке склада (§12.136) у него нет и
+  // быть не может: полоска порога стоит **в каждой** строке, то есть новость
+  // здесь не строка, а колонка, и вести к одной из сорока не к чему.
+  else if (kind === "rule") {
+    if (RULE_DOOR[autoKind(def)] === "raid") openRaidWindow();
+    else openStockWindow();
+  } else openSciWindow();
 }
 
 // ⚠️ Стопка **строится узлами и только на изменение** (§12.118): она живёт под
@@ -7392,6 +7457,7 @@ function renderNews(snap) {
       row = document.createElement("div");
       row.className = "newsrow";
       row.dataset.kind = n.kind;
+      row.dataset.def = n.def;
       row.dataset.key = key;
       const [kind, label] = newsText(n);
       row.innerHTML =
@@ -7420,7 +7486,7 @@ onPanelClick(newsEl, ".news-x", (b) => {
 // порядку слушателей — на порядок здесь полагаться нельзя.
 onPanelClick(newsEl, ".newsrow", (row, e) => {
   if (e.target.closest(".news-x")) return;
-  openNewsTarget(row.dataset.kind);
+  openNewsTarget(row.dataset.kind, Number(row.dataset.def));
 });
 
 // --- каркас модального окна (§12.118) ---------------------------------------
@@ -7738,15 +7804,25 @@ function syncDoors(snap) {
 }
 
 function syncNewsMarks() {
-  // Дверь «Склад» носит метку и от рецепта, и от нового ресурса: обе новости
-  // отвечают строкой в одном и том же окне (§12.136).
+  // Дверь «Склад» носит метку от рецепта, от нового ресурса и от правила: все
+  // три отвечают в одном и том же окне (§12.136, §12.202). Правила режем по
+  // двери, а не берём вид целиком: автовылазка живёт в штабе, и её метка на
+  // «Складе» гасла бы, не будучи показанной.
   stockDoor?.classList.toggle(
     "fresh",
-    newsPending("recipe").length + newsPending("item").length > 0,
+    newsPending("recipe").length +
+      newsPending("item").length +
+      newsPending("rule", ruleDefsAt("stock")).length >
+      0,
   );
   sciDoor?.classList.toggle("fresh", newsPending("topic").length > 0);
   hireDoor?.classList.toggle("fresh", newsPending("recruit").length > 0);
-  raidDoor?.classList.toggle("fresh", newsPending("raid").length > 0);
+  raidDoor?.classList.toggle(
+    "fresh",
+    newsPending("raid").length +
+      newsPending("rule", ruleDefsAt("raid")).length >
+      0,
+  );
   // У палитры окна нет, метку носит заголовок раздела — и гаснет она на
   // **закрытии** раздела, как у окон (§12.120): пока раздел раскрыт,
   // подсвеченная кнопка и есть весь ответ на «что нового».
@@ -7907,9 +7983,9 @@ function opensOf(topic, known = []) {
     ],
     [
       "правила",
-      Object.entries(meta.auto_gates ?? {})
-        .filter(([, tech]) => gateNames.includes(tech))
-        .map(([kind]) => AUTO_LABEL[kind] ?? kind),
+      (meta.auto_gates ?? [])
+        .filter((g) => gateNames.includes(g.tech))
+        .map((g) => AUTO_LABEL[g.kind] ?? g.kind),
     ],
   ];
 
@@ -7918,12 +7994,6 @@ function opensOf(topic, known = []) {
     .map(([kind, xs]) => `${kind} ${xs.join(", ")}`)
     .join(" · ");
 }
-
-const AUTO_LABEL = {
-  crafting: "запас в мастерской",
-  sales: "сбыт излишков",
-  raids: "автовылазки",
-};
 
 function buildSciWindow() {
   const { list } = mkWindow(sciWinEl, "Наука", () => closeSciWindow(), true);
@@ -8785,6 +8855,9 @@ function closeStockWindow() {
   // окна — и новое умение, и новый ресурс (§12.136).
   readNews("recipe");
   readNews("item");
+  // Правило видно целиком: полоска «сбывать сверх N» и «делать до N» стоит
+  // теперь в каждой строке окна, и указывать на одну из сорока незачем.
+  readNews("rule", ruleDefsAt("stock"));
   // Уход из окна — конец набора (§12.89): открытую правку досылаем, иначе
   // число не доедет до ядра и не попадёт в автосейв.
   endNumEdit(true);
@@ -9850,6 +9923,9 @@ function closeRaidWindow() {
   // Гасим на закрытии, и безусловно: колонка заказов в штабе видна **всегда**,
   // даже когда отряд в поле, — значит визит и есть «посмотрел» (§12.120).
   readNews("raid");
+  // Автовылазка тоже видна целиком: тумблер «↻» появился в каждой карточке
+  // заказа (§12.202). Правила «Склада» здесь не гасим — их игрок не видел.
+  readNews("rule", ruleDefsAt("raid"));
   raidWinOpen = false;
   raidWinAt = null;
   raidUi = null;
