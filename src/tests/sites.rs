@@ -323,6 +323,29 @@ fn a_failed_cleanup_leaves_the_blight_alone() {
     assert_eq!(sim.blight_at(site), Some((kind, 1)), "очаг на месте");
 }
 
+/// Провал зачистки пленных не оставляет: очаг — биологическая угроза от
+/// природы, у неё нет ни воли, ни лагеря, и брать в плен там некому. Цена
+/// провала прежняя — добыча и здоровье, — но кот возвращается всегда.
+#[test]
+fn a_failed_cleanup_takes_no_captives() {
+    let (mut sim, m) = sim_with_gate(&["#######", "#a...b#", "#######"], (3, 1), 2, 10);
+    let kind = sim.set_blight_kind(0, 1, false, 0);
+    let site = sim.set_site("Свалка", (0, 0), &[]);
+    sim.set_mission_cleanses(m, kind);
+    // Вылазка за своим есть и открыта — то есть плен был бы возможен.
+    sim.set_rescue_mission(1, 5, 0);
+    if let Some(rule) = sim.world.resource_mut::<MissionRules>().0.get_mut(m) {
+        rule.danger = 40;
+    }
+    sim.seed_blight(site, kind);
+
+    assert!(sim.launch_to(m, squad(&["a", "b"]), site));
+    sim.tick_n(30);
+    assert_eq!(sim.blight_at(site), Some((kind, 1)), "провал, очаг на месте");
+    assert!(!sim.is_captive("a") && !sim.is_captive("b"), "оба дома");
+    assert!(!sim.is_away("a") && !sim.is_away("b"), "и оба на базе");
+}
+
 /// Породу сверяем на месте: пока отряд шёл, очаг мог зачистить сосед, а на
 /// освободившийся участок сесть что-то другое. Снять чужой очаг «за компанию»
 /// значило бы отдать игроку работу, которой он не делал.

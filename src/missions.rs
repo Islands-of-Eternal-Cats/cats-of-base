@@ -606,6 +606,12 @@ pub(crate) fn run_missions(
             // неудачное спасение плодит второго пленника и база уходит в
             // спираль. И некому идти — тоже не оставляет: см. `rescue_is_possible`.
             //
+            // **Зачистка очага — второе такое исключение** (§12.198): очаг это
+            // биологическая угроза от природы, у неё нет ни воли, ни лагеря, и
+            // брать в плен там некому. Провал зачистки стоит добычи и здоровья,
+            // но кот возвращается всегда. Отдельного поля у правила нет и не
+            // нужно: `cleanses` уже говорит, с чем отряд имел дело.
+            //
             // Считается это **личным составом за вычетом пленных и минус один
             // за нового** (§12.59), а не «кто сейчас дома»: иначе число зависело
             // бы от того, сколько отрядов случайно в поле, и второй отряд
@@ -614,16 +620,19 @@ pub(crate) fn run_missions(
                 .iter()
                 .count()
                 .saturating_sub(captives.iter().count() + lost_this_tick + 1);
-            let captive =
-                if out.failed && !rule.rescue && rescue_is_possible(&rules, fame.0, on_base) {
-                    crew.iter()
-                        .filter(|(_, s, ..)| s.0 == mission_e)
-                        .map(|(e, _, id, ..)| (id.0.as_str(), e))
-                        .min()
-                        .map(|(_, e)| e)
-                } else {
-                    None
-                };
+            let captive = if out.failed
+                && !rule.rescue
+                && rule.cleanses.is_none()
+                && rescue_is_possible(&rules, fame.0, on_base)
+            {
+                crew.iter()
+                    .filter(|(_, s, ..)| s.0 == mission_e)
+                    .map(|(e, _, id, ..)| (id.0.as_str(), e))
+                    .min()
+                    .map(|(_, e)| e)
+            } else {
+                None
+            };
             if captive.is_some() {
                 lost_this_tick += 1;
             }
