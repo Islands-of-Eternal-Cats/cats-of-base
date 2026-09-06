@@ -3,6 +3,14 @@
 
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { ITEM_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
+import {
+  articleKeys,
+  articleLinks,
+  articleTitle,
+  hasArticle,
+  loadWiki,
+  renderArticle,
+} from "./wiki.js";
 
 const TILE = 28;
 
@@ -491,6 +499,12 @@ await app.init({
   autoDensity: true,
 });
 stageEl.appendChild(app.canvas);
+
+// Справочник грузится один раз за страницу и **не блокирует старт** (§12.203):
+// тексты принадлежат игре, а не партии, и партия обязана подниматься, даже
+// если файлы не доехали, — тогда значков «?» просто нет. Ждать их здесь значило
+// бы поставить запуск мира в зависимость от лора.
+loadWiki();
 
 // Мир: тайлы -> лом -> чертежи -> юниты -> оверлей (подсветки).
 const world = new Container();
@@ -2515,7 +2529,15 @@ function renderCellPanel(snap) {
   const def = tile >= 0 ? meta.palette[tile] : null;
   const name = def ? def.label || def.id : "Пустота";
   const parts = [
-    `<div class="cat-name">${esc(name)} <span class="cell-at">${x}, ${y}</span></div>`,
+    `<div class="cat-name">${esc(name)} <span class="cell-at">${x}, ${y}</span>` +
+      // Значок «?» в справочник (§12.203). Панель клетки отвечает на «что тут
+      // сейчас», а «что это вообще за комната» — вопрос к статье, и это
+      // **дверь, а не решение**, поэтому §12.80 к ней не применим: открыть
+      // окно ничего не стоит и отменяется закрытием (прецедент — «Назначить»
+      // у ящика, §12.195). §12.101 цел: модал открывает не клик по карте, а
+      // кнопка в уже открытой панели — жест второй и осознанный.
+      (def ? wikiMark(`tile:${def.id}`) : "") +
+      "</div>",
   ];
 
   // Что случится по второму клику — до всего остального: приказ двухшаговый, и
@@ -5998,6 +6020,17 @@ function buildToolbar() {
   liveTitle(files, "Кто каков, что с ним было и чему его выучить");
   el.appendChild(files);
 
+  // «Справочник» (§12.203). Дверь не гаснет и не прячется: лор партии не
+  // принадлежит и от изученного не зависит — это единственная дверь в тулбаре,
+  // у которой ворот нет вовсе. Ведёт она в оглавление, потому что адресата у
+  // неё нет: к вещам ведут значки «?» рядом с самими вещами.
+  const wiki = mkTool(
+    '<span class="sw sw-note"></span><span>Справочник</span>',
+    folds(() => openWikiDoor()),
+  );
+  liveTitle(wiki, "Что это за мир, кто в нём есть и как всё устроено");
+  el.appendChild(wiki);
+
   // Правила симуляции — не режимы ввода, а тумблеры поведения котов, поэтому
   // они живут отдельно от инструментов и своей подсветкой их не сбивают.
   const rules = mkSection(el, "Правила");
@@ -7455,6 +7488,25 @@ function openNewsTarget(kind, def) {
   } else openSciWindow();
 }
 
+// Ключ статьи справочника для новости (§12.203). Виды ленты и виды статей —
+// один и тот же список записей, но адресуются по-разному: лента числом (`def`),
+// справочник строкой (`id`), — и переводит между ними палитра, а не второй
+// словарь. Нет палитры (или записи в ней) — нет и значка «?».
+function newsWikiKey(n) {
+  if (n.kind === "rule") return `rule:${autoKind(n.def)}`;
+  const from = { raid: "missions", recruit: "recruits", topic: "research" };
+  const list =
+    n.kind === "tile"
+      ? meta?.palette
+      : n.kind === "item"
+        ? meta?.items
+        : n.kind === "recipe"
+          ? meta?.recipes
+          : meta?.[from[n.kind]];
+  const id = (list ?? [])[n.def]?.id;
+  return id ? `${n.kind}:${id}` : "";
+}
+
 // ⚠️ Стопка **строится узлами и только на изменение** (§12.118): она живёт под
 // курсором, и пересозданный кадром узел съел бы клик по «×» (§12.84).
 const newsRows = new Map();
@@ -7480,9 +7532,14 @@ function renderNews(snap) {
       row.dataset.def = n.def;
       row.dataset.key = key;
       const [kind, label] = newsText(n);
+      // Значок «?» стоит **до** «×» и ведёт в справочник, а сама строка
+      // по-прежнему ведёт к действию (§12.203): новость это предложение
+      // сделать, а не почитать, — подменять одно другим значило бы отменить
+      // §12.75, где решение живёт там, где видна его цена.
       row.innerHTML =
         `<span class="news-kind${n.opened ? "" : " gone"}">${kind}</span>` +
         `<span class="news-label">${label}</span>` +
+        wikiMark(newsWikiKey(n)) +
         '<button class="tool news-x" data-tip="Прочитал">×</button>';
       newsRows.set(key, row);
     }
@@ -7505,7 +7562,7 @@ onPanelClick(newsEl, ".news-x", (b) => {
 // и гасил бы новость, и открывал бы окно. Отсекаем по самой кнопке, а не по
 // порядку слушателей — на порядок здесь полагаться нельзя.
 onPanelClick(newsEl, ".newsrow", (row, e) => {
-  if (e.target.closest(".news-x")) return;
+  if (e.target.closest(".news-x") || e.target.closest(".wiki-mark")) return;
   openNewsTarget(row.dataset.kind, Number(row.dataset.def));
 });
 
@@ -8047,8 +8104,15 @@ function buildSciWindow() {
         // тема-предок — нет: в этом и смысл.
         '<span class="topic-locked" hidden>Артефакт со склада. Что с ним ' +
         "делать, база пока не понимает — нужна наука, до которой ещё не " +
-        "доросли</span>",
-      () => {
+        "доросли</span>" +
+        // Значок «?» живёт **внутри** кнопки темы: список окна — столбик
+        // кнопок, и вынести его наружу значило бы перестроить вёрстку ради
+        // сноски. Отсюда и отсечка в обработчике ниже (§12.203): клик по «?»
+        // всплывает до самой кнопки, и без неё справочник запускал бы
+        // исследование.
+        wikiMark(`topic:${r.id}`),
+      (e) => {
+        if (e?.target?.closest(".wiki-mark")) return;
         if (b.classList.contains("off")) return;
         sendAction({ type: "research", topic: i });
       },
@@ -8103,11 +8167,16 @@ function buildHireWindow() {
   recruitButtons.length = 0;
   (meta.recruits ?? []).forEach((r, i) => {
     const b = mkTool(
-      `<span class="sw sw-hire"></span><span>${esc(r.label || r.id)}</span>${costChips(r.cost)}`,
+      `<span class="sw sw-hire"></span><span>${esc(r.label || r.id)}</span>` +
+        costChips(r.cost) +
+        wikiMark(`recruit:${r.id}`),
       // Погашенная классом кнопка события мыши шлёт — тем и ценна (§12.53), —
       // поэтому отказ проверяем сами: причина уже написана в подсказке, а
       // команда, которую ядро всё равно отклонит, только замусорила бы трейс.
-      () => {
+      // Значок справочника отсекаем первым (§12.203): он внутри кнопки, и клик
+      // по нему всплывает до найма.
+      (e) => {
+        if (e?.target?.closest(".wiki-mark")) return;
         if (b.classList.contains("off")) return;
         sendAction({ type: "hire", recruit: i });
       },
@@ -8809,14 +8878,385 @@ function syncDossier() {
   ui.log.hidden = !log.length;
 }
 
+// --- справочник (§12.203) ---------------------------------------------------
+//
+// Восьмое окно и единственное, которое ничего не решает: ни одной команды в
+// мир, только текст и перекличка палитр. Отсюда все три его особенности.
+//
+// ⚠️ **Оно возвращает туда, откуда открыто.** Игрок жмёт «?» у строки склада,
+// читает про лом и ждёт увидеть склад обратно — а `closeOtherWindows` закрыл
+// его. Прочие окна друг друга не помнят намеренно: каждое из них цель похода
+// (§12.119), а справочник — сноска посреди чужого. Хранится возврат замыканием
+// (`wikiBack`), а не ключом окна: у «Ящика» и «Личного дела» открытие адресно
+// (клетка, кот), и по одному ключу их не восстановить.
+//
+// ⚠️ **Значок «?» появляется только там, где статья есть** (`wikiMark`).
+// Кнопка, открывающая пустоту, — это отказ без причины (§12.53), а мёртвых
+// кнопок в проекте нет ни одной.
+//
+// ⚠️ **Факты не переписаны, а спрошены** — `wikiFacts` читает `meta` и снимок
+// теми же палитрами, что и остальной интерфейс (идиома `opensOf`, §12.126).
+// Второй экземпляр цены стеллажа в тексте статьи разошёлся бы с рулсетом на
+// первой же правке баланса, и заметить это можно было бы только по жалобе.
+const wikiWinEl = document.getElementById("wikiwin");
+let wikiOpen = false;
+let wikiKey = null;
+// Куда вернуться на закрытии. `null` — пришли не из окна (дверь тулбара).
+let wikiBack = null;
+// Пройденные статьи: «← Назад» шагает по ним, а не закрывает окно, — переход
+// по ссылке внутри справочника это не смена цели, а углубление в неё.
+let wikiTrail = [];
+
+// Какой палитре принадлежит ключ. Список ровно тот же, что в `newsText` и
+// `opensOf`: справочник не заводит своего реестра сущностей, он говорит о тех,
+// что уже есть.
+const WIKI_LISTS = {
+  tile: () => meta?.palette,
+  item: () => meta?.items,
+  topic: () => meta?.research,
+  recipe: () => meta?.recipes,
+  raid: () => meta?.missions,
+  recruit: () => meta?.recruits,
+  faction: () => meta?.factions,
+  skill: () => meta?.skills,
+  stat: () => meta?.stats,
+  perk: () => meta?.perks,
+};
+
+// Запись палитры по ключу статьи: `{ kind, id, def, entry }`. `def` — индекс,
+// он же ключ ко всему остальному интерфейсу; `-1`, если записи нет (статья про
+// правило или чистый лор).
+function wikiEntry(key) {
+  const [kind, id] = String(key).split(":");
+  const list = WIKI_LISTS[kind]?.() ?? [];
+  const def = list.findIndex((x) => x.id === id);
+  return { kind, id, def, entry: def >= 0 ? list[def] : null };
+}
+
+// Как статья называется. Заголовок из файла старше палитры: у `lore:` палитры
+// нет вовсе, а у правила ярлык живёт в виде (`AUTO_LABEL`).
+function wikiName(key) {
+  const own = articleTitle(key);
+  if (own) return own;
+  const { kind, id, entry } = wikiEntry(key);
+  if (entry) return entry.label || entry.id;
+  if (kind === "rule") return AUTO_LABEL[id] ?? id;
+  return id ?? String(key);
+}
+
+// Значок «?» рядом с вещью. ⚠️ Ключ у кнопки обязателен (`data-key`): панели
+// перерисовываются кадром, и пара `mousedown`/`mouseup` ловится по нему
+// (§12.84). Пишется он с ключом статьи внутри — один и тот же «?» стоит у
+// десятка строк, и по одному `data-def` они поделили бы обработчик.
+function wikiMark(key, extra = "") {
+  if (!hasArticle(key)) return "";
+  return (
+    `<button class="tool wiki-mark${extra ? " " + extra : ""}" ` +
+    `data-key="wiki${key}" data-go="${esc(key)}" ` +
+    `data-tip="Что это такое">?</button>`
+  );
+}
+
+// Живые факты о записи — **перекличкой палитр**, а не строкой в тексте
+// (§12.203, идиома `opensOf`). Цена стеллажа, вход рецепта, опасность заказа
+// меняются правкой рулсета, и переписанные в статью они разошлись бы с игрой
+// молча: заметить это можно было бы только по жалобе игрока, заплатившего
+// другое число.
+//
+// Набор фактов у каждого вида свой и намеренно короткий: справочник отвечает
+// на «что это и зачем», а «сколько сейчас на складе» — вопрос к самому складу
+// (§12.80). Дублировать сюда состояние партии нельзя.
+function wikiFacts(key) {
+  const { kind, id, def, entry } = wikiEntry(key);
+  const rows = [];
+  const add = (what, value) => {
+    if (value) rows.push([what, value]);
+  };
+  const known = lastSnap?.techs ?? [];
+  const techName = (t) =>
+    (meta?.research ?? []).find((r) => r.id === t)?.label || t;
+  if (kind === "tile" && entry) {
+    add("Цена", costChips(entry.cost));
+    add("Открывает", entry.tech ? esc(techName(entry.tech)) : "");
+    add("Роль", esc(tileRoleWords(entry)));
+  }
+  if (kind === "item" && entry) {
+    // Что с предметом делают — теми же свойствами, какими это решает ядро
+    // (§12.29: `force` делает вещь надеваемой ровно так же, как `capacity`
+    // делает тайл складом). Второго списка «во что годится» не заводим.
+    const uses = [];
+    if (entry.force > 0) uses.push("надевается в поле");
+    if (entry.nutrition > 0) uses.push("идёт в еду");
+    if (entry.mends > 0) uses.push("ускоряет лечение");
+    add("Годен", uses.join(" · "));
+    add(
+      "Понимание",
+      entry.requires?.length ? esc(techName(entry.requires[0])) : "",
+    );
+  }
+  if (kind === "topic" && entry) {
+    // Образец — отдельной строкой от платы (§12.133): вскрытие везёт вещь
+    // ногами в лабораторию, и это другое обещание, чем «спишется со склада».
+    add("Плата", costChips(entry.cost));
+    add("Образец", costChips(entry.specimen));
+    add("Даёт", costChips(entry.gives));
+    add("Допуск", entry.level > 0 ? `«Наука» ${entry.level}` : "");
+    add("Открывает", esc(opensOf(entry, known)));
+  }
+  if (kind === "recipe" && entry) {
+    // Вход у рецепта зовётся `cost` — тем же словом, что и цена тайла: с точки
+    // зрения базы это одно и то же, потраченное имущество (§12.30).
+    add(entry.salvage ? "Что разбирают" : "Из чего", costChips(entry.cost));
+    add("Что выходит", costChips(entry.gives));
+  }
+  if (kind === "raid" && entry) {
+    add("Сложность", entry.danger > 0 ? String(entry.danger) : "");
+    add("Известность", entry.requires > 0 ? `от ${entry.requires}` : "");
+    // Добыча под завесой (§12.131): незнакомое называется «??», как в карточке
+    // заказа, — тем же `veiled`, а не вторым правилом показа.
+    add("Добыча", costChips(entry.loot, true));
+    add("Заказчик", entry.patron ? esc(factionName(entry.patron)) : "");
+  }
+  if (kind === "rule") {
+    const gate = (meta?.auto_gates ?? []).find((g) => g.kind === id);
+    add("Открывает", gate?.tech ? esc(gate.tech) : "");
+  }
+  if (!rows.length) return "";
+  return (
+    '<div class="wiki-facts">' +
+    rows
+      .map(
+        ([what, value]) =>
+          `<div class="wiki-fact"><span>${esc(what)}</span><span>${value}</span></div>`,
+      )
+      .join("") +
+    "</div>"
+  );
+}
+
+// Роль клетки словами — те же свойства тайла, которыми её знает ядро.
+// Существительными, а не значками: значок стоит у предмета и у роли на карте
+// (§12.109), а здесь строка объясняет, чем эта роль отличается от соседней.
+function tileRoleWords(t) {
+  const words = [];
+  if (t.capacity > 0) words.push(`хранит ${t.capacity}`);
+  if (t.rest > 0) words.push("на ней спят");
+  if (t.heal > 0) words.push("лечат раненых");
+  if (t.teaches) words.push("учат");
+  if (t.lab) words.push("ведут науку");
+  if (t.shop) words.push("делают вещи");
+  if (t.trade) words.push("торгуют");
+  if (t.gate) words.push("уходят на вылазку");
+  if (t.relay) words.push("держат связь");
+  if (t.solid) words.push("непроходима");
+  return words.join(" · ");
+}
+
+/// Открыть статью. `back` — чем восстановить окно, из которого пришли; без
+/// него закрытие просто вернёт игрока на карту (так открывается дверь тулбара).
+///
+/// ⚠️ **Переход внутри справочника `back` не трогает.** Игрок, ушедший из
+/// склада в «Лом», оттуда в «Стеллаж», а оттуда в «Материаловедение», всё ещё
+/// возвращается в склад: цель похода не менялась, менялась глубина сноски.
+function openWiki(key, back) {
+  // `null` — оглавление: у двери тулбара адресата нет, она ведёт «в
+  // справочник вообще».
+  if (key !== null && !hasArticle(key)) return;
+  if (!wikiOpen) {
+    // Запоминаем возврат **до** `closeOtherWindows`: он погасит то окно, из
+    // которого мы и пришли, и спросить его будет уже не у кого.
+    wikiBack = back ?? null;
+    wikiTrail = [];
+    closeOtherWindows("wiki");
+    wikiOpen = true;
+  } else if (wikiKey !== key) {
+    // Оглавление (`null`) кладём в след наравне со статьёй: игрок, пришедший
+    // из него, ждёт вернуться в него же, а не наружу.
+    wikiTrail.push(wikiKey);
+  }
+  wikiKey = key;
+  buildWikiWindow();
+  wikiWinEl.hidden = false;
+}
+
+function closeWikiWindow() {
+  if (!wikiOpen) return;
+  wikiOpen = false;
+  wikiKey = null;
+  wikiTrail = [];
+  wikiWinEl.hidden = true;
+  wikiWinEl.innerHTML = "";
+  // Узел, над которым висела подсказка, сейчас исчезнет: `mouseleave` по
+  // удалённому элементу браузер не шлёт (§12.125).
+  hideLiveTip();
+  const back = wikiBack;
+  wikiBack = null;
+  back?.();
+}
+
+/// Шаг назад по прочитанному. Дошли до начала — закрываем окно, то есть
+/// возвращаемся туда, откуда пришли: «Назад» у последней статьи и «Закрыть»
+/// отвечают на один вопрос, и разные ответы у них были бы ловушкой.
+function wikiGoBack() {
+  // ⚠️ Пусто и `null` — разные вещи: `null` это оглавление, законная страница
+  // справочника. Спроси тут `if (!prev)`, и «Назад» из первой статьи закрывало
+  // бы окно вместо возврата в оглавление, из которого игрок в неё и вошёл.
+  if (!wikiTrail.length) {
+    closeWikiWindow();
+    return;
+  }
+  wikiKey = wikiTrail.pop();
+  buildWikiWindow();
+}
+
+/// Окно строится **на каждой статье заново**, и это не нарушение §12.118:
+/// запрет там про покадровую пересборку, а здесь пересборку заказывает сам
+/// игрок кликом — ровно как открытие окна. Синхронизировать тут нечего: текст
+/// статьи не меняется от тика, а факты справочник берёт на момент открытия.
+/// Дверь тулбара: справочник «вообще», без адресата. Отсюда виден весь лор,
+/// в том числе статьи, ни к какой вещи не привязанные (`lore:`) — без двери
+/// они были бы недостижимы, потому что значок «?» стоит только у вещей.
+function openWikiDoor() {
+  openWiki(null, null);
+}
+
+/// Оглавление: все статьи группами, в порядке разделов. Считается **по самим
+/// статьям**, а не по второму списку в коде: написали новую — она встала в
+/// оглавление сама, и забыть её негде.
+function wikiIndexHtml() {
+  const groups = [
+    ["Мир", "lore"],
+    ["Постройки", "tile"],
+    ["Вещи", "item"],
+    ["Наука", "topic"],
+    ["Рецепты", "recipe"],
+    ["Заказы", "raid"],
+    ["Коты", "recruit"],
+    ["Стороны", "faction"],
+    ["Навыки", "skill"],
+    ["Врождённое", "stat"],
+    ["Перки", "perk"],
+    ["Правила", "rule"],
+  ];
+  const keys = articleKeys();
+  return groups
+    .map(([title, kind]) => {
+      const mine = keys.filter((k) => k.startsWith(kind + ":"));
+      if (!mine.length) return "";
+      const links = mine
+        .map(
+          (k) =>
+            `<button class="wiki-link" data-key="wikitoc${k}" ` +
+            `data-go="${esc(k)}">${esc(wikiName(k))}</button>`,
+        )
+        .join("");
+      return `<div class="wiki-group"><div class="wiki-group-head">${esc(title)}</div>${links}</div>`;
+    })
+    .filter(Boolean)
+    .join("");
+}
+
+function buildWikiWindow() {
+  const { list } = mkWindow(wikiWinEl, "Справочник", () => closeWikiWindow());
+  if (wikiKey === null) {
+    const toc = wikiIndexHtml();
+    // Пустой справочник — законное состояние: файлы могли не доехать, а игра
+    // без лора работает. Молчащее окно читалось бы поломкой (§12.53).
+    list.innerHTML =
+      '<div class="wiki-head"><div class="wiki-title">Справочник</div></div>' +
+      (toc || '<div class="wiki-body"><p>Записей пока нет.</p></div>');
+    return;
+  }
+  const title = wikiName(wikiKey);
+  const links = articleLinks(wikiKey).filter((k) => k !== wikiKey);
+  const also = links.length
+    ? '<div class="wiki-also"><span>Смотри также:</span>' +
+      links
+        .map(
+          (k) =>
+            `<button class="wiki-link" data-key="wikialso${k}" ` +
+            `data-go="${esc(k)}">${esc(wikiName(k))}</button>`,
+        )
+        .join("") +
+      "</div>"
+    : "";
+  // «Назад» стоит слева от заголовка и появляется только пройдя хоть шаг:
+  // кнопка, которая ведёт туда же, куда «Закрыть», — это два имени одного
+  // действия, и игрок будет искать между ними разницу.
+  const back = wikiTrail.length
+    ? '<button class="tool wiki-back" data-key="wikiback" ' +
+      'data-tip="Вернуться к прошлой статье">←</button>'
+    : "";
+  list.innerHTML =
+    '<div class="wiki-head">' +
+    back +
+    `<div class="wiki-title">${esc(title)}</div></div>` +
+    `<div class="wiki-body">${renderArticle(wikiKey, wikiName)}</div>` +
+    wikiFacts(wikiKey) +
+    also;
+}
+
+// Клики внутри справочника — делегированием и парой `mousedown`/`mouseup`, как
+// во всех окнах (§12.84). Ключ у каждой кнопки свой (`data-key`), иначе ссылки
+// на одну статью из разных мест поделили бы обработчик.
+onPanelClick(wikiWinEl, ".wiki-link", (b) => openWiki(b.dataset.go));
+onPanelClick(wikiWinEl, ".wiki-back", () => wikiGoBack());
+
+// Значок «?» ловится **на документе**: он стоит в десятке разных панелей и
+// окон, и вешать по слушателю на каждую — это тот же список из десяти мест,
+// который однажды забудут пополнить (довод `onPanelClick` про делегирование).
+// Возврат считается здесь же: какое окно было открыто, знает только реестр.
+onPanelClick(document, ".wiki-mark", (b) => {
+  const open = WINDOWS.find(([, isOpen]) => isOpen());
+  openWiki(b.dataset.go, open ? open[3]() : null);
+});
+
+// Реестр окон: ключ · открыто ли · закрыть · **чем вернуть**.
+//
+// ⚠️ Четвёртое поле — не «открыть», а **фабрика возврата**, и зовётся она,
+// пока окно ещё открыто (§12.203): у «Ящика», «Личного дела» и штаба адрес
+// живёт в модульной переменной, которую закрытие обнуляет, — замыкание,
+// построенное после, вернуло бы игрока не туда или никуда. Нужна она одному
+// справочнику: прочие окна друг друга не помнят намеренно, каждое из них цель
+// похода (§12.119).
 const WINDOWS = [
-  ["stock", () => stockWinOpen, () => closeStockWindow()],
-  ["sci", () => sciWinOpen, () => closeSciWindow()],
-  ["hire", () => hireWinOpen, () => closeHireWindow()],
-  ["raid", () => raidWinOpen, () => closeRaidWindow()],
-  ["buy", () => buyWinOpen, () => closeBuyWindow()],
-  ["bin", () => binWinOpen, () => closeBinWindow()],
-  ["dossier", () => dossierOpen, () => closeDossier()],
+  [
+    "stock",
+    () => stockWinOpen,
+    () => closeStockWindow(),
+    () => openStockWindow,
+  ],
+  ["sci", () => sciWinOpen, () => closeSciWindow(), () => openSciWindow],
+  ["hire", () => hireWinOpen, () => closeHireWindow(), () => openHireWindow],
+  [
+    "raid",
+    () => raidWinOpen,
+    () => closeRaidWindow(),
+    () => {
+      const at = raidWinAt;
+      return () => openRaidWindow(at?.x, at?.y);
+    },
+  ],
+  ["buy", () => buyWinOpen, () => closeBuyWindow(), () => openBuyWindow],
+  [
+    "bin",
+    () => binWinOpen,
+    () => closeBinWindow(),
+    () => {
+      const at = binWinAt;
+      return () => at && openBinWindow(at.x, at.y);
+    },
+  ],
+  [
+    "dossier",
+    () => dossierOpen,
+    () => closeDossier(),
+    () => {
+      const at = dossierAt;
+      return () => openDossier(at);
+    },
+  ],
+  ["wiki", () => wikiOpen, () => closeWikiWindow(), () => openWikiDoor],
 ];
 
 // Окно модальное, значит второго рядом не бывает. До §12.120 столкнуться им
@@ -9085,6 +9525,10 @@ function buildStockWindow() {
     const label = document.createElement("span");
     label.textContent = it.label || it.id;
     name.appendChild(label);
+    // Значок «?» в справочник (§12.203) — после имени, до чисел: он про саму
+    // вещь, а не про её запас. Строится один раз вместе со строкой: окно
+    // складское (§12.118), и статья у предмета за партию не меняется.
+    name.insertAdjacentHTML("beforeend", wikiMark(`item:${it.id}`));
     row.appendChild(name);
 
     // Числа — идиома шапки: главное и `+22` серым, без подписей. Расклад на три
@@ -9714,9 +10158,17 @@ function syncStockWindow() {
     // Разбор (§12.114). Ворота у кнопки те же, что у «Произвести», и считает их
     // то же ядро — расходиться им нельзя. Порога здесь нет вовсе, поэтому и
     // видимость одна: нет технологии рецепта — нет строки.
+    // Открыт ли разбор **прямо сейчас** — считается по снимку, а не по палитре
+    // (§12.114, §12.126). `r.canTear` говорит лишь «такой рецепт в игре есть»,
+    // и повешенное на него правило «разбирать сверх N» предлагало бы дорогу,
+    // которой у базы ещё нет: ядро (`set_salvage_rule`) спрашивает только
+    // технологию **автоматики**, значит команда прошла бы и правило молча
+    // не сработало бы ни разу — отказ без причины (§12.53).
+    let liveTear = false;
     for (const k of r.salvages) {
       const rs = recipeSnaps[k.def] ?? {};
       const open = rs.unlocked ?? false;
+      if (open && known) liveTear = true;
       k.line.hidden = !open || !known;
       let next = k.line.nextElementSibling;
       while (next && next.hidden) next = next.nextElementSibling;
@@ -9759,7 +10211,15 @@ function syncStockWindow() {
       const keep = saleOf(r.item)?.keep ?? 0;
       // Куда целит правило — это его же поле (§12.115), и от него зависит
       // всё остальное в строке: и глагол, и ворота, и причина отказа.
-      const tears = tearing(r.item, r.sides);
+      // Прицел на разбор законен, только пока дорога туда открыта: правило,
+      // поставленное ядром, перебивает всё (оно и есть источник правды), а
+      // заготовка выбора при закрытом рецепте гасится — иначе строка говорила
+      // бы «разбирать сверх N» о разборе, которого база не умеет.
+      const ruleTears = (() => {
+        const rule = saleOf(r.item);
+        return !!rule && (rule.faction === null || rule.faction === undefined);
+      })();
+      const tears = ruleTears || (liveTear && tearing(r.item, r.sides));
       // Ворота у адресатов разные, и это не мелочь: разбор — заказ мастерской,
       // значит открывает его технология производства, а не сбыта (§12.93).
       const gate = tears ? autoGateHint("crafting") : saleGate;
@@ -9770,13 +10230,16 @@ function syncStockWindow() {
       // Непонятое не разбирают (§12.131) — но **продают**, и потому строка
       // правила остаётся: у неё есть что сказать одной из двух дорог.
       const canScrap =
-        known && !autoGateHint("crafting") && canCraft && r.canTear;
+        known && !autoGateHint("crafting") && canCraft && liveTear;
       if (!numEditing(r.sale.key)) {
         const verb = tears ? "разбирать" : "сбывать";
         r.sale.label.textContent =
           keep > 0 ? `${verb} сверх ${keep}` : `${verb} сверх —`;
       }
       if (r.sale.dest) {
+        // Дороги в разбор ещё нет — переключателя тоже: он предлагал бы выбор
+        // из одного варианта, а второй его вариант не существует (§12.126).
+        r.sale.dest.hidden = !liveTear;
         r.sale.dest.classList.toggle("on", tears);
         // Ворота **другой** стороны: переключение при стоящем правиле — это
         // команда, и ядро откажет ей по своей технологии (§12.93). Пока правила
@@ -10465,15 +10928,21 @@ function missionLootRow(def, share) {
   );
 }
 
+// Как фракция зовётся — **по `id`**, а не по индексу: у заказа стороны названы
+// строками (`patron`, `against`), а в снимке репутация едет числами в порядке
+// палитры, и путать эти два адреса нельзя. Одно выражение на карточку заказа и
+// на справочник (§12.203).
+function factionName(id) {
+  const f = (meta?.factions ?? []).find((v) => v.id === id);
+  return f?.label || id || "";
+}
+
 // Заказчик и пострадавший: репутация — единственная знаковая шкала, и цену
 // выбора стороны игрок обязан видеть до нажатия (§12.43). У идущей вылазки она
 // же отвечает на «с кем мы сейчас ссоримся».
 function missionSidesRow(def) {
   if (!def.patron && !def.against) return "";
-  const fname = (id) => {
-    const f = (meta.factions ?? []).find((v) => v.id === id);
-    return esc(f?.label || id);
-  };
+  const fname = (id) => esc(factionName(id));
   const moves = [];
   if (def.patron) moves.push(`${fname(def.patron)} +${def.standing ?? 0}`);
   if (def.against) moves.push(`${fname(def.against)} −${def.standing ?? 0}`);
@@ -10737,7 +11206,11 @@ function raidCard(i, node) {
 
   return (
     `<div class="raidwin-card${g.ready ? "" : " off"}">` +
-    `<div class="raidwin-name">${esc(def.label || def.id || "Вылазка")}</div>` +
+    `<div class="raidwin-name">${esc(def.label || def.id || "Вылазка")}` +
+    // Значок «?» у имени заказа (§12.203): что это за место и чем оно
+    // славится — вопрос к справочнику, а «стоит ли идти» отвечает сама
+    // карточка числами ниже.
+    `${wikiMark(`raid:${def.id ?? ""}`)}</div>` +
     rows.join("") +
     `<div class="raidwin-act">${go}${auto}</div>` +
     "</div>"

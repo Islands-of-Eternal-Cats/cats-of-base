@@ -42,6 +42,7 @@ mod tidying;
 mod timeline;
 mod trade;
 mod voids;
+mod wiki;
 
 use bevy_ecs::prelude::*;
 
