@@ -1621,3 +1621,34 @@ fn a_swollen_order_spreads_over_free_shops() {
     );
     assert_eq!(sim.craft_left_of(def), Some(20), "штук столько же");
 }
+
+/// Занятый торговый пост не глушит правило разбора: у разбора не пост, а
+/// заказ мастерской, и продажа, которой некуда встать, к нему отношения не
+/// имеет (§12.115). До этого выход из цикла по первой же непристроенной
+/// продаже уносил с собой весь хвост списка правил, и трофеи копились молча.
+#[test]
+fn a_busy_post_does_not_mute_the_salvage_rule() {
+    let (mut sim, def) = sim_with_salvage_rule();
+    sim.put_item(5, 1, PART, 5);
+
+    // Единственная ячейка поста, правило сбыта на лом — и оно стоит в списке
+    // раньше разбора, потому что заведено первым.
+    sim.force_tile(4, 1, 3);
+    sim.set_trade_post(3, true);
+    let f = sim.set_faction(100);
+    sim.set_market(f, 100, 40, 25, 0);
+    sim.set_prices(f, SCRAP, &[10]);
+    sim.put_item(5, 1, SCRAP, 10);
+    // Ячейку занимаем заранее — руками: правило сбыта дальше упрётся в занятый
+    // пост ровно так же, как в живой партии.
+    assert!(sim.trade(f, SCRAP, 5, false), "сделка встала в ячейку");
+    assert!(sim.set_sale(f, SCRAP, 1), "правило сбыта принято");
+    assert!(sim.set_salvage_rule(PART, 2), "правило разбора принято");
+
+    sim.tick();
+    assert_eq!(
+        sim.craft_left_of(def),
+        Some(3),
+        "разбор пошёл, хотя пост занят продажей"
+    );
+}
