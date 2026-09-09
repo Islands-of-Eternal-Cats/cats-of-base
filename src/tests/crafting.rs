@@ -1012,14 +1012,14 @@ fn the_shipped_ruleset_makes_a_part_from_scrap() {
 
     assert!(!sim.start_craft(0, 1), "без «Материаловедения» рецепта нет");
     assert!(
-        !sim.add_blueprint(10, 7, shop),
+        !sim.add_blueprint(8, 7, shop),
         "и мастерскую пока не построить",
     );
 
     sim.set_tech("workshops");
-    assert!(sim.add_blueprint(10, 7, shop), "технология открыла обе");
+    assert!(sim.add_blueprint(8, 7, shop), "технология открыла обе");
     sim.tick_n(600); // коты возят материал и строят
-    assert_eq!(i32::from(sim.tile(10, 7)), shop, "мастерская готова");
+    assert_eq!(i32::from(sim.tile(8, 7)), shop, "мастерская готова");
 
     let before = sim.item_total(part);
     assert!(sim.start_craft(0, 2), "и заказ по силам");
@@ -1260,6 +1260,7 @@ fn the_shipped_ruleset_never_profits_from_salvage() {
 fn the_shipped_ruleset_opens_the_cloth_branch_in_order() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
     sim.without_timeline(); // караван приносит своё — здесь считаем добытое
+    sim.add_classroom(); // лабораторию со §12.207 строит игрок
     let name = |id: &str| {
         sim.item_index(id)
             .unwrap_or_else(|| panic!("предмет `{id}`"))
@@ -1278,11 +1279,11 @@ fn the_shipped_ruleset_opens_the_cloth_branch_in_order() {
     sim.set_tech("materials"); // веха: за ней и станок, и вскрытие (§12.146)
     sim.set_tech("workshops");
     assert!(
-        sim.add_blueprint(10, 7, shop),
+        sim.add_blueprint(8, 7, shop),
         "технология открыла мастерскую"
     );
     sim.tick_n(600);
-    assert_eq!(i32::from(sim.tile(10, 7)), shop, "мастерская готова");
+    assert_eq!(i32::from(sim.tile(8, 7)), shop, "мастерская готова");
 
     // Трофей кладём **на склад**: и вскрытие, и разбор берут учтённое (§12.130).
     let store = sim.first_storage_cell();

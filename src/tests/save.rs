@@ -226,6 +226,7 @@ fn a_saved_game_continues_identically() {
 
     // Мир должен успеть обрасти всем, что бывает в партии: снимок, снятый с
     // пустой базы, проверяет только карту и трёх котов.
+    live.add_classroom(); // класс со §12.207 строит игрок
     live.put_item(4, 3, sample, 10);
     assert!(live.teach("excellent", "science"), "ученик за партой");
     live.tick_n(400);
@@ -332,6 +333,7 @@ fn claims_survive_a_save() {
     let sample = 2;
     let bed = 4;
 
+    live.add_classroom(); // класс со §12.207 строит игрок
     live.put_item(4, 3, sample, 10);
     assert!(live.teach("excellent", "science"));
     live.tick_n(800); // доучился и встал из-за парты
@@ -596,7 +598,7 @@ fn a_stocking_rule_survives_a_save() {
     live.without_timeline(); // мир по расписанию тут только шум
     live.set_tech("workshops"); // тема «Мастерская» открывает и станок, и рецепт (§12.146)
     live.set_tech("planning"); // а «Автопроизводство» — само правило-порог (§12.93)
-    assert!(live.add_blueprint(10, 7, 8), "мастерская размечена");
+    assert!(live.add_blueprint(8, 7, 8), "мастерская размечена");
     live.tick_n(600); // коты подвезли лом и построили её
     // Заведомо выше стартового запаса деталей: порог, который база уже держит,
     // заказа не заводит — в том и смысл правила.
@@ -615,10 +617,7 @@ fn a_stocking_rule_survives_a_save() {
     );
     // Отмена адресуется клеткой (§12.96), а мастерская здесь одна — та, что
     // разметили выше.
-    assert!(
-        !loaded.cancel_craft(10, 7),
-        "а значит вручную не отменяется"
-    );
+    assert!(!loaded.cancel_craft(8, 7), "а значит вручную не отменяется");
 }
 
 /// Набор ящика — четвёртое правило игрока (§12.195), и забыть его тише всего:
@@ -629,15 +628,15 @@ fn a_bin_setting_survives_a_save() {
     let mut live = Sim::new(CORE).expect("рулсет");
     live.without_timeline();
     live.set_tech("bins"); // ворота у самой постройки (§12.195)
-    assert!(live.add_blueprint(10, 7, 13), "ящик размечен");
+    assert!(live.add_blueprint(8, 7, 13), "ящик размечен");
     live.tick_n(600); // коты подвезли материал и построили
-    assert_eq!(i32::from(live.tile(10, 7)), 13, "ящик готов");
-    assert!(live.set_bin(10, 7, 2, true), "и настроен под образцы");
+    assert_eq!(i32::from(live.tile(8, 7)), 13, "ящик готов");
+    assert!(live.set_bin(8, 7, 2, true), "и настроен под образцы");
 
     let json = live.save().expect("снимок");
     let loaded = Sim::load_from(CORE, &json).expect("загрузка");
 
-    assert_eq!(loaded.bin_of(10, 7), vec![2], "набор на месте");
+    assert_eq!(loaded.bin_of(8, 7), vec![2], "набор на месте");
 }
 
 /// Автовылазка — то же правило игрока, что и порог (§12.67), и промах здесь

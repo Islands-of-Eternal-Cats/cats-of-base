@@ -1605,6 +1605,20 @@ impl Sim {
         (rules.rest_of(tile), rules.wake_of(tile))
     }
 
+    /// Класс и лаборатория в жилой комнате боевого рулсета.
+    ///
+    /// Со §12.207 стартовая застройка их не содержит — парту и лабораторию
+    /// строит сам игрок, и это первый урок партии. Тестам, которые про науку и
+    /// обучение, а не про стройку, класс ставится сразу; что он **доступен с
+    /// нулевого тика**, стережёт `the_shipped_ruleset_opens_its_classroom_from_the_start`.
+    fn add_classroom(&mut self) {
+        let desk = self.tile_index("desk").expect("парта в палитре");
+        let lab = self.tile_index("lab").expect("лаборатория в палитре");
+        self.force_tile(3, 11, desk);
+        self.force_tile(3, 12, lab);
+        self.force_tile(4, 12, lab);
+    }
+
     /// Индекс тайла по `id` — для тестов на боевом рулсете, где палитру задаёт
     /// контент, а не схема.
     fn tile_index(&self, id: &str) -> Option<i16> {

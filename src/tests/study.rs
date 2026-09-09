@@ -384,6 +384,7 @@ fn teaching_a_squad_member_disbands_the_raid() {
 fn the_shipped_ruleset_teaches_science() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
     let science = sim.skill_index("science").expect("домен «Наука» в рулсете");
+    sim.add_classroom(); // со §12.207 парту строит игрок (§12.207)
 
     assert_eq!(sim.level_of("excellent", science), 0, "с нуля");
     assert!(sim.teach("excellent", "science"), "парта нашлась");

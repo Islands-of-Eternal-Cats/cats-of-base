@@ -372,6 +372,7 @@ fn the_shipped_ruleset_researches_its_first_topic() {
     let sample = sim.item_index("sample").expect("образец есть");
     let lore = sim.topic_index("sample_lore").expect("пролог есть");
     let materials = sim.topic_index("materials").expect("тема есть");
+    sim.add_classroom(); // парту и лабораторию строит игрок (§12.207)
 
     assert!(!sim.seen(sample), "до первой вылазки образца в мире нет");
 
@@ -413,18 +414,18 @@ fn the_shipped_ruleset_researches_its_first_topic() {
     // веха открывает не постройку, а подтему, поэтому шага здесь два.
     let rack = 6; // индекс `rack` в палитре тайлов
     assert!(
-        !sim.add_blueprint(10, 7, rack),
+        !sim.add_blueprint(8, 7, rack),
         "веха постройку не даёт: у «Стеллажа» своя тема",
     );
     let racks = sim.topic_index("racks").expect("подтема есть");
     assert!(sim.start_research(racks), "и она открылась вехой");
     sim.tick_n(1200);
     assert!(
-        sim.add_blueprint(10, 7, rack),
+        sim.add_blueprint(8, 7, rack),
         "«Стеллаж» открылся своей темой",
     );
     let nest = 7; // а «Гнездо» ждёт следующей темы
-    assert!(!sim.add_blueprint(11, 7, nest), "быт колонии ещё не изучен");
+    assert!(!sim.add_blueprint(8, 8, nest), "быт колонии ещё не изучен");
 }
 
 /// **Боевой рулсет: лаборатория считается.** Ячейка — слот темы (§12.132), и
@@ -436,11 +437,28 @@ fn the_shipped_ruleset_researches_its_first_topic() {
 fn the_shipped_ruleset_counts_its_lab_cells() {
     let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
     let cells = sim.lab_cells();
-    assert!(cells > 0, "без ячейки наука заперта");
     assert!(
         cells <= 4,
         "ячеек в стартовой застройке {cells} — счётность выключена",
     );
+}
+
+/// **Боевой рулсет: класс открыт с нулевого тика.** Со §12.207 стартовая
+/// застройка ни парты, ни лаборатории не содержит — их строит игрок, — и это
+/// держится ровно на том, что технологией они не закрыты. Закрой любую из двух,
+/// и партия не начнётся вовсе: единственный вход в науку — находка (§12.143), а
+/// сесть за тему без «Науки» нельзя, и учит ей только парта.
+#[test]
+fn the_shipped_ruleset_opens_its_classroom_from_the_start() {
+    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let desk = sim.tile_index("desk").expect("парта в палитре");
+    let lab = sim.tile_index("lab").expect("лаборатория в палитре");
+
+    assert!(
+        sim.add_blueprint(7, 8, desk.into()),
+        "парта размечается сразу"
+    );
+    assert!(sim.add_blueprint(8, 8, lab.into()), "и лаборатория тоже");
 }
 
 /// **Боевой рулсет: автоматика достижима.** Ловит контент, в котором ворота
