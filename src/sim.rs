@@ -1792,7 +1792,7 @@ impl Sim {
                 .iter()
                 .filter_map(|(id, &v)| stat_index(id).map(|i| (i, v)))
                 .collect();
-            spawn_cat(
+            let cat = spawn_cat(
                 &mut world,
                 &u.id,
                 &u.sprite,
@@ -1801,6 +1801,13 @@ impl Sim {
                 &[],
                 &stats,
             );
+            // Стартовый отряд (§12.207): приписка та же, что ставит игрок в
+            // штабе, — просто поставленная контентом. Задачи за ней нет
+            // (`Enlisted` — конфигурация), значит цепочка о ней и не узнает,
+            // пока игрок не отправит отряд.
+            if let Some([x, y]) = u.garage {
+                world.entity_mut(cat).insert(Enlisted { spot: (x, y) });
+            }
         }
 
         // Стартовый склад база видела заведомо (§12.131). Прогоняем наблюдателя

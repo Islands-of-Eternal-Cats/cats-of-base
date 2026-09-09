@@ -973,6 +973,23 @@ fn the_shipped_ruleset_starts_with_one_relay_node() {
     );
 }
 
+/// Стартовый отряд стоит в гараже с нулевого тика (§12.207).
+///
+/// Промах тут тихий: приписка ничего не делает сама, и забытое (или уехавшее
+/// вслед за перенесённым гаражом) поле `garage:` даёт не ошибку, а пустой штаб
+/// — то есть ровно тот обряд, ради отмены которого §12.207 и написана.
+#[test]
+fn the_shipped_ruleset_starts_with_a_crew_in_the_garage() {
+    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let node = *sim.gate_cells_of().first().expect("гараж в застройке");
+
+    assert_eq!(
+        sim.roster_at(node.0, node.1).len(),
+        sim.unit_count(),
+        "в отряде единственного гаража все стартовые коты",
+    );
+}
+
 #[test]
 fn the_shipped_ruleset_has_a_mission_that_is_out_of_reach() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");

@@ -1260,7 +1260,7 @@ fn the_shipped_ruleset_never_profits_from_salvage() {
 fn the_shipped_ruleset_opens_the_cloth_branch_in_order() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
     sim.without_timeline(); // караван приносит своё — здесь считаем добытое
-    sim.add_classroom(); // лабораторию со §12.207 строит игрок
+    sim.add_classroom(); // лабораторию со §12.208 строит игрок
     let name = |id: &str| {
         sim.item_index(id)
             .unwrap_or_else(|| panic!("предмет `{id}`"))
