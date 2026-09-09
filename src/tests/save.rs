@@ -284,13 +284,17 @@ fn a_crew_survives_a_save() {
         .gate_cells_of()
         .first()
         .expect("гараж в стартовой застройке");
-    assert!(live.enlist("excellent", node.0, node.1));
+    // Стартовый отряд собран контентом (§12.207), поэтому проверяем изменение
+    // состава игроком: вычёркиваем одного и ждём двоих оставшихся.
+    assert!(live.dismiss("sp3"));
+    let before = live.roster_at(node.0, node.1);
+    assert_eq!(before.len(), 2, "стартовый отряд без вычеркнутого");
 
     let json = live.save().expect("снимок");
     let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
     assert_eq!(
         loaded.roster_at(node.0, node.1),
-        vec!["excellent".to_string()],
+        before,
         "загруженная партия забыла отряд",
     );
 }
@@ -652,10 +656,9 @@ fn an_auto_raid_rule_survives_a_save() {
         .first()
         .copied()
         .expect("гараж в застройке");
-    assert!(
-        live.enlist("excellent", node.0, node.1),
-        "кот в отряде гаража"
-    );
+    // Отряд на гараже стоит с нулевого тика (§12.207).
+    let crew = live.roster_at(node.0, node.1);
+    assert!(!crew.is_empty(), "стартовый отряд гаража");
     live.set_tech("callsigns"); // ворота автоматики (§12.93)
     assert!(live.set_auto_raid(0, node.0, node.1), "правило поставлено");
     // Пауза — такое же решение игрока, как само правило (§12.77): забудь её
@@ -676,7 +679,7 @@ fn an_auto_raid_rule_survives_a_save() {
     );
     assert_eq!(
         loaded.roster_at(node.0, node.1),
-        vec!["excellent".to_string()],
+        crew,
         "и отряд, которому оно адресовано",
     );
 }
