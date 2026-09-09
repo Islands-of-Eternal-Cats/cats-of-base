@@ -53,6 +53,7 @@ fn a_recruit_opens_when_fame_grows() {
 #[test]
 fn a_topic_opens_when_its_prerequisite_is_learned() {
     let mut sim = sim_bare();
+    sim.set_lab(0, true); // работать есть где: третьи ворота ленты (§12.222)
     let second = sim.set_topic("second", 0, 10, &[], &["first"]);
     sim.tick_n(2);
     assert!(sim.news().is_empty());
@@ -60,6 +61,46 @@ fn a_topic_opens_when_its_prerequisite_is_learned() {
     sim.set_tech("first");
     sim.tick_n(1);
     assert_eq!(sim.news(), vec![(NewsKind::Topic, second, true)]);
+}
+
+/// Пока лаборатории нет ни одной, лента про тему молчит, а построенная
+/// объявляет разом всё, что стало доступно (§12.222).
+///
+/// Строка ленты говорит «лаборатория готова к теме» — без единой лаборатории
+/// это неправда, и на первой вылазке она вдобавок тонула среди пяти других
+/// новостей. Окно «Наука» тему при этом показывает и без постройки: оно
+/// отвечает на «чего ждать», а лента — на «что можно сделать сейчас».
+#[test]
+fn a_topic_waits_for_a_laboratory() {
+    let mut sim = sim_bare();
+    let first = sim.set_topic("first", 0, 10, &[], &[]);
+    sim.tick_n(3);
+    assert!(
+        sim.news().is_empty(),
+        "работать негде — говорить не о чем: {:?}",
+        sim.news()
+    );
+
+    sim.set_lab(1, true);
+    sim.force_tile(2, 1, 1); // лабораторию построили
+    sim.tick_n(1);
+    // Вместе с темой лента объявляет и саму постройку (§12.220): ступень
+    // палитры открылась тем, что тайл впервые встал на карту.
+    assert!(
+        sim.news().contains(&(NewsKind::Topic, first, true)),
+        "построенная лаборатория объявила тему: {:?}",
+        sim.news()
+    );
+
+    // И обратно: снесённая последняя лаборатория закрывает тему. Ворота эти,
+    // в отличие от технологий и `Seen`, не монотонны — и это правда о мире.
+    sim.force_tile(2, 1, 0);
+    sim.tick_n(1);
+    assert!(
+        sim.news().contains(&(NewsKind::Topic, first, false)),
+        "снесённая последняя лаборатория закрыла тему: {:?}",
+        sim.news()
+    );
 }
 
 #[test]
