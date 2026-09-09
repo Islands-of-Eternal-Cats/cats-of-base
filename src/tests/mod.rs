@@ -213,6 +213,10 @@ fn sim_from(rows: &[&str]) -> Sim {
             shop: false,
             solid: false,
             trade: false,
+            // Ворот по находке и по постройке у схемы тоже нет (§12.210):
+            // палитра из одного пола открыта с нулевого тика.
+            sighted: Vec::new(),
+            after: String::new(),
             // Контейнера у схемы нет: ноль — без предела (§12.90), сделки в
             // синтетических мирах любого размера. Включает `set_lot`.
             lot: 0,
@@ -1603,6 +1607,22 @@ impl Sim {
     fn bed_of(&self, tile: i16) -> (i32, i32) {
         let rules = self.world.resource::<TileRules>();
         (rules.rest_of(tile), rules.wake_of(tile))
+    }
+
+    /// Очередь палитры: у какого тайла какой предшественник-постройка
+    /// (§12.210). `None` — ворот по постройке нет.
+    fn tile_order(&self) -> Vec<Option<i16>> {
+        let rules = self.world.resource::<TileRules>();
+        (0..rules.0.len())
+            .map(|t| rules.after_of(t as i16))
+            .collect()
+    }
+
+    /// Отметить предмет виденным (§12.131) — открывает ворота по находке
+    /// (§12.210). Тестам чужих механик короче, чем везти образец с вылазки.
+    fn sight(&mut self, id: &str) {
+        let item = self.item_index(id).expect("предмет в палитре");
+        self.world.resource_mut::<Seen>().mark(item);
     }
 
     /// Класс и лаборатория в жилой комнате боевого рулсета.

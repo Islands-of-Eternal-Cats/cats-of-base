@@ -831,13 +831,45 @@ impl Sim {
         )
     }
 
-    /// Открыта ли постройка этого тайла: технология изучена или не нужна.
-    fn tech_allows(&self, tile: i16) -> bool {
+    /// Открыта ли постройка этого тайла. **Одно выражение на все ворота**
+    /// (§12.27, §12.210): его зовут разметка, маска превью, лента новостей и
+    /// палитра вида, и второй экземпляр показал бы кнопку, которую фасад
+    /// отклонит (инвариант 14).
+    ///
+    /// Ворот трое, и каждые отвечают на своё. **Технология** — «база доросла»
+    /// (§12.27). **Находка** — «база эту вещь видела» (§12.210): наукой такое
+    /// не выразить, потому что сама наука стоит за лабораторией. **Постройка**
+    /// — «на базе уже есть то, к чему это ответ»: парта приезжает после
+    /// лаборатории, которой некому работать.
+    ///
+    /// Ни одни из трёх не умеют закрываться обратно: технологии не забываются
+    /// (§12.18), `Seen` только растёт (§12.131), а снесённая постройка… умеет,
+    /// и это единственное исключение — но снос обратим тем же кликом, а
+    /// закрывшийся тайл в палитре игрок прочтёт как ответ на свой же снос.
+    fn tech_allows(&mut self, tile: i16) -> bool {
         let rules = self.world.resource::<TileRules>();
-        match rules.tech_of(tile) {
+        let tech_ok = match rules.tech_of(tile) {
             Some(tech) => self.world.resource::<Techs>().knows(tech),
             None => true,
+        };
+        if !tech_ok {
+            return false;
         }
+        let seen = self.world.resource::<Seen>();
+        if !rules.sighted_of(tile).iter().all(|&item| seen.saw(item)) {
+            return false;
+        }
+        match rules.after_of(tile) {
+            // «Построен ли такой тайл» — тем же счётом, каким это меряет
+            // условие цели `GoalTest::Tile`.
+            Some(prev) => self.tile_is_built(prev),
+            None => true,
+        }
+    }
+
+    /// Стоит ли на карте хоть одна клетка такого тайла (§12.210).
+    fn tile_is_built(&self, tile: i16) -> bool {
+        self.world.resource::<BaseMap>().cells.contains(&tile)
     }
 
     /// Сущность темы по индексу записи; `None` — эту тему сейчас не изучают.
@@ -1323,10 +1355,17 @@ impl Sim {
         ));
         // Цена из рулсета — имена предметов; в правилах остаются индексы палитры.
         // Порядок пар задан `BTreeMap` (по имени), то есть детерминирован (§12.21).
+        // Ворота по находке и по постройке (§12.210). Предшественник ищется
+        // **выше по палитре** — цепочка идёт вперёд, поэтому цикл невыразим по
+        // построению; пропавшее имя даёт `None`, то есть открытый тайл:
+        // испорченный контент обязан показывать лишнее, а не запирать партию
+        // молча (стережёт `the_shipped_ruleset_chains_its_palette_forward`).
+        let tile_index_of = |id: &str| rs.tiles.iter().position(|t| t.id == id);
         world.insert_resource(TileRules(
             rs.tiles
                 .iter()
-                .map(|t| TileRule {
+                .enumerate()
+                .map(|(def, t)| TileRule {
                     cost: t
                         .cost
                         .iter()
@@ -1347,6 +1386,10 @@ impl Sim {
                     relay: t.relay,
                     comms: t.comms,
                     tech: t.tech.clone(),
+                    sighted: t.sighted.iter().filter_map(|id| item_index(id)).collect(),
+                    after: tile_index_of(&t.after)
+                        .filter(|&prev| prev < def)
+                        .map(|prev| prev as i16),
                     internal: t.internal,
                     quiet: t.quiet,
                     noisy: t.noisy,
@@ -5595,6 +5638,12 @@ impl Sim {
         research.sort_by_key(|r| (r.y, r.x));
 
         let techs = self.world.resource::<Techs>().0.clone();
+        // Ворота палитры считает ядро и везёт готовым ответом (§12.210): трое
+        // ворот у тайла, и второй их экземпляр в JS однажды покажет кнопку,
+        // которую фасад отклонит.
+        let tiles_open: Vec<bool> = (0..self.world.resource::<TileRules>().0.len())
+            .map(|def| self.tile_is_open(def))
+            .collect();
         let has_lab = self.has_lab();
         // Свободная ячейка — **тем же выражением, что и заявка** (§12.132):
         // «есть лаборатория» и «есть свободная» это два разных отказа, и
@@ -5817,6 +5866,7 @@ impl Sim {
             recipes,
             stocking,
             techs,
+            tiles_open,
             notes,
             goals,
             goals_required,

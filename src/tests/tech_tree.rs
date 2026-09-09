@@ -572,3 +572,35 @@ fn the_shipped_ruleset_keeps_its_three_time_scales_apart() {
 
     assert!(sins.is_empty(), "{}", sins.join("\n"));
 }
+
+/// **Ворота по находке открывает вылазка, и только она** (§12.210).
+///
+/// `sighted` у тайла закрывает постройку до тех пор, пока предмет не побывал на
+/// базе, — и вся безопасность этих ворот держится на том, что открыть их можно
+/// **не строя ничего**: вылазке нужен только гараж, а гараж не закрыт ничем
+/// (`the_shipped_ruleset_never_locks_its_way_back`). Назови в `sighted` предмет,
+/// который делают в мастерской, — и получится дверь, ключ от которой заперт за
+/// ней же: тихо, без падения и без единого слова игроку.
+///
+/// Стартовый склад тоже годится в источники: он на базе с нулевого тика, то
+/// есть ворота открыты ещё до первого клика (такие пишут по ошибке, но заперты
+/// они не бывают).
+#[test]
+fn the_shipped_ruleset_opens_sighted_gates_by_raiding() {
+    let rs = shipped();
+    let from_raids: BTreeSet<&str> = rs
+        .missions
+        .iter()
+        .flat_map(|m| m.loot.keys().map(String::as_str))
+        .chain(rs.stock.iter().map(|s| s.item.as_str()))
+        .collect();
+    for tile in &rs.tiles {
+        for item in &tile.sighted {
+            assert!(
+                from_raids.contains(item.as_str()),
+                "тайл `{}` ждёт находки `{item}`, а её не приносит ни одна вылазка",
+                tile.id,
+            );
+        }
+    }
+}

@@ -1883,7 +1883,7 @@ function renderSnapshot(snap) {
   syncDoors(snap);
   syncNewsMarks();
   syncStockWindow();
-  syncTileButtons(snap.techs);
+  syncTileButtons(snap.techs, snap.tiles_open);
   renderNotePanel(snap.notes, snap.tick);
   renderGoalsPanel(snap.goals, snap.goals_required, snap);
   // Последней — подсказка: она читает то, что нарисовали выше, и переприцелится,
@@ -5953,10 +5953,16 @@ function buildToolbar() {
     // нельзя», а не «почему». Условие — те же свойства, на которых висят и
     // сами правила.
     tileHints.push({ btn: b, def: i });
-    // Закрытый технологией тайл в палитре не показывается вовсе (§12.126), а
-    // его появление объявляет лента новостей — иначе список молча становится
-    // длиннее. Номер записи нужен ровно для этого: новость адресуется им.
-    if (p.tech) tileButtons.push({ btn: b, def: i, tech: p.tech });
+    // Закрытый тайл в палитре не показывается вовсе (§12.126), а его
+    // появление объявляет лента новостей — иначе список молча становится
+    // длиннее. Номер записи нужен ровно для этого: новость адресуется им, и по
+    // нему же читается ответ ядра (`tiles_open`).
+    //
+    // ⚠️ **В список идут все кнопки, а не только закрытые технологией**
+    // (§12.210): ворот у тайла трое — наука, находка и постройка, — и считает
+    // их ядро одним выражением. Отбирать здесь по `p.tech` значило бы завести
+    // второй экземпляр правила, знающий только про одни ворота из трёх.
+    tileButtons.push({ btn: b, def: i });
     build.appendChild(b);
   });
 
@@ -6680,16 +6686,19 @@ function shopsBusyHint() {
 //
 // Технологии не забываются (§12.18), значит кнопка умеет только появиться:
 // спрятать выбранный игроком инструмент этот код не может никогда.
-function syncTileButtons(techs) {
+function syncTileButtons(techs, open) {
   const known = techs ?? [];
+  const isOpen = open ?? [];
   // Причина отказа словом — сперва: у открытой кнопки подсказка своя (у полки
   // это правило доступа §12.111, у лежанки — зонирование §12.157), и она не
   // перестаёт действовать оттого, что технологию наконец изучили.
   for (const { btn, def } of tileHints) {
     liveTitle(btn, placementHint(meta.palette[def], known));
   }
-  for (const { btn, tech } of tileButtons) {
-    btn.hidden = !known.includes(tech);
+  // Открыт ли тайл, решает ядро (§12.210): три вида ворот, одно выражение на
+  // разметку, маску превью, ленту и палитру. Здесь остаётся только `hidden`.
+  for (const { btn, def } of tileButtons) {
+    btn.hidden = isOpen[def] === false;
   }
   // Объекты — та же палитра и то же правило (§12.126, §12.162).
   for (const { btn, tech } of structButtons) {

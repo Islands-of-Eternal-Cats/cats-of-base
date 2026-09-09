@@ -137,6 +137,7 @@ fn the_shipped_ruleset_builds_from_two_item_kinds() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
     let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
     sim.without_timeline(); // тест про материал, а не про мир по расписанию
+    sim.sight("sample"); // лежанка открывается находкой (§12.210)
     let before = sim.scrap_total();
 
     // Лежанка в коридоре: рядом со складом, куда за деталью и пойдут.

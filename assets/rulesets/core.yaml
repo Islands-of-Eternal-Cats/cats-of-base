@@ -85,6 +85,18 @@ items:
 # tech — технология, без которой тайл не построить. Пусто = доступен сразу.
 # Это вторые ворота прогрессии после известности: та открывает вылазки и котов,
 # эта — саму базу, и открывается только своей же наукой.
+# sighted — предметы, которые база обязана была **увидеть** (§12.210). Наукой
+# этого не выразить: сама наука стоит за лабораторией, а лаборатория — за
+# вопросом «что это за штука мы привезли». Первая вылазка требует только гаража,
+# поэтому такие ворота всегда открываемы, чем бы игрок ни застроил базу.
+# after — тайл, который обязан быть **построен**. Парта приезжает не «по науке»,
+# а после лаборатории, которой некому работать: это ответ на вопрос, заданный
+# самой постройкой. Предшественник обязан стоять в палитре **выше**.
+#
+# ⚠️ **У пола и гаража ворот нет и быть не может** (§12.210): это путь
+# восстановления. Снеси игрок последний гараж, будь тот закрыт, — вылазок нет,
+# образцов нет, науки нет, и партия заперта навсегда, а необратимых исходов в
+# игре нет ни одного. Стережёт `the_shipped_ruleset_never_locks_its_way_back`.
 # quiet/noisy и clean/dirty — зонирование (§12.157): клетка не встаёт боком к
 # тому, чего не терпит. «Здесь не выспаться» (лежанка и гнездо против цеха,
 # гаража, поста и рации) и «нужна чистота» (лазарет и лаборатория против цеха,
@@ -93,11 +105,11 @@ items:
 # не делает, — мёртвый контент.
 tiles:
   - { id: floor,   label: "Пол",         color: "#1b2a3f", cost: { scrap: 1 } }
-  - { id: storage, label: "Склад",       color: "#26506e", cost: { scrap: 2, part: 1 }, capacity: 20, dirty: true }
-  - { id: lab,     label: "Лаборатория", color: "#5a3a6e", cost: { scrap: 2, part: 2 }, lab: true, clean: true }
+  - { id: storage, label: "Склад",       color: "#26506e", cost: { scrap: 2, part: 1 }, capacity: 20, sighted: [sample], dirty: true }
+  - { id: lab,     label: "Лаборатория", color: "#5a3a6e", cost: { scrap: 2, part: 2 }, lab: true, sighted: [sample], clean: true }
   - { id: garage,  label: "Гараж",       color: "#6e5a26", cost: { scrap: 2, part: 1 }, gate: true, noisy: true, dirty: true }
-  - { id: bed,     label: "Лежанка",     color: "#3f5a3a", cost: { scrap: 1, part: 1 }, rest: 120,    wake: 24000, quiet: true }
-  - { id: desk,    label: "Парта",       color: "#4a4f7a", cost: { scrap: 2, part: 1 }, teaches: science, quiet: true }
+  - { id: bed,     label: "Лежанка",     color: "#3f5a3a", cost: { scrap: 1, part: 1 }, rest: 120,    wake: 24000, sighted: [sample], quiet: true }
+  - { id: desk,    label: "Парта",       color: "#4a4f7a", cost: { scrap: 2, part: 1 }, teaches: science, after: lab, quiet: true }
   - { id: rack,    label: "Стеллаж",     color: "#2f6f8e", cost: { scrap: 4, part: 3 }, capacity: 60, solid: true, tech: racks, dirty: true }
   - { id: nest,    label: "Гнездо",      color: "#4d7a44", cost: { scrap: 2, part: 2 }, rest: 300,    tech: nests, quiet: true }
   - { id: shop,    label: "Мастерская",  color: "#8e6f2f", cost: { scrap: 3, part: 2 }, shop: true,   tech: workshops, noisy: true, dirty: true }
@@ -110,7 +122,7 @@ tiles:
   # и к приходу «Материаловедения» он честно проигрывает цеху. Настоящие ворота
   # у него — деталь в цене: чтобы начать торговать, надо что-то снести (§12.44).
   # За постом никто не работает: это лицензия, а не рабочее место.
-  - { id: post,    label: "Торговый пост", color: "#7a6f4a", cost: { scrap: 3, part: 2 }, trade: true, lot: 25, noisy: true }
+  - { id: post,    label: "Торговый пост", color: "#7a6f4a", cost: { scrap: 3, part: 2 }, trade: true, lot: 25, sighted: [sample], noisy: true }
   # Узел связи — прибавка к силе отряда, пока за ним дежурят (§12.60). Слота
   # вылазки он **не даёт** с §12.152 — тот держит гараж, — и в стартовой
   # застройке его поэтому нет вовсе: связь стала находкой, а не данностью.

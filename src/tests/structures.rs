@@ -390,6 +390,7 @@ fn the_shipped_ruleset_erases_a_big_lab_in_one_go() {
         .structure_index("big_lab")
         .expect("«Большая лаборатория» в палитре объектов");
 
+    sim.sight("sample"); // в объекте есть лаборатория, а она за находкой (§12.210)
     // Чистая площадка подальше от стартовой застройки.
     let floor = sim.tile_index("floor").expect("пол");
     for y in 9..14 {
