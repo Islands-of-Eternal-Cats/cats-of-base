@@ -2721,12 +2721,21 @@ impl Sim {
         self.push_goal(tests, GoalKind::Optional, before)
     }
 
+    /// Цель, ждущая своей очереди: её не существует, пока не взята `prev`
+    /// (§12.209).
+    fn set_goal_after(&mut self, test: GoalTest, prev: usize) -> usize {
+        let def = self.push_goal(vec![test], GoalKind::Required, None);
+        self.world.resource_mut::<GoalRules>().0[def].after = Some(prev);
+        def
+    }
+
     fn push_goal(&mut self, tests: Vec<GoalTest>, kind: GoalKind, before: Option<u64>) -> usize {
         let mut rules = self.world.resource_mut::<GoalRules>();
         rules.0.push(GoalRule {
             tests,
             kind,
             before,
+            after: None,
         });
         rules.0.len() - 1
     }
@@ -2802,6 +2811,17 @@ impl Sim {
             .0
             .iter()
             .map(|g| (g.kind, g.tests.clone(), g.before))
+            .collect()
+    }
+
+    /// Очередь целей: у кого какой предшественник (§12.209). `None` — цель
+    /// видна с начала.
+    fn goal_order(&self) -> Vec<Option<usize>> {
+        self.world
+            .resource::<GoalRules>()
+            .0
+            .iter()
+            .map(|g| g.after)
             .collect()
     }
 

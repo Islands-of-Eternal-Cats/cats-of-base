@@ -681,6 +681,14 @@ impl Sim {
                 if rule.kind == GoalKind::Hidden && done.is_none() {
                     return None;
                 }
+                // Та же дверь у цели, ждущей своей очереди (§12.209): пока
+                // предшественник не взят, цели нет ни в панели, ни в счётчике
+                // взятых — ровно так же, как её нет для `check_goals`.
+                // Взятая показывается всегда — как и скрытая: игрок её уже
+                // видел, и спрятать её обратно значило бы отнять сделанное.
+                if done.is_none() && rule.after.is_some_and(|prev| taken.taken(prev).is_none()) {
+                    return None;
+                }
                 let (have, need) = progress_of(&rule.tests, &facts);
                 Some(GoalSnap {
                     def,
@@ -1446,72 +1454,101 @@ impl Sim {
         let mission_index = |id: &str| rs.missions.iter().position(|m| m.id == id);
         let recipe_index = |id: &str| rs.recipes.iter().position(|r| r.id == id);
         let goal_faction = |id: &str| rs.factions.iter().position(|f| f.id == id);
-        world.insert_resource(GoalRules(
-            rs.goals
-                .iter()
-                .filter_map(|g| {
-                    // Условий столько, сколько заполненных полей (§12.158), и
-                    // выполнены обязаны быть все. Порядок здесь — порядок показа
-                    // в подсказке, а не приоритет: приоритета между условиями
-                    // одной цели не бывает.
-                    let mut tests = Vec::new();
-                    if let Some(id) = &g.tile {
-                        tests.push(GoalTest::Tile(tile_index(id)?, g.count.max(1)));
+        // Цель может ждать другую (§12.209), и адресуется предшественник именем.
+        // Индекс считается по **выжившим** правилам: цель без условия отсеяна
+        // ниже, и номер записи в YAML с номером правила не совпадает.
+        let goal_rules: Vec<(String, GoalRule)> = rs
+            .goals
+            .iter()
+            .filter_map(|g| {
+                // Условий столько, сколько заполненных полей (§12.158), и
+                // выполнены обязаны быть все. Порядок здесь — порядок показа
+                // в подсказке, а не приоритет: приоритета между условиями
+                // одной цели не бывает.
+                let mut tests = Vec::new();
+                if let Some(id) = &g.tile {
+                    tests.push(GoalTest::Tile(tile_index(id)?, g.count.max(1)));
+                }
+                // Набор раскладывается **по предмету на условие** (§12.159):
+                // у каждого своя дата, а лом и образцы приходят на базу в
+                // разное время. Счёт от этого не меняется — `progress_of`
+                // берёт узкое место что по набору, что по списку условий, —
+                // а поздравлению есть что сказать про каждую строку.
+                // Порядок детерминирован: `BTreeMap` отсортирован по `id`.
+                for (id, &n) in &g.stored {
+                    if let Some(item) = item_index(id) {
+                        tests.push(GoalTest::Stored(vec![(item, n)]));
                     }
-                    // Набор раскладывается **по предмету на условие** (§12.159):
-                    // у каждого своя дата, а лом и образцы приходят на базу в
-                    // разное время. Счёт от этого не меняется — `progress_of`
-                    // берёт узкое место что по набору, что по списку условий, —
-                    // а поздравлению есть что сказать про каждую строку.
-                    // Порядок детерминирован: `BTreeMap` отсортирован по `id`.
-                    for (id, &n) in &g.stored {
-                        if let Some(item) = item_index(id) {
-                            tests.push(GoalTest::Stored(vec![(item, n)]));
-                        }
+                }
+                if let Some(id) = &g.tech {
+                    tests.push(GoalTest::Tech(id.clone()));
+                }
+                if g.cats > 0 {
+                    tests.push(GoalTest::Cats(g.cats));
+                }
+                if let Some(id) = &g.raid {
+                    tests.push(GoalTest::Raid(mission_index(id)?));
+                }
+                if let Some(id) = &g.craft {
+                    tests.push(GoalTest::Craft(recipe_index(id)?));
+                }
+                if g.earned > 0 {
+                    tests.push(GoalTest::Earned(g.earned));
+                }
+                if g.money > 0 {
+                    tests.push(GoalTest::Money(g.money));
+                }
+                // По фракции на условие — по тому же доводу, что и склад:
+                // до одной стороны доходят раньше, чем до другой.
+                for (id, &n) in &g.standing {
+                    if let Some(faction) = goal_faction(id) {
+                        tests.push(GoalTest::Standing(vec![(faction, n)]));
                     }
-                    if let Some(id) = &g.tech {
-                        tests.push(GoalTest::Tech(id.clone()));
-                    }
-                    if g.cats > 0 {
-                        tests.push(GoalTest::Cats(g.cats));
-                    }
-                    if let Some(id) = &g.raid {
-                        tests.push(GoalTest::Raid(mission_index(id)?));
-                    }
-                    if let Some(id) = &g.craft {
-                        tests.push(GoalTest::Craft(recipe_index(id)?));
-                    }
-                    if g.earned > 0 {
-                        tests.push(GoalTest::Earned(g.earned));
-                    }
-                    if g.money > 0 {
-                        tests.push(GoalTest::Money(g.money));
-                    }
-                    // По фракции на условие — по тому же доводу, что и склад:
-                    // до одной стороны доходят раньше, чем до другой.
-                    for (id, &n) in &g.standing {
-                        if let Some(faction) = goal_faction(id) {
-                            tests.push(GoalTest::Standing(vec![(faction, n)]));
-                        }
-                    }
-                    if tests.is_empty() {
-                        return None; // цель без условия — не цель
-                    }
-                    // Скрытость сильнее необязательности: у скрытой цели «в счёт
-                    // не идёт» и так, а видимой она от `optional` не станет.
-                    let kind = if g.hidden {
-                        GoalKind::Hidden
-                    } else if g.optional {
-                        GoalKind::Optional
-                    } else {
-                        GoalKind::Required
-                    };
-                    Some(GoalRule {
+                }
+                if tests.is_empty() {
+                    return None; // цель без условия — не цель
+                }
+                // Скрытость сильнее необязательности: у скрытой цели «в счёт
+                // не идёт» и так, а видимой она от `optional` не станет.
+                let kind = if g.hidden {
+                    GoalKind::Hidden
+                } else if g.optional {
+                    GoalKind::Optional
+                } else {
+                    GoalKind::Required
+                };
+                Some((
+                    g.id.clone(),
+                    GoalRule {
                         tests,
                         kind,
                         before: (g.before > 0).then_some(g.before),
-                    })
-                })
+                        after: None, // разрешается вторым проходом, ниже
+                    },
+                ))
+            })
+            .collect();
+        // Второй проход: имя предшественника — в индекс. Смотрим только **выше
+        // по списку**, поэтому цикл невыразим, а забытое имя открывает цель
+        // сразу, а не запирает навсегда.
+        let goal_ids: Vec<&str> = goal_rules.iter().map(|(id, _)| id.as_str()).collect();
+        let goal_after: Vec<Option<usize>> = rs
+            .goals
+            .iter()
+            .filter(|g| goal_ids.contains(&g.id.as_str()))
+            .enumerate()
+            .map(|(def, g)| {
+                (!g.after.is_empty())
+                    .then(|| goal_ids.iter().position(|id| *id == g.after))
+                    .flatten()
+                    .filter(|&prev| prev < def)
+            })
+            .collect();
+        world.insert_resource(GoalRules(
+            goal_rules
+                .into_iter()
+                .zip(goal_after)
+                .map(|((_, rule), after)| GoalRule { after, ..rule })
                 .collect(),
         ));
         world.insert_resource(Goals::default());
