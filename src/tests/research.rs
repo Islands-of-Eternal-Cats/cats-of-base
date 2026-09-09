@@ -473,6 +473,29 @@ fn the_shipped_ruleset_opens_its_classroom_by_the_first_find() {
     assert!(sim.add_blueprint(8, 8, desk), "лаборатория открыла парту");
 }
 
+/// **Открывшаяся ступень палитры не закрывается** (§12.220).
+///
+/// Ворота «постройка» спрашивают журнал застройки, а не карту: снесённая ради
+/// детали лаборатория парту не уносит. Иначе лента новостей объявляет одно и
+/// то же дважды — «в палитре появилась Парта», следом «постройка закрылась
+/// Парта», — а инструмент пропадает из-под руки посреди разметки.
+#[test]
+fn a_demolished_predecessor_keeps_its_successor_open() {
+    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let lab = i32::from(sim.tile_index("lab").expect("лаборатория в палитре"));
+    let desk = sim.tile_index("desk").expect("парта в палитре");
+
+    sim.sight("sample");
+    sim.force_tile(7, 8, lab as i16);
+    assert!(sim.tile_is_open(desk as usize), "лаборатория открыла парту");
+
+    sim.force_tile(7, 8, -1);
+    assert!(
+        sim.tile_is_open(desk as usize),
+        "снос лаборатории закрыл парту, а открытое не закрывается",
+    );
+}
+
 /// **Боевой рулсет: дорогу назад не запирает ничто** (§12.210).
 ///
 /// У пола и гаража ворот не бывает никаких — ни науки, ни находки, ни

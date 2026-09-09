@@ -55,7 +55,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 33;
+pub(crate) const FORMAT: u32 = 34;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -266,6 +266,15 @@ pub(crate) struct MapDto {
     pub(crate) height: i32,
     pub(crate) cells: Vec<i16>,
     pub(crate) version: u64,
+    /// Журнал застройки: какие тайлы на карте когда-либо стояли (§12.220).
+    ///
+    /// Идёт в снимок, потому что из `cells` не выводится: снесённая
+    /// лаборатория ворота парты уже открыла, а на карте её нет. Старый снимок
+    /// журнала не вёз — там он собирается из самой карты, и это честная
+    /// база: закрыть уже открытую ступень такая сборка не может, а вспомнить
+    /// снесённое до сохранения — не может тоже.
+    #[serde(default)]
+    pub(crate) ever: Vec<bool>,
 }
 
 /// Ресурсы состояния — всё, что меняется по ходу партии и не выводится из
@@ -783,6 +792,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
             height: map.height,
             cells: map.cells.clone(),
             version: map.version,
+            ever: map.ever.clone(),
         },
         state: StateDto {
             tick: world.resource::<SimTime>().tick,
@@ -922,6 +932,12 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
         map.width = file.map.width;
         map.height = file.map.height;
         map.cells = file.map.cells.clone();
+        map.ever = file.map.ever.clone();
+        // Снимок до §12.220 журнала не вёз: собираем его по самой карте —
+        // всё, что стоит сейчас, стояло хоть раз.
+        for &tile in &file.map.cells {
+            map.note_erected(tile);
+        }
         // Версия карты — единственный сигнал «карта изменилась» (инвариант 3).
         // Ставим её заведомо новой, а не из файла: рендер по ту сторону
         // протокола помнит версию **прошлого** мира, и совпадение номеров
