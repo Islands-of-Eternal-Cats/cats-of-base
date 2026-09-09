@@ -1007,6 +1007,7 @@ fn a_threshold_counts_pieces_not_items() {
 fn the_shipped_ruleset_makes_a_part_from_scrap() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
     sim.without_timeline(); // караван приносит своё — здесь считаем сделанное
+    sim.add_storage(); // станок кормит **склад** (§12.130), а его со §12.215 строит игрок
     let part = 1; // индекс `part` в палитре предметов
     let shop = 8; // индекс `shop` в палитре тайлов
 
@@ -1261,6 +1262,7 @@ fn the_shipped_ruleset_opens_the_cloth_branch_in_order() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
     sim.without_timeline(); // караван приносит своё — здесь считаем добытое
     sim.add_classroom(); // лабораторию со §12.208 строит игрок
+    sim.add_storage(); // а склад — со §12.215: и вскрытие, и разбор берут учтённое
     let name = |id: &str| {
         sim.item_index(id)
             .unwrap_or_else(|| panic!("предмет `{id}`"))

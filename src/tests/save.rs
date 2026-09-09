@@ -227,6 +227,7 @@ fn a_saved_game_continues_identically() {
     // Мир должен успеть обрасти всем, что бывает в партии: снимок, снятый с
     // пустой базы, проверяет только карту и трёх котов.
     live.add_classroom(); // класс со §12.208 строит игрок
+    live.add_storage(); // и склад со §12.215 — тоже
     live.put_item(4, 3, sample, 10);
     assert!(live.teach("excellent", "science"), "ученик за партой");
     live.tick_n(400);
@@ -338,6 +339,7 @@ fn claims_survive_a_save() {
     let bed = 4;
 
     live.add_classroom(); // класс со §12.208 строит игрок
+    live.add_storage(); // и склад со §12.215 — тоже
     live.put_item(4, 3, sample, 10);
     assert!(live.teach("excellent", "science"));
     live.tick_n(800); // доучился и встал из-за парты

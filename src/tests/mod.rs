@@ -663,6 +663,11 @@ impl Sim {
     }
 
     /// Ёмкость тайла палитры.
+    /// Цена тайла набором `(предмет, сколько)` — так, как её читает подвоз.
+    fn cost_of(&self, tile: i16) -> Vec<(usize, i32)> {
+        self.world.resource::<TileRules>().cost_of(tile).to_vec()
+    }
+
     fn capacity_of(&self, tile: i16) -> i32 {
         self.world.resource::<TileRules>().capacity_of(tile)
     }
@@ -1634,6 +1639,22 @@ impl Sim {
     fn sight(&mut self, id: &str) {
         let item = self.item_index(id).expect("предмет в палитре");
         self.world.resource_mut::<Seen>().mark(item);
+    }
+
+    /// Склад на месте северной комнаты боевого рулсета.
+    ///
+    /// Со §12.215 стартовая застройка склада не содержит — игрок строит его
+    /// сам, когда первая вылазка привозит то, что некуда положить. Тестам,
+    /// которые про учёт, плату или уборку, а не про эту дорогу, склад ставится
+    /// сразу — и ровно там, где лежит стартовый запас, то есть мир получается
+    /// тот же, что был до §12.215.
+    fn add_storage(&mut self) {
+        let storage = self.tile_index("storage").expect("склад в палитре");
+        for y in 2..6 {
+            for x in 3..8 {
+                self.force_tile(x, y, storage);
+            }
+        }
     }
 
     /// Класс и лаборатория в жилой комнате боевого рулсета.

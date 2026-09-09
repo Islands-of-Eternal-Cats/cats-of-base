@@ -232,6 +232,7 @@ fn the_shipped_ruleset_tidies_demolition_scrap() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
     let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
     sim.without_timeline(); // тест про материал, а не про мир по расписанию
+    sim.add_storage(); // увозить некуда, пока склада нет (§12.215)
     let before = sim.scrap_total();
 
     assert!(
@@ -411,4 +412,37 @@ fn among_ordinary_piles_the_nearest_still_wins() {
         }
     }
     assert_eq!(first, Some("near"), "ближняя куча первой");
+}
+
+/// **Боевой рулсет: склада на старте нет, но он по карману** (§12.215).
+///
+/// Обе половины важны, и вторая тише. Склад — единственная дорога к учёту
+/// (§12.69): без него не пустить образец в науку, не заплатить за найм, не
+/// продать. Стройка — единственное, на что годится неучтённое, — поэтому
+/// первый склад обязан покрываться тем, что лежит на полу с нулевого тика.
+/// Сделай его на деталь дороже стартового запаса, и партия упрётся в стену
+/// молча: кнопка в палитре есть, а построить нечем.
+///
+/// Первую половину сторожим отдельно от `sim_from`-тестов: стартовый склад —
+/// ровно то, что §12.215 убрала, и вернувшийся в `build:` он отменил бы весь
+/// урок, не уронив ни одного теста.
+#[test]
+fn the_shipped_ruleset_starts_without_storage_it_can_afford() {
+    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let storage = sim.tile_index("storage").expect("склад в палитре");
+
+    for (item, _) in sim.cost_of(storage) {
+        let (stored, _, _) = sim.stock_of(item);
+        assert_eq!(
+            stored, 0,
+            "на старте учтённого нет: склада ещё не построили"
+        );
+    }
+    for (item, need) in sim.cost_of(storage) {
+        let (_, loose, _) = sim.stock_of(item);
+        assert!(
+            loose >= need,
+            "первый склад стоит {need} предмета {item}, а на полу лежит {loose}",
+        );
+    }
 }

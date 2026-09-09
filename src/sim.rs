@@ -5753,6 +5753,17 @@ impl Sim {
         crafting.sort_by_key(|c| (c.y, c.x));
 
         let shops = self.shops();
+        // Есть ли на базе хоть одна клетка с ёмкостью (§12.215). Считаем по
+        // карте, как `shops` и `posts`: «склада нет» и «склад пуст» — разные
+        // ответы, и путать их нельзя.
+        let stores = {
+            let map = self.world.resource::<BaseMap>();
+            let tiles = self.world.resource::<TileRules>();
+            map.cells
+                .iter()
+                .filter(|&&t| tiles.capacity_of(t) > 0)
+                .count() as i32
+        };
         let shop_spare = self.spare_shop_cell().is_some();
         let mut recipes = Vec::new();
         {
@@ -5873,6 +5884,7 @@ impl Sim {
             post_free,
             post_lot,
             shops: shops as i32,
+            stores,
             auto_sales: auto_open.0,
             auto_crafting: auto_open.1,
             auto_raids: auto_open.2,

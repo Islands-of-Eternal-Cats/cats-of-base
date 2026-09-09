@@ -373,6 +373,7 @@ fn the_shipped_ruleset_researches_its_first_topic() {
     let lore = sim.topic_index("sample_lore").expect("пролог есть");
     let materials = sim.topic_index("materials").expect("тема есть");
     sim.add_classroom(); // парту и лабораторию строит игрок (§12.208)
+    sim.add_storage(); // и склад тоже (§12.215): образец платит только со склада
 
     assert!(!sim.seen(sample), "до первой вылазки образца в мире нет");
 
