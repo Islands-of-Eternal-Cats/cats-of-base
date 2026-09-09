@@ -323,6 +323,76 @@ fn a_failed_cleanup_leaves_the_blight_alone() {
     assert_eq!(sim.blight_at(site), Some((kind, 1)), "очаг на месте");
 }
 
+/// Неполный успех сбивает ступень: отряд отработал, но не дотянул. Отсюда и
+/// вся драматургия §12.206 — отлежаться и сходить снова, если сбиваешь быстрее,
+/// чем очаг растёт обратно.
+#[test]
+fn a_partial_cleanup_knocks_one_stage_off() {
+    let (mut sim, m) = sim_with_gate(&["#######", "#a...b#", "#######"], (3, 1), 2, 10);
+    // Ступень тяжелее отряда, но не вдвое: доля неполная, провала нет.
+    let kind = sim.set_blight_kind(0, 5, false, 1);
+    let site = sim.set_site("Свалка", (0, 0), &[]);
+    sim.set_mission_cleanses(m, kind);
+    sim.seed_blight(site, kind);
+    if let Some(slot) = sim.world.resource_mut::<Blights>().0.get_mut(site)
+        && let Some(b) = slot.as_mut()
+    {
+        b.stage = 4;
+    }
+
+    assert!(sim.launch_to(m, squad(&["a", "b"]), site));
+    sim.tick_n(30);
+    assert_eq!(
+        sim.blight_at(site),
+        Some((kind, 3)),
+        "ступень сбита на одну"
+    );
+}
+
+/// Свежее пятно неполный успех не снимает: очистка — это полный успех, иначе
+/// «справился» и «почти справился» на первой ступени неразличимы, и состав
+/// отряда там не значит ничего.
+#[test]
+fn a_partial_cleanup_never_clears_the_first_stage() {
+    let (mut sim, m) = sim_with_gate(&["#######", "#a...b#", "#######"], (3, 1), 2, 10);
+    // Сложность первой ступени выше силы двойки, но не вдвое: доля неполная.
+    let kind = sim.set_blight_kind(0, 5, false, 3);
+    let site = sim.set_site("Свалка", (0, 0), &[]);
+    sim.set_mission_cleanses(m, kind);
+    sim.seed_blight(site, kind);
+
+    assert!(sim.launch_to(m, squad(&["a", "b"]), site));
+    sim.tick_n(30);
+    assert_eq!(sim.blight_at(site), Some((kind, 1)), "пятно на месте");
+}
+
+/// Сбитая ступень **покупает время**: счётчик роста обнуляется, иначе очаг
+/// вернул бы её тем же тиком и работа отряда не значила бы ничего.
+#[test]
+fn a_knocked_blight_starts_its_clock_over() {
+    let (mut sim, m) = sim_with_gate(&["#######", "#a...b#", "#######"], (3, 1), 2, 10);
+    let kind = sim.set_blight_kind(40, 5, false, 1);
+    let site = sim.set_site("Свалка", (0, 0), &[]);
+    sim.set_mission_cleanses(m, kind);
+    sim.seed_blight(site, kind);
+    if let Some(slot) = sim.world.resource_mut::<Blights>().0.get_mut(site)
+        && let Some(b) = slot.as_mut()
+    {
+        b.stage = 4;
+    }
+
+    assert!(sim.launch_to(m, squad(&["a", "b"]), site));
+    sim.tick_n(30);
+    assert_eq!(sim.blight_at(site), Some((kind, 3)), "ступень сбита");
+    // Счёт до следующей ступени пошёл заново — с возвращения отряда, а не с
+    // посева: это и есть купленное базе время.
+    let (step, left) = sim.site_step(site).expect("очаг растёт дальше");
+    assert_eq!(step, Step::Grow(4), "следующим шагом вернёт сбитое");
+    // Считай очаг от посева — осталось бы десять (сорок минус тридцать
+    // прожитых); он считает от возвращения отряда, и потому больше двадцати.
+    assert!(left > 20, "счётчик пошёл заново: осталось {left}");
+}
+
 /// Провал зачистки пленных не оставляет: очаг — биологическая угроза от
 /// природы, у неё нет ни воли, ни лагеря, и брать в плен там некому. Цена
 /// провала прежняя — добыча и здоровье, — но кот возвращается всегда.
@@ -341,7 +411,11 @@ fn a_failed_cleanup_takes_no_captives() {
 
     assert!(sim.launch_to(m, squad(&["a", "b"]), site));
     sim.tick_n(30);
-    assert_eq!(sim.blight_at(site), Some((kind, 1)), "провал, очаг на месте");
+    assert_eq!(
+        sim.blight_at(site),
+        Some((kind, 1)),
+        "провал, очаг на месте"
+    );
     assert!(!sim.is_captive("a") && !sim.is_captive("b"), "оба дома");
     assert!(!sim.is_away("a") && !sim.is_away("b"), "и оба на базе");
 }
@@ -377,7 +451,7 @@ fn a_riper_blight_is_harder_to_clear() {
     let clear_at = |stage: i32| {
         let (mut sim, m) = sim_with_gate(&["#######", "#a...b#", "#######"], (3, 1), 2, 10);
         // Растить некогда: ступень выставляем прямо, чтобы мерить только её.
-        let kind = sim.set_blight_kind(0, 5, false, 3);
+        let kind = sim.set_blight_kind(0, 5, false, 1);
         let site = sim.set_site("Свалка", (0, 0), &[]);
         sim.set_mission_cleanses(m, kind);
         sim.seed_blight(site, kind);
@@ -671,7 +745,7 @@ fn every_target_gets_its_own_forecast() {
     let mut sim = sim_from(&["#######", "#a...b#", "#######"]);
     sim.set_gate(1, true);
     sim.force_tile(3, 1, 1);
-    let m = sim.set_risky_mission(2, 10, 2, 0, &[(0, 5)]);
+    let m = sim.set_risky_mission(2, 10, 1, 0, &[(0, 5)]);
     // Ступень стоит по единице: двое безоружных котов (сила 2) свежий очаг
     // снимают, а запущенный им уже не по зубам — ровно та развилка, ради
     // которой прогноз и считается по каждой цели.
