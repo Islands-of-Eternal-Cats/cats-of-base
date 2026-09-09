@@ -35,8 +35,8 @@ use crate::hauling::{plan_spend, stored_counts};
 use crate::jobs::{BUILD_WORK, Plan, may_build};
 use crate::map::{BaseMap, rect_cells};
 use crate::missions::{
-    crew_danger, crew_force, duration, gate_cells, gate_count, guide_cut, guide_of, guide_value,
-    outcome, phase,
+    crew_danger, crew_force, duration, faction_is_met, gate_cells, gate_count, guide_cut, guide_of,
+    guide_value, outcome, phase,
 };
 use crate::movement::{Busy, is_stuck};
 use crate::path::{Reach, find_path};
@@ -5357,7 +5357,23 @@ impl Sim {
         let standing: Vec<i32> = (0..self.factions.len())
             .map(|f| self.world.resource::<Standing>().value_of(f))
             .collect();
+        // Знакомство с фракцией (§12.214) — **из журнала вылазок**, а не из
+        // самой репутации: та знаковая и умеет вернуться в ноль, а знакомство
+        // закрываться не умеет (тот же довод, что у `Seen`, §12.131). Журнал
+        // пишется там же, где двигается репутация (§12.43), значит это одно и
+        // то же событие, и второго флага заводить не на чем.
+        let factions_met: Vec<bool> = {
+            let done = self.world.resource::<Raids>();
+            let rules = self.world.resource::<MissionRules>();
+            (0..self.factions.len())
+                .map(|f| faction_is_met(rules, done, f))
+                .collect()
+        };
         let money = self.world.resource::<Money>().0;
+        // Счёт заведён — значит продажа хоть раз состоялась (§12.44, §12.214).
+        // Меряем журналом, а не самим счётом: потративший всё не должен
+        // возвращаться к «котоденег в этой игре не бывает».
+        let money_seen = self.world.resource::<Earned>().0 > 0;
         let deals: Vec<DealSnap> = {
             let mut q = self.world.query::<&Deal>();
             let mut out: Vec<DealSnap> = q
@@ -5844,7 +5860,9 @@ impl Sim {
             sites,
             fame,
             standing,
+            factions_met,
             money,
+            money_seen,
             deals,
             bins,
             prices,

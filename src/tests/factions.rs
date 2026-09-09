@@ -558,3 +558,69 @@ fn the_shipped_ruleset_hires_the_same_number_on_either_side() {
          ветка выгоднее другой",
     );
 }
+
+// --- Знакомство с фракцией (§12.214) ----------------------------------------
+
+/// Пока база не имела с фракцией дела, её в шапке нет вовсе: «0» у стороны, о
+/// которой игра ещё не сказала ни слова, — это цифра без вопроса, к которому
+/// она ответ.
+#[test]
+fn a_faction_is_unknown_until_a_raid_names_it() {
+    let (mut sim, m) = sim_with_gate(10);
+    let police = sim.set_faction(100);
+    let other = sim.set_faction(100);
+    sim.set_mission_factions(m, Some(police), None, 20);
+
+    assert!(!sim.faction_is_met(police), "заказов у них ещё не брали");
+    assert!(!sim.faction_is_met(other), "и у соседей тоже");
+
+    run(&mut sim, m, 10);
+    assert!(
+        sim.standing(police) > 0,
+        "заказ выполнен, репутация выросла"
+    );
+
+    assert!(sim.faction_is_met(police), "заказчик стал знаком");
+    assert!(
+        !sim.faction_is_met(other),
+        "а тот, кого заказ не называл, — нет",
+    );
+}
+
+/// **Знакомство закрываться не умеет** — в этом вся разница между ним и самой
+/// репутацией (§12.131, §12.43). Шкала знаковая и ходит в обе стороны: вернись
+/// она в ноль, а считай мы знакомство по ней — сторона, с которой база успела
+/// поссориться и помириться, пропала бы из шапки, будто её и не было.
+#[test]
+fn a_met_faction_survives_a_return_to_zero() {
+    let (mut sim, m) = sim_with_gate(10);
+    let police = sim.set_faction(100);
+    sim.set_mission_factions(m, Some(police), None, 20);
+
+    run(&mut sim, m, 10);
+    assert!(sim.faction_is_met(police));
+
+    sim.set_standing(police, 0); // репутация вернулась туда, где была
+    assert!(
+        sim.faction_is_met(police),
+        "знакомство пережило возврат к нулю: журнал только растёт",
+    );
+}
+
+/// Провал фракцию не знакомит, и по той же причине, по которой не двигает
+/// репутацию (§12.43): предъявить ей базе нечего, а журнал пишется только на
+/// доведённом до конца заказе.
+#[test]
+fn a_failed_raid_introduces_no_one() {
+    let mut sim = sim_from(&["########", "#a....b#", "########"]);
+    sim.set_gate(1, true);
+    sim.force_tile(3, 1, 1);
+    // Сложность заведомо не по зубам: отряд из двоих даёт силу 2.
+    let m = sim.set_risky_mission(2, 10, 99, 0, &[]);
+    let police = sim.set_faction(100);
+    sim.set_mission_factions(m, Some(police), None, 20);
+
+    run(&mut sim, m, 10);
+    assert_eq!(sim.standing(police), 0, "провал репутацию не двигает");
+    assert!(!sim.faction_is_met(police), "и знакомством не считается");
+}
