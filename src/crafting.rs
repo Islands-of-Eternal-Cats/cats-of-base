@@ -61,7 +61,12 @@ pub(crate) fn free_shop(
 /// У боевых рецептов выход один, и правило читается буквально — «держать пять
 /// деталей». Набор из двух предметов пришёл бы к тому же: заказ повторяют, пока
 /// хоть одного из выходов недостаёт.
-fn pieces_needed(rule: &CraftRule, have: &[i32], owed: &[(usize, i32)], min: i32) -> i32 {
+pub(crate) fn pieces_needed(
+    rule: &CraftRule,
+    have: &[i32],
+    owed: &[(usize, i32)],
+    min: i32,
+) -> i32 {
     rule.gives
         .iter()
         .filter(|&&(_, per)| per > 0)
@@ -153,6 +158,15 @@ pub(crate) fn pieces_affordable(free: &[(usize, i32)], cost: &[(usize, i32)]) ->
         .min()
         .unwrap_or(0)
         .max(0)
+}
+
+/// Какие предметы цены `free` не покрывает даже на одну штуку (§12.239). Это
+/// слово в строке порога («ждёт: Ткань»): считает ядро, а вид только называет.
+pub(crate) fn lacking(free: &[(usize, i32)], cost: &[(usize, i32)]) -> Vec<usize> {
+    cost.iter()
+        .filter(|&&(item, per)| per > 0 && count_of(free, item) < per)
+        .map(|&(item, _)| item)
+        .collect()
 }
 
 /// Сколько штук заказа материал уже покрывает целиком, то есть уже оплачено

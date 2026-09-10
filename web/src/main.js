@@ -9822,8 +9822,16 @@ function buildStockWindow() {
         who.textContent = r.label || r.id;
         line.appendChild(who);
       }
+      // Почему порог молчит (§12.239): материала нет даже на штуку, и правило
+      // ждёт его у себя, а не на станке. Отдельной строкой под порогом — в
+      // колонку поля слово не влезет, а подсказка причину не показывает, пока
+      // на неё не навели (§12.53).
+      const why = document.createElement("span");
+      why.className = "keep-why";
+      why.hidden = true;
+      line.appendChild(why);
       rules.appendChild(line);
-      keeps.push({ line, label, make, craft, key, def });
+      keeps.push({ line, label, make, craft, why, key, def });
     }
 
     // Разбор (§12.114): кнопка стоит в строке того, что разбирают, и порога у
@@ -10323,6 +10331,20 @@ function syncStockWindow() {
       // Нет станка — полоски порога нет, а причина написана красным в шапке
       // окна: порог без мастерской не сработает ни разу (§12.100).
       k.label.hidden = !!craftGate || !canCraft;
+      // «ждёт: Ткань» (§12.239): что именно не даёт порогу заказать, считает
+      // ядро (`waits`). Пишем только на изменении — строка синхронизируется
+      // каждым кадром (§12.84).
+      const waits = rs.waits ?? [];
+      k.why.hidden = k.label.hidden || min <= 0 || !waits.length;
+      if (!k.why.hidden) {
+        const text = `ждёт: ${waits.map(itemName).join(", ")}`;
+        if (k.why.textContent !== text) k.why.textContent = text;
+        liveTitle(
+          k.why,
+          "На складе не хватает даже на одну штуку. Правило закажет само, " +
+            "как только материал ляжет на склад, — станок до тех пор свободен",
+        );
+      }
       // Есть ли под строкой рецепта место для цены: клетка колонки заказа у
       // следующей видимой строки (обычно «сбывать сверх») пуста. Нет её —
       // цена встаёт обычным потоком и строку растит.

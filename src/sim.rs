@@ -3496,6 +3496,13 @@ impl Sim {
     /// (§12.239): с тех пор правило тоже заказывает только то, что база может
     /// оплатить.
     fn craft_room(&mut self, cost: &[(usize, i32)]) -> i32 {
+        let free = self.craft_free_now();
+        crate::crafting::pieces_affordable(&free, cost)
+    }
+
+    /// Что база ещё может пообещать станкам, по предметам (`craft_free`,
+    /// §12.239): одно число на заявку, на правило и на слово «ждёт» в снимке.
+    fn craft_free_now(&mut self) -> Vec<(usize, i32)> {
         let rules = CraftRules(self.world.resource::<CraftRules>().0.clone());
         let mut stored: Vec<(usize, i32)> = Vec::new();
         for (_, item, n) in self.storage_piles() {
@@ -3508,14 +3515,13 @@ impl Sim {
         let mut paws = self.world.query::<(&Haul, &Carrying)>();
         let to_shops = crate::crafting::to_shops(paws.iter(&self.world));
         let mut orders = self.world.query::<&Craft>();
-        let free = crate::crafting::craft_free(
+        crate::crafting::craft_free(
             &stored,
             &booked,
             &to_shops,
             &rules,
             orders.iter(&self.world),
-        );
-        crate::crafting::pieces_affordable(&free, cost)
+        )
     }
 
     /// Держать на базе не меньше `min` штук того, что даёт рецепт `def`
@@ -5833,12 +5839,43 @@ impl Sim {
                 .count() as i32
         };
         let shop_spare = self.spare_shop_cell().is_some();
+        // Для слова «ждёт: …» у порога (§12.239) — те же числа, какими решает
+        // `plan_craft`: добро базы с лапами за вычетом обещанного покупателю
+        // (есть ли недостача) и `craft_free` (есть ли чем её оплатить).
+        let free = self.craft_free_now();
+        let have = {
+            let mut piles = self.world.query::<&Stack>();
+            let mut loads = self.world.query::<&Carrying>();
+            crate::hauling::on_base_counts(piles.iter(&self.world), loads.iter(&self.world))
+        };
+        let owed = self.owed_for_sale();
+        let ordered: Vec<(usize, i32)> = {
+            let mut q = self.world.query::<&Craft>();
+            q.iter(&self.world).map(|o| (o.def, o.left)).collect()
+        };
         let mut recipes = Vec::new();
         {
             let rules = self.world.resource::<CraftRules>().0.clone();
             let running: Vec<usize> = crafting.iter().map(|c| c.def).collect();
             for (def, rule) in rules.iter().enumerate() {
+                let min = self.world.resource::<Stocking>().min_of(def);
+                let waits = if min > 0 {
+                    let want = crate::crafting::pieces_needed(rule, &have, &owed, min);
+                    let placed: i32 = ordered
+                        .iter()
+                        .filter(|&&(d, _)| d == def)
+                        .map(|&(_, n)| n)
+                        .sum();
+                    if want > placed && crate::crafting::pieces_affordable(&free, &rule.cost) == 0 {
+                        crate::crafting::lacking(&free, &rule.cost)
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
                 recipes.push(RecipeSnap {
+                    waits,
                     unlocked: self.world.resource::<Techs>().covers(&rule.requires),
                     // Есть ли куда поставить заказ: станок, свободный или
                     // отбираемый у правила (§12.97), **или** уже размеченный
