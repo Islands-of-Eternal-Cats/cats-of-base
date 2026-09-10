@@ -32,7 +32,7 @@ use bevy_ecs::system::RunSystemOnce;
 use crate::components::*;
 use crate::goals::{WorldFacts, built_counts, progress_of};
 use crate::hauling::{plan_spend, stored_counts};
-use crate::jobs::{BUILD_WORK, Plan, may_build};
+use crate::jobs::{BUILD_WORK, Plan, may_build, site_clutter};
 use crate::map::{BaseMap, rect_cells};
 use crate::missions::{
     crew_danger, crew_force, duration, faction_is_met, gate_cells, gate_count, guide_cut, guide_of,
@@ -825,7 +825,11 @@ impl Sim {
             .iter(&self.world)
             .map(|bp| (bp.x, bp.y, bp.tile))
             .collect();
-        Plan::of(self.world.resource::<BaseMap>(), planned.into_iter())
+        Plan::of(
+            self.world.resource::<BaseMap>(),
+            self.world.resource::<TileRules>(),
+            planned.into_iter(),
+        )
     }
 
     /// Разметка карты по объектам (§12.161). Близнец `plan()`: тот собирает
@@ -1398,6 +1402,7 @@ impl Sim {
                     lab: t.lab,
                     shop: t.shop,
                     solid: t.solid,
+                    base: t.base,
                     trade: t.trade,
                     lot: t.lot,
                     relay: t.relay,
@@ -2156,13 +2161,16 @@ impl Sim {
         mask
     }
 
-    /// Подчиняется ли тайл воротам разметки вообще: полка (§12.111) или клетка
-    /// со свойством зонирования (§12.157). Одно выражение на маску, потому что
-    /// «правило неприменимо» — это её пустой вектор, и ошибиться здесь значит
-    /// либо не показать креста, либо считать маску всей карты на каждый пол.
+    /// Подчиняется ли тайл воротам разметки вообще: полка (§12.111), клетка
+    /// со свойством зонирования (§12.157) или слой (§12.237 — с основанием в
+    /// палитре ворота есть у **любого** тайла: пол не ложится на пол, прочее не
+    /// ложится на пустоту). Одно выражение на маску, потому что «правило
+    /// неприменимо» — это её пустой вектор, и ошибиться здесь значит не
+    /// показать креста там, где фасад откажет.
     fn gated_by_placement(&self, tile: i16) -> bool {
         let rules = self.world.resource::<TileRules>();
-        rules.is_solid(tile)
+        rules.base().is_some()
+            || rules.is_solid(tile)
             || rules.is_quiet(tile)
             || rules.is_noisy(tile)
             || rules.is_clean(tile)
@@ -2295,10 +2303,16 @@ impl Sim {
         for &((cx, cy), t) in cells {
             plan.set(cx, cy, t);
         }
-        let rules = self.world.resource::<TileRules>();
-        cells
-            .iter()
-            .all(|&((cx, cy), t)| may_build(&plan, rules, (cx, cy), t))
+        let (map, rules) = (
+            self.world.resource::<BaseMap>(),
+            self.world.resource::<TileRules>(),
+        );
+        // Клетка, где этот тайл уже стоит, штамп не держит: `place_structure`
+        // её пропускает, а спросить её воротами значило бы спросить «можно ли
+        // лабораторию на лабораторию» — и получить отказ слоя (§12.237).
+        cells.iter().all(|&((cx, cy), t)| {
+            map.tile_at(cx, cy) == t || may_build(&plan, rules, (cx, cy), t)
+        })
     }
 
     /// Маска превью для штампа: влезает ли он якорем в каждую клетку рамки.
@@ -2470,8 +2484,25 @@ impl Sim {
         if cancelled {
             return true;
         }
+        // Ластик снимает **верхний слой рамки** (§12.237): есть под ней хоть
+        // одна постройка — стираются только постройки, нет — пол. Поклеточное
+        // «каждой клетке по слою» оставило бы там, где постройки соседят с
+        // голым полом, рваный край ям, которого никто не просил. Без основания
+        // в палитре постройкой считается всё построенное — ровно как раньше.
+        let tops: Vec<(i32, i32)> = {
+            let (map, rules) = (
+                self.world.resource::<BaseMap>(),
+                self.world.resource::<TileRules>(),
+            );
+            cells
+                .iter()
+                .copied()
+                .filter(|&(cx, cy)| rules.stripped(map.tile_at(cx, cy)) >= 0)
+                .collect()
+        };
+        let targets = if tops.is_empty() { cells } else { tops };
         let mut planned = changed;
-        for &(cx, cy) in &cells {
+        for &(cx, cy) in &targets {
             planned |= self.add_blueprint(cx, cy, -1);
         }
         planned
@@ -5135,6 +5166,20 @@ impl Sim {
 
         let mut blueprints = Vec::new();
         {
+            // Заваленные площадки (§12.237) — тем же выражением, каким
+            // `assign_jobs` решает, ждать ли стройке уборки.
+            let mut piles = self.world.query::<(&Position, &Stack)>();
+            let piled: Vec<((i32, i32), usize, i32)> = piles
+                .iter(&self.world)
+                .map(|(p, s)| ((p.x, p.y), s.item, s.count))
+                .collect();
+            let cluttered = site_clutter(
+                self.world.resource::<BaseMap>(),
+                self.world.resource::<TileRules>(),
+                self.world.resource::<Bins>(),
+                self.world.resource::<AutoTidy>().0,
+                &piled,
+            );
             let mut q = self.world.query::<&Blueprint>();
             let rules = self.world.resource::<TileRules>();
             for bp in q.iter(&self.world) {
@@ -5142,6 +5187,14 @@ impl Sim {
                     x: bp.x,
                     y: bp.y,
                     tile: bp.tile,
+                    clutter: if bp.tile >= 0 {
+                        cluttered
+                            .iter()
+                            .find(|&&(c, _)| c == (bp.x, bp.y))
+                            .map_or(0, |&(_, n)| n)
+                    } else {
+                        0
+                    },
                     progress: bp.progress,
                     total: BUILD_WORK,
                     // Полоска подвоза показывает набор целиком: сколько всего

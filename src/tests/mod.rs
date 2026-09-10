@@ -20,6 +20,7 @@ mod hauling;
 mod health;
 mod items;
 mod jobs;
+mod layers;
 mod missions;
 mod needs;
 mod news;
@@ -212,6 +213,9 @@ fn sim_from(rows: &[&str]) -> Sim {
             lab: false,
             shop: false,
             solid: false,
+            // Слоёв у схемы нет (§12.237): основания в палитре нет, и любой
+            // тайл встаёт куда угодно, как до слоёв. Включает `set_base`.
+            base: false,
             trade: false,
             // Ворот по находке и по постройке у схемы тоже нет (§12.210):
             // палитра из одного пола открыта с нулевого тика.
@@ -675,6 +679,12 @@ impl Sim {
     /// Заставить тайл доверху: пройти можно, остаться нельзя (§12.35).
     fn set_solid(&mut self, tile: i16, on: bool) {
         self.tile_rule(tile, |r| r.solid = on);
+    }
+
+    /// Основание (§12.237): с ним включаются слои — пол только на пустоту,
+    /// прочее только на пол, ластик снимает один слой. В `sim_from` его нет.
+    fn set_base(&mut self, tile: i16, on: bool) {
+        self.tile_rule(tile, |r| r.base = on);
     }
 
     /// Зонирование (§12.157): чего тайл не терпит боком. В `sim_from` все

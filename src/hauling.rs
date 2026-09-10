@@ -615,6 +615,7 @@ pub(crate) fn assign_tidy(
     marks: Query<(Entity, &Position), With<ToStore>>,
     going: Query<(&Haul, Option<&Carrying>, Option<&Carry>)>,
     stacks: Query<(Entity, &Position, &Stack)>,
+    sites: Query<&Blueprint>,
     free_cats: Query<
         (
             Entity,
@@ -722,6 +723,14 @@ pub(crate) fn assign_tidy(
     items.sort_unstable();
     items.dedup();
     let best = best_tiers(map, &rules, &bins, &stock, &items);
+    // Площадки постройки: куча на них держит стройку (§12.237), как куча в
+    // ячейке поста держит торговый слот (§12.98), — и убирается той же
+    // первой очередью.
+    let built_on: Vec<(i32, i32)> = sites
+        .iter()
+        .filter(|bp| bp.tile >= 0)
+        .map(|bp| (bp.x, bp.y))
+        .collect();
 
     let mut open: Vec<(Entity, (i32, i32), i32, u8)> = marks
         .iter()
@@ -732,7 +741,9 @@ pub(crate) fn assign_tidy(
                 .find(|&&(item, _)| item == stack.item)
                 .is_some_and(|&(_, top)| top.is_some());
             let left = stack.count - claimed(&promised, e);
-            let rank = u8::from(!rules.is_trade_post(map.tile_at(p.x, p.y)));
+            let first =
+                rules.is_trade_post(map.tile_at(p.x, p.y)) || built_on.contains(&(p.x, p.y));
+            let rank = u8::from(!first);
             (welcome && left > 0).then_some((e, (p.x, p.y), left, rank))
         })
         .collect();
@@ -1583,6 +1594,49 @@ fn nearest_store(
 /// неё коты ходили бы к кучам и возвращались ни с чем, пока склада нет.
 fn any_store_room(map: &BaseMap, rules: &TileRules, stock: &[i32]) -> bool {
     (0..stock.len()).any(|i| rules.capacity_of(map.cells[i]) - stock[i] > 0)
+}
+
+/// Что уборка унесёт **прямо сейчас**: клетка и сколько на ней лежит
+/// помеченного, для чего есть склад, принимающий этот тип (§12.237).
+///
+/// Те же двое ворот, что у `assign_tidy`: место на складах вообще
+/// (`any_store_room`) и место для этого типа (`best_tiers`). Разойдись они — и
+/// чертёж ждал бы кучу, за которой уборка не пойдёт никогда.
+///
+/// `piles` — все кучи мира: `(клетка, предмет, сколько, помечена ли)`.
+pub(crate) fn tidy_pending(
+    map: &BaseMap,
+    rules: &TileRules,
+    bins: &Bins,
+    piles: &[((i32, i32), usize, i32, bool)],
+) -> Vec<((i32, i32), i32)> {
+    let stock = stock_grid(map, piles.iter().map(|&(xy, _, n, _)| (xy, n)));
+    if !any_store_room(map, rules, &stock) {
+        return Vec::new();
+    }
+    let mut items: Vec<usize> = piles
+        .iter()
+        .filter(|&&(.., marked)| marked)
+        .map(|&(_, item, ..)| item)
+        .collect();
+    items.sort_unstable();
+    items.dedup();
+    let best = best_tiers(map, rules, bins, &stock, &items);
+    let mut out: Vec<((i32, i32), i32)> = Vec::new();
+    for &(xy, item, count, marked) in piles {
+        let welcome = best
+            .iter()
+            .find(|&&(i, _)| i == item)
+            .is_some_and(|&(_, top)| top.is_some());
+        if !(marked && welcome) {
+            continue;
+        }
+        match out.iter_mut().find(|(c, _)| *c == xy) {
+            Some((_, n)) => *n += count,
+            None => out.push((xy, count)),
+        }
+    }
+    out
 }
 
 /// Приводит кучи в порядок: снимает их с пустоты и сливает те, что оказались

@@ -232,8 +232,9 @@ fn a_saved_game_continues_identically() {
     assert!(live.teach("excellent", "science"), "ученик за партой");
     live.tick_n(400);
     assert!(live.start_research(0), "тема взята: наука в работе");
+    // На полу коридора (§12.237: постройка встаёт только на пол).
     assert!(
-        live.add_blueprint_rect(9, 6, 2, 2, bed),
+        live.add_blueprint_rect(7, 7, 2, 2, bed),
         "и стройка размечена"
     );
     // Первая вылазка забирает двоих: у базы остаётся один кот за партой, а
@@ -350,7 +351,7 @@ fn claims_survive_a_save() {
     let materials = live.topic_index("materials").expect("тема есть");
     assert!(live.start_research(materials));
     live.tick_n(60); // и сел за тему — теперь она за ним
-    assert!(live.add_blueprint_rect(9, 6, 2, 2, bed));
+    assert!(live.add_blueprint_rect(7, 7, 2, 2, bed));
     assert!(live.launch(0, vec!["sp2".to_string(), "sp3".to_string()]));
     live.tick_n(120);
 

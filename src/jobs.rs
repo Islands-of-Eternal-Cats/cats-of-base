@@ -11,7 +11,7 @@ use bevy_ecs::prelude::*;
 
 use crate::components::*;
 use crate::demolition::DemolitionFront;
-use crate::hauling::spill;
+use crate::hauling::{spill, tidy_pending};
 use crate::map::{BaseMap, DIRS};
 use crate::path::Reach;
 use crate::skills::{SKILL_BUILD, level_of};
@@ -36,22 +36,37 @@ pub(crate) struct Plan {
     width: i32,
     height: i32,
     cells: Vec<i16>,
+    /// Что стоит **сейчас**, без чертежей (§12.237). Слой проверяется по
+    /// построенному, а не по плану: иначе чертёж пола на пустоте разрешил бы
+    /// поставить поверх себя постройку — та заменила бы его на той же клетке, и
+    /// постройка встала бы на пустоту.
+    built: Vec<i16>,
 }
 
 impl Plan {
-    /// Снять план с карты и чертежей. Чертёж сноса кладёт пустоту: он и есть
-    /// обещание, что клетки не будет.
-    pub(crate) fn of(map: &BaseMap, blueprints: impl Iterator<Item = (i32, i32, i16)>) -> Self {
+    /// Снять план с карты и чертежей. Чертёж сноса кладёт то, что останется
+    /// после снятия верхнего слоя (§12.237): у постройки — пол, у пола —
+    /// пустоту. Он и есть обещание, какой клетка станет.
+    pub(crate) fn of(
+        map: &BaseMap,
+        rules: &TileRules,
+        blueprints: impl Iterator<Item = (i32, i32, i16)>,
+    ) -> Self {
         let mut cells = map.cells.clone();
         for (x, y, tile) in blueprints {
             if let Some(i) = map.index(x, y) {
-                cells[i] = tile;
+                cells[i] = if tile < 0 {
+                    rules.stripped(map.cells[i])
+                } else {
+                    tile
+                };
             }
         }
         Plan {
             width: map.width,
             height: map.height,
             cells,
+            built: map.cells.clone(),
         }
     }
 
@@ -60,6 +75,13 @@ impl Plan {
             return -1;
         }
         self.cells[(y * self.width + x) as usize]
+    }
+
+    fn built_at(&self, x: i32, y: i32) -> i16 {
+        if x < 0 || y < 0 || x >= self.width || y >= self.height {
+            return -1;
+        }
+        self.built[(y * self.width + x) as usize]
     }
 
     /// Дописать в план ещё одно обещание. Нужно превью рамки: оно проходит по
@@ -159,12 +181,55 @@ pub(crate) fn zoning_ok(plan: &Plan, rules: &TileRules, at: (i32, i32), tile: i1
         .all(|&(dx, dy)| !clash(rules, tile, plan.tile_at(at.0 + dx, at.1 + dy)))
 }
 
-/// Все ворота разметки разом: подход к полке (§12.111) и зонирование (§12.157).
+/// Все ворота разметки разом: слой (§12.237), подход к полке (§12.111) и
+/// зонирование (§12.157).
 ///
-/// Одно выражение на обоих потребителей — маску превью и `add_blueprint`.
+/// Одно выражение на всех потребителей — маску превью, `add_blueprint` и штамп.
 /// Разойдись они, маска покажет зелёной клетку, которую фасад отклонит.
 pub(crate) fn may_build(plan: &Plan, rules: &TileRules, at: (i32, i32), tile: i16) -> bool {
-    access_ok(plan, rules, at, tile) && zoning_ok(plan, rules, at, tile)
+    rules.rests_on(plan.built_at(at.0, at.1), tile)
+        && access_ok(plan, rules, at, tile)
+        && zoning_ok(plan, rules, at, tile)
+}
+
+/// Заваленные площадки (§12.237): клетка и сколько на ней лежит того, что
+/// уборка унесёт **прямо сейчас**.
+///
+/// Постройку ставят на чистый пол, но ждёт этого не игрок, а чертёж: он
+/// ставится сразу, а строитель к нему не идёт, пока кучи не увезли. Ждать
+/// можно только того, что случится: куча, которую везти некуда (склада нет,
+/// он полон или уборка выключена), в счёт не идёт, и тогда строят поверх неё,
+/// как до §12.237. Иначе первый склад, поставленный на стартовый запас, ждал
+/// бы сам себя вечно.
+///
+/// Одно выражение на раздачу (`assign_jobs`) и снимок (панель называет
+/// причину словом). Без основания в палитре слоёв нет — и ждать нечего.
+///
+/// ⚠️ Метку `ToStore` здесь не читают, а выводят: `mark_loose_scrap` стоит в
+/// цепочке **после** `assign_jobs`, и свежая куча (возврат со сноса, добыча у
+/// шлюза) в свой первый тик ещё не помечена — стройка успела бы начаться
+/// поверх неё. Куча уедет, если уборка включена и клетка не хранилище; на
+/// площадке постройки это всегда пол, то есть условие то же, что у метки.
+///
+/// `piles` — все кучи мира: `(клетка, предмет, сколько)`.
+pub(crate) fn site_clutter(
+    map: &BaseMap,
+    rules: &TileRules,
+    bins: &Bins,
+    auto: bool,
+    piles: &[((i32, i32), usize, i32)],
+) -> Vec<((i32, i32), i32)> {
+    if rules.base().is_none() || !auto {
+        return Vec::new();
+    }
+    let marked: Vec<((i32, i32), usize, i32, bool)> = piles
+        .iter()
+        .map(|&(xy, item, count)| {
+            let loose = rules.capacity_of(map.tile_at(xy.0, xy.1)) <= 0;
+            (xy, item, count, loose)
+        })
+        .collect();
+    tidy_pending(map, rules, bins, &marked)
 }
 
 /// Отрежет ли эта полка кусок базы от остальной (§12.144).
@@ -381,11 +446,17 @@ pub(crate) fn held_cells<'a>(
 ///
 /// Чертежи без материала не раздаются вовсе: строитель не ждёт на площадке, а
 /// берётся за то, что уже обеспечено, — пока носильщик везёт лом (§12.15).
+/// Так же не раздаётся постройка на заваленном полу (§12.237, `site_clutter`):
+/// сперва уборка, потом стройка.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn assign_jobs(
     map: Res<BaseMap>,
     rules: Res<TileRules>,
+    bins: Res<Bins>,
+    auto_tidy: Res<AutoTidy>,
     mut commands: Commands,
     mut blueprints: Query<(Entity, &mut Blueprint)>,
+    piles: Query<(&Position, &Stack)>,
     cats: Query<(&Position, Option<&Path>), With<UnitId>>,
     free_cats: Query<
         (Entity, &UnitId, &Position),
@@ -409,11 +480,19 @@ pub(crate) fn assign_jobs(
         ),
     >,
 ) {
+    // Яму оставляет только снос основания (§12.237): снятая постройка
+    // оставляет пол, доступ не отрезает и очереди от берега не ждёт.
+    let digs = |bp: &Blueprint| bp.tile < 0 && rules.stripped(map.tile_at(bp.x, bp.y)) < 0;
     let doomed: Vec<(i32, i32)> = blueprints
         .iter()
-        .filter(|(_, bp)| bp.tile < 0)
+        .filter(|(_, bp)| digs(bp))
         .map(|(_, bp)| (bp.x, bp.y))
         .collect();
+    let piled: Vec<((i32, i32), usize, i32)> = piles
+        .iter()
+        .map(|(p, s)| ((p.x, p.y), s.item, s.count))
+        .collect();
+    let cluttered = site_clutter(&map, &rules, &bins, auto_tidy.0, &piled);
     let front = (!doomed.is_empty()).then(|| {
         let positions: Vec<(i32, i32)> = cats.iter().map(|(p, _)| (p.x, p.y)).collect();
         DemolitionFront::new(&map, &rules, &doomed, &positions)
@@ -427,7 +506,10 @@ pub(crate) fn assign_jobs(
     for (bp_e, mut bp) in &mut blueprints {
         // Снос не на фронте своей зоны ждёт: убрать эту клетку сейчас — значит
         // отрезать доступ к тем, что глубже.
-        let waiting = bp.tile < 0 && front.as_ref().is_some_and(|f| !f.is_ready(bp.x, bp.y));
+        let waiting = digs(&bp) && front.as_ref().is_some_and(|f| !f.is_ready(bp.x, bp.y));
+        // Постройка на заваленном полу ждёт уборки (§12.237). Начатую не
+        // срываем: куча, упавшая под строителя, — не повод бросать работу.
+        let littered = bp.tile >= 0 && cluttered.iter().any(|&(c, _)| c == (bp.x, bp.y));
         if let Some(cat) = bp.assignee {
             // Игрок мог дорисовать область уже начатого сноса — тогда джоб
             // встаёт на паузу (прогресс сохраняется), а кот освобождается.
@@ -435,7 +517,7 @@ pub(crate) fn assign_jobs(
                 bp.assignee = None;
                 commands.entity(cat).remove::<(Assignment, Path, Stride)>();
             }
-        } else if !waiting && missing(&rules, &bp).is_empty() {
+        } else if !waiting && !littered && missing(&rules, &bp).is_empty() {
             open.push((bp_e, (bp.x, bp.y), bp.tile));
         }
     }
@@ -532,13 +614,16 @@ pub(crate) fn work_jobs(
                 commands.entity(cat_e).insert(Worked(skill));
             }
             if bp.progress >= BUILD_WORK {
-                // Снос возвращает всю цену снесённого тайла, по каждому типу.
-                let refund: Vec<(usize, i32)> = if bp.tile < 0 {
-                    rules.cost_of(map.tile_at(bp.x, bp.y)).to_vec()
+                // Снос возвращает всю цену снесённого тайла, по каждому типу,
+                // и снимает ровно один слой (§12.237): постройку до пола, пол
+                // до пустоты.
+                let (refund, to): (Vec<(usize, i32)>, i16) = if bp.tile < 0 {
+                    let was = map.tile_at(bp.x, bp.y);
+                    (rules.cost_of(was).to_vec(), rules.stripped(was))
                 } else {
-                    Vec::new()
+                    (Vec::new(), bp.tile)
                 };
-                map.set(bp.x, bp.y, bp.tile);
+                map.set(bp.x, bp.y, to);
                 for (item, count) in refund {
                     spill(&mut commands, &mut stacks, (pos.x, pos.y), item, count);
                 }
