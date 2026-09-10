@@ -68,8 +68,16 @@ function placementHint(def, known = []) {
   const hints = [];
   // Слой (§12.237): крест на пустоте под постройкой без слова читался бы
   // поломкой. Есть ли слои вообще, решает рулсет — основанием в палитре.
+  // У улучшения (§12.238) основа своя — её и называем.
   if ((meta.palette ?? []).some((t) => t.base)) {
-    hints.push(def.base ? "Кладётся на пустоту" : "Ставится только на пол");
+    const on = def.on && (meta.palette ?? []).find((t) => t.id === def.on);
+    hints.push(
+      def.base
+        ? "Кладётся на пустоту"
+        : on
+          ? `Ставится поверх: ${on.label || on.id}`
+          : "Ставится только на пол",
+    );
   }
   if (def.solid) hints.push(ACCESS_HINT);
   for (const [has, avoids, say] of ZONING_PAIRS) {

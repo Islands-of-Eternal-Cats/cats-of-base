@@ -1412,6 +1412,9 @@ impl Sim {
                     after: tile_index_of(&t.after)
                         .filter(|&prev| prev < def)
                         .map(|prev| prev as i16),
+                    on: tile_index_of(&t.on)
+                        .filter(|&prev| prev < def)
+                        .map(|prev| prev as i16),
                     internal: t.internal,
                     quiet: t.quiet,
                     noisy: t.noisy,
@@ -2484,23 +2487,21 @@ impl Sim {
         if cancelled {
             return true;
         }
-        // Ластик снимает **верхний слой рамки** (§12.237): есть под ней хоть
-        // одна постройка — стираются только постройки, нет — пол. Поклеточное
-        // «каждой клетке по слою» оставило бы там, где постройки соседят с
-        // голым полом, рваный край ям, которого никто не просил. Без основания
-        // в палитре постройкой считается всё построенное — ровно как раньше.
-        let tops: Vec<(i32, i32)> = {
+        // Ластик снимает **верхний слой рамки** (§12.237, §12.238): стираются
+        // только клетки самого высокого уровня под ней — улучшения, если они
+        // есть, иначе постройки, иначе пол. Поклеточное «каждой клетке по
+        // слою» оставило бы там, где постройки соседят с голым полом, рваный
+        // край ям, которого никто не просил. Без основания в палитре уровень у
+        // всего построенного один — ровно как раньше.
+        let targets: Vec<(i32, i32)> = {
             let (map, rules) = (
                 self.world.resource::<BaseMap>(),
                 self.world.resource::<TileRules>(),
             );
-            cells
-                .iter()
-                .copied()
-                .filter(|&(cx, cy)| rules.stripped(map.tile_at(cx, cy)) >= 0)
-                .collect()
+            let level = |&(cx, cy): &(i32, i32)| rules.level(map.tile_at(cx, cy));
+            let top = cells.iter().map(level).max().unwrap_or(0);
+            cells.iter().copied().filter(|c| level(c) == top).collect()
         };
-        let targets = if tops.is_empty() { cells } else { tops };
         let mut planned = changed;
         for &(cx, cy) in &targets {
             planned |= self.add_blueprint(cx, cy, -1);

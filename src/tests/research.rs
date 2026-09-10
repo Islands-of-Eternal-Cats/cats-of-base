@@ -414,6 +414,12 @@ fn the_shipped_ruleset_researches_its_first_topic() {
     // ворота. Ловит контент, где `tech` не совпал ни с одной темой. С §12.146
     // веха открывает не постройку, а подтему, поэтому шага здесь два.
     let rack = 6; // индекс `rack` в палитре тайлов
+    // Стеллаж — улучшение склада, а гнездо — лежанки (§12.238): основу
+    // кладём заранее, чтобы отказ ниже был про технологию, а не про слой.
+    let storage = sim.tile_index("storage").expect("склад");
+    let bed = sim.tile_index("bed").expect("лежанка");
+    sim.force_tile(8, 7, storage);
+    sim.force_tile(8, 8, bed);
     assert!(
         !sim.add_blueprint(8, 7, rack),
         "веха постройку не даёт: у «Стеллажа» своя тема",

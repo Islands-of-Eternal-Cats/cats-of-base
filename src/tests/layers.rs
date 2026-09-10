@@ -134,7 +134,67 @@ fn with_nowhere_to_tidy_a_building_goes_over_the_pile() {
     assert_eq!(sim.scrap_at(3, 1), 3, "куча осталась на месте");
 }
 
+// --- улучшения (§12.238) -----------------------------------------------------
+
+/// Тайл `2` — улучшение тайла `1`: ставится только поверх него.
+fn upgradable() -> Sim {
+    let mut sim = layered();
+    sim.set_on(2, WALL as i16);
+    sim
+}
+
+#[test]
+fn an_upgrade_goes_only_on_its_base() {
+    let mut sim = upgradable();
+    sim.force_tile(3, 1, WALL as i16);
+    assert!(sim.add_blueprint(3, 1, 2), "поверх своей основы — ставится");
+    assert!(!sim.add_blueprint(4, 1, 2), "на голый пол — нет");
+}
+
+#[test]
+fn erasing_an_upgrade_returns_its_base() {
+    let mut sim = upgradable();
+    sim.force_tile(3, 1, 2);
+    assert!(sim.plan_demolish(3, 1));
+    sim.tick_n(200);
+    assert_eq!(sim.tile(3, 1), WALL as i16, "улучшение снято до основы");
+}
+
+/// Рамка снимает самый высокий уровень под ней: улучшение, а постройку рядом
+/// и пол не трогает — один жест, одна ступень.
+#[test]
+fn the_eraser_takes_the_highest_level() {
+    let mut sim = upgradable();
+    sim.force_tile(2, 1, WALL as i16);
+    sim.force_tile(3, 1, 2);
+    assert!(sim.plan_demolish_rect(2, 1, 3, 1));
+    assert_eq!(sim.planned_tile(3, 1), Some(-1), "улучшение — в снос");
+    assert_eq!(sim.planned_tile(2, 1), None, "постройка не тронута");
+    assert_eq!(sim.planned_tile(4, 1), None, "пол не тронут");
+}
+
 // --- боевой рулсет -----------------------------------------------------------
+
+/// На `core.yaml` стеллаж — улучшение склада: на пол не встаёт, поверх склада
+/// встаёт, а стёртый возвращается складом.
+#[test]
+fn the_shipped_ruleset_upgrades_storage_to_a_rack() {
+    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    sim.without_timeline();
+    sim.add_storage();
+    sim.set_tech("racks");
+    let rack = sim.tile_index("rack").expect("стеллаж");
+    let storage = sim.tile_index("storage").expect("склад");
+
+    assert!(!sim.add_blueprint(8, 7, rack as i32), "на пол стеллаж не встаёт");
+    assert!(sim.add_blueprint(3, 2, rack as i32), "поверх склада — встаёт");
+    sim.tick_n(1500);
+    assert_eq!(sim.tile(3, 2), rack, "стеллаж построен");
+
+    assert!(sim.plan_demolish(3, 2));
+    sim.tick_n(600);
+    assert_eq!(sim.tile(3, 2), storage, "стёртый стеллаж вернулся складом");
+}
 
 /// На `core.yaml` основание — пол: стёртая лежанка стартовой застройки
 /// оставляет пол, а не яму.
