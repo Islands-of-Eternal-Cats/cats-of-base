@@ -2733,16 +2733,23 @@ function renderCellPanel(snap) {
 
   // Кто стоит. Клетку коты делят на проходе (§12.32), а на паузе видно только
   // верхнего — из-за чего и разошлись показания в первом баге про лапы.
-  // Ученика за партой сюда не пишем: о нём слово в слово сказала карточка
-  // выше (§12.80). Остальных — да, клетку коты делят на проходе.
-  const said = def?.teaches
-    ? new Set(
-        (snap.entities ?? [])
-          .filter((e) => e.job === "study" && e.x === x && e.y === y)
-          .map((e) => e.id),
-      )
-    : null;
-  const here = unitsAt(x, y).filter((id) => !said?.has(id));
+  // Того, кого карточка выше уже назвала, сюда не пишем (§12.80, §12.232):
+  // ученика за партой, учёного лаборатории («работает …») и мастера станка —
+  // иначе одно имя стоит дважды через строку. Остальных — да, клетку коты
+  // делят на проходе.
+  const said = new Set();
+  if (def?.teaches)
+    for (const e of snap.entities ?? [])
+      if (e.job === "study" && e.x === x && e.y === y) said.add(e.id);
+  if (def?.lab) {
+    const u = (snap.research ?? []).find((v) => v.x === x && v.y === y)?.unit;
+    if (u) said.add(u);
+  }
+  if (def?.shop) {
+    const u = (snap.crafting ?? []).find((v) => v.x === x && v.y === y)?.unit;
+    if (u) said.add(u);
+  }
+  const here = unitsAt(x, y).filter((id) => !said.has(id));
   if (here.length)
     parts.push(
       `<div class="cat-sub">здесь: ${here.map(esc).join(" · ")}</div>`,
