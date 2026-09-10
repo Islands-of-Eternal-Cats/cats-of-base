@@ -79,6 +79,102 @@ fn pieces_needed(rule: &CraftRule, have: &[i32], owed: &[(usize, i32)], min: i32
         .max(0)
 }
 
+/// Прибавить `n` штук предмета к набору вида `(предмет, штук)`.
+fn bump(set: &mut Vec<(usize, i32)>, item: usize, n: i32) {
+    match set.iter_mut().find(|(i, _)| *i == item) {
+        Some((_, v)) => *v += n,
+        None => set.push((item, n)),
+    }
+}
+
+/// Сколько штук предмета в `set`; нет записи — ноль.
+fn count_of(set: &[(usize, i32)], item: usize) -> i32 {
+    set.iter().find(|&&(i, _)| i == item).map_or(0, |&(_, n)| n)
+}
+
+/// Что едет к станкам в лапах: груз ходок `HaulTo::Shop`.
+pub(crate) fn to_shops<'a>(
+    paws: impl Iterator<Item = (&'a Haul, &'a Carrying)>,
+) -> Vec<(usize, i32)> {
+    let mut out = Vec::new();
+    for (haul, load) in paws {
+        if matches!(haul.to, HaulTo::Shop(_)) {
+            bump(&mut out, load.item, load.count);
+        }
+    }
+    out
+}
+
+/// Сколько каждого предмета база ещё может пообещать станкам (§12.129,
+/// §12.239): склад плюс то, что уже везут к станкам, минус бронь продажи и
+/// минус недостача **всех** открытых заказов. Число бывает отрицательным: это
+/// значит, что заказам обещано больше, чем у базы есть.
+///
+/// Одно выражение на ручную заявку (`Sim::craft_room`) и на правило-порог
+/// (`plan_craft`). Два счёта «чем база может заплатить станку» однажды
+/// разошлись бы (инвариант 14).
+///
+/// **Груз, который везут к станку, прибавляется обратно**: со склада он уже
+/// ушёл, а в `delivered` ещё не лёг. Без этого каждая ходка на время дороги
+/// выглядела бы нехваткой, и правило срезало бы заказ, к которому кот уже
+/// несёт материал.
+pub(crate) fn craft_free<'a>(
+    stored: &[(usize, i32)],
+    booked: &[(usize, i32)],
+    to_shops: &[(usize, i32)],
+    rules: &CraftRules,
+    orders: impl Iterator<Item = &'a Craft>,
+) -> Vec<(usize, i32)> {
+    let mut free: Vec<(usize, i32)> = Vec::new();
+    for &(item, n) in stored.iter().chain(to_shops) {
+        bump(&mut free, item, n);
+    }
+    for &(item, n) in booked {
+        bump(&mut free, item, -n);
+    }
+    for order in orders {
+        for (item, n) in craft_missing(rules, order) {
+            bump(&mut free, item, -n);
+        }
+    }
+    free
+}
+
+/// На сколько штук рецепта хватает `free` — худший предмет цены (§12.129).
+pub(crate) fn pieces_affordable(free: &[(usize, i32)], cost: &[(usize, i32)]) -> i32 {
+    cost.iter()
+        .map(|&(item, per)| {
+            if per > 0 {
+                count_of(free, item) / per
+            } else {
+                i32::MAX
+            }
+        })
+        .min()
+        .unwrap_or(0)
+        .max(0)
+}
+
+/// Сколько штук заказа материал уже покрывает целиком, то есть уже оплачено
+/// (§12.239). Эти штуки правило не срезает никогда.
+fn supplied_pieces(rule: &CraftRule, order: &Craft) -> i32 {
+    rule.cost
+        .iter()
+        .filter(|&&(_, per)| per > 0)
+        .map(|&(item, per)| count_of(&order.delivered, item) / per)
+        .min()
+        .unwrap_or(order.left)
+        .min(order.left)
+}
+
+/// Недостача заказа приходится на предмет, которого уже не хватает
+/// (`free` ниже нуля).
+fn starved(rules: &CraftRules, order: &Craft, free: &[(usize, i32)]) -> bool {
+    craft_missing(rules, order)
+        .iter()
+        .any(|&(item, _)| count_of(free, item) < 0)
+}
+
 /// Роняет завезённое на станок кучей на его же клетку (§12.102).
 ///
 /// Материал не исчезает **никогда** (инвариант 8), а отмена заказа — это тот же
@@ -166,6 +262,9 @@ pub(crate) fn plan_craft(
     // поэтому изменяемый — двух запросов к `Stack` в одной системе быть не может.
     mut stacks: Query<(Entity, &Position, &mut Stack)>,
     loads: Query<&Carrying>,
+    // Груз в лапах с адресом: бронь продажи и материал, едущий к станку
+    // (§12.239).
+    paws: Query<(&Haul, &Carrying)>,
     deals: Query<&Deal>,
     // Разметка по объектам (§12.161): станок-штамп — один слот, а не столько,
     // сколько в нём клеток.
@@ -192,6 +291,87 @@ pub(crate) fn plan_craft(
     // заведённый выше заказ на втором витке выглядел бы несуществующим.
     let mut taken: Vec<(i32, i32)> = orders.iter().map(|(_, o)| o.cell).collect();
     let owners = owners_of(&map, &structs, &placed);
+
+    // **Чем база может заплатить станкам прямо сейчас** (§12.239) — тем же
+    // выражением, что режет ручную заявку (§12.129).
+    let mut stored: Vec<(usize, i32)> = Vec::new();
+    for (_, p, s) in stacks.iter() {
+        if tiles.capacity_of(map.tile_at(p.x, p.y)) > 0 {
+            bump(&mut stored, s.item, s.count);
+        }
+    }
+    let booked = crate::trade::booked(deals.iter(), paws.iter());
+    let carried = to_shops(paws.iter());
+    let mut free = craft_free(
+        &stored,
+        &booked,
+        &carried,
+        &rules,
+        orders.iter().map(|(_, o)| o),
+    );
+
+    // **Обещано больше, чем есть, — свои заказы отдают неоплаченные штуки**
+    // (§12.239). Ждущий заказ держит станок (§12.96), а если материала нет
+    // совсем, мастер к нему не придёт никогда, и правило, занимающее станки
+    // по одному за тик, забирает их все. Так и встала реальная партия: шесть
+    // заказов на аптечку без единой ткани, и ни одного станка под детали.
+    // Срезаем с конца по клетке (§11) и только до оплаченных штук — дословно
+    // срезание при опущенном пороге (§12.123). Завезённое сверх оставленного
+    // ложится кучей на клетку станка (инвариант 8).
+    if free.iter().any(|&(_, n)| n < 0) {
+        let mut mine: Vec<(Entity, (i32, i32))> = orders
+            .iter()
+            .filter(|(_, o)| o.auto && o.left > 0)
+            .map(|(e, o)| (e, o.cell))
+            .collect();
+        mine.sort_unstable_by_key(|&(_, (x, y))| (y, x));
+        for &(order_e, cell) in mine.iter().rev() {
+            let Ok((_, mut order)) = orders.get_mut(order_e) else {
+                continue;
+            };
+            let Some(rule) = rules.0.get(order.def) else {
+                continue;
+            };
+            let floor = supplied_pieces(rule, &order);
+            let was_left = order.left;
+            while order.left > floor && starved(&rules, &order, &free) {
+                let was = craft_missing(&rules, &order);
+                order.left -= 1;
+                let now = craft_missing(&rules, &order);
+                for (item, n) in was {
+                    bump(&mut free, item, n - count_of(&now, item));
+                }
+            }
+            if order.left == was_left {
+                continue;
+            }
+            // Завезённое сверх оставленных штук не остаётся на станке: заказ
+            // кончается на последней штуке, и лишнее пропало бы вместе с ним.
+            let mut extra: Vec<(usize, i32)> = Vec::new();
+            for &(item, per) in &rule.cost {
+                let keep = per * order.left;
+                if let Some(slot) = order.delivered.iter_mut().find(|(i, _)| *i == item)
+                    && slot.1 > keep
+                {
+                    extra.push((item, slot.1 - keep));
+                    slot.1 = keep;
+                }
+            }
+            order.delivered.retain(|&(_, n)| n > 0);
+            spill_delivered(&mut commands, &mut stacks, cell, &extra);
+            if order.left > 0 {
+                continue;
+            }
+            // `despawn` отложен до конца тика: заказ с нулём штук ниже не
+            // считается ни в `ordered`, ни в недостаче, а раздатчик его не
+            // возьмёт (`left <= 0`).
+            if let Some(cat_e) = order.assignee.take() {
+                commands.entity(cat_e).remove::<(Crafting, Path, Stride)>();
+            }
+            commands.entity(order_e).despawn();
+            taken.retain(|&c| c != cell);
+        }
+    }
 
     // **Сперва рецепты, у которых станка нет вовсе** (§12.97), при равенстве —
     // по палитре. Без этого чинить нечего: у базы с четырьмя порогами и тремя
@@ -290,12 +470,25 @@ pub(crate) fn plan_craft(
         if short <= 0 {
             continue;
         }
+        // **Порция — не больше, чем база может оплатить** (§12.239). Материала
+        // нет — правило ждёт у себя, а не на станке: станок остаётся свободным
+        // для другого порога, а правило перепроверит на следующем тике.
+        let batch = if short >= RULE_BATCH { RULE_BATCH } else { 1 };
+        let size = batch.min(pieces_affordable(&free, &rule.cost));
+        if size <= 0 {
+            continue;
+        }
         let Some(cell) = free_shop(&map, &tiles, &owners, &taken) else {
             continue;
         };
+        // Новый заказ сразу обещает свой материал: следующий рецепт в этом же
+        // тике его уже не посчитает.
+        for &(item, per) in &rule.cost {
+            bump(&mut free, item, -per * size);
+        }
         commands.spawn(Craft {
             def,
-            left: if short >= RULE_BATCH { RULE_BATCH } else { 1 },
+            left: size,
             progress: 0,
             delivered: Vec::new(),
             assignee: None,

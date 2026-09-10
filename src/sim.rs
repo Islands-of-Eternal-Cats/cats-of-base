@@ -2313,9 +2313,9 @@ impl Sim {
         // Клетка, где этот тайл уже стоит, штамп не держит: `place_structure`
         // её пропускает, а спросить её воротами значило бы спросить «можно ли
         // лабораторию на лабораторию» — и получить отказ слоя (§12.237).
-        cells.iter().all(|&((cx, cy), t)| {
-            map.tile_at(cx, cy) == t || may_build(&plan, rules, (cx, cy), t)
-        })
+        cells
+            .iter()
+            .all(|&((cx, cy), t)| map.tile_at(cx, cy) == t || may_build(&plan, rules, (cx, cy), t))
     }
 
     /// Маска превью для штампа: влезает ли он якорем в каждую клетку рамки.
@@ -3491,34 +3491,31 @@ impl Sim {
     /// Обещанное вычитается по **всем** заказам, а не только по разборам: тот,
     /// что стоит и ждёт лом, съест его, когда лом появится, — и два разбора по
     /// одному комбинезону иначе прошли бы оба.
+    ///
+    /// Считает общее с правилом-порогом выражение `crafting::craft_free`
+    /// (§12.239): с тех пор правило тоже заказывает только то, что база может
+    /// оплатить.
     fn craft_room(&mut self, cost: &[(usize, i32)]) -> i32 {
         let rules = CraftRules(self.world.resource::<CraftRules>().0.clone());
-        let mut orders = self.world.query::<&Craft>();
-        let promised: Vec<(usize, i32)> =
-            orders.iter(&self.world).fold(Vec::new(), |mut acc, order| {
-                for (item, need) in craft_missing(&rules, order) {
-                    match acc.iter_mut().find(|(i, _)| *i == item) {
-                        Some((_, n)) => *n += need,
-                        None => acc.push((item, need)),
-                    }
-                }
-                acc
-            });
+        let mut stored: Vec<(usize, i32)> = Vec::new();
+        for (_, item, n) in self.storage_piles() {
+            match stored.iter_mut().find(|(i, _)| *i == item) {
+                Some((_, v)) => *v += n,
+                None => stored.push((item, n)),
+            }
+        }
         let booked = self.booked_for_sale();
-        let at = |set: &[(usize, i32)], item: usize| {
-            set.iter().find(|&&(i, _)| i == item).map_or(0, |&(_, n)| n)
-        };
-        cost.iter()
-            .map(|&(item, per)| {
-                // Тот же счёт, каким подвоз решает, что может привезти на
-                // станок (§12.102, §12.130): складские кучи, минус чужие
-                // обещания.
-                let free = self.in_storage(item) - at(&booked, item) - at(&promised, item);
-                if per > 0 { free / per } else { i32::MAX }
-            })
-            .min()
-            .unwrap_or(0)
-            .max(0)
+        let mut paws = self.world.query::<(&Haul, &Carrying)>();
+        let to_shops = crate::crafting::to_shops(paws.iter(&self.world));
+        let mut orders = self.world.query::<&Craft>();
+        let free = crate::crafting::craft_free(
+            &stored,
+            &booked,
+            &to_shops,
+            &rules,
+            orders.iter(&self.world),
+        );
+        crate::crafting::pieces_affordable(&free, cost)
     }
 
     /// Держать на базе не меньше `min` штук того, что даёт рецепт `def`

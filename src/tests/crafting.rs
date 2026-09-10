@@ -135,16 +135,18 @@ fn the_batch_is_hauled_at_once_and_eaten_piece_by_piece() {
 /// Заказ без материала **ждёт**, как чертёж без завезённого лома (§12.15): это
 /// не ошибка и не отказ, и кот тем временем занят другой работой.
 ///
-/// Заводит его здесь **правило-порог**: с §12.129 руками такой заказ не
-/// разметить — заявка режется наличным, — а правилу это как раз и поручено
-/// («дозакажи, когда появится»). Сама механика ожидания от этого не изменилась.
+/// Без материала заказ не заведёт ни кнопка (§12.129), ни правило (§12.239),
+/// поэтому здесь материал **уводят после клика**: заказ ручной, и правило его
+/// не срезает. Сама механика ожидания от этого не изменилась.
 #[test]
 fn an_order_without_material_waits() {
     let mut sim = sim_with_shop();
     let recipe = sim.set_recipe(100, &[(SCRAP, 4)], &[(PART, 1)], &[]);
-    sim.set_stock(recipe, 1);
+    sim.put_item(5, 1, SCRAP, 4);
+    assert!(sim.start_craft(recipe, 1));
+    sim.take_item(5, 1, SCRAP); // лом унесли, пока носильщик не дошёл
     sim.tick_n(2);
-    assert_eq!(sim.craft_left(), Some(1), "правило завело заказ без склада");
+    assert_eq!(sim.craft_left(), Some(1), "заказ стоит без материала");
 
     sim.tick_n(10);
     assert_eq!(sim.crafter(), None, "исполнителя нет — заказ ждёт");
@@ -166,21 +168,24 @@ fn an_order_without_material_waits() {
 /// честнее: заказ на две штуки при материале на одну. Первую делают, вторую
 /// ждут, и ждёт её заказ, а не занятый кот.
 ///
-/// Партию на две штуки при материале на одну заводит **правило-порог**: руками
-/// такую с §12.129 не разметить, заявку срежет наличное. Проверяется здесь не
-/// она, а то, что делает мастер, когда привезённое кончилось посреди партии.
+/// Такую партию не заведут ни кнопка (§12.129), ни правило (§12.239): обе
+/// режутся наличным. Поэтому здесь половину материала **уводят после клика**.
+/// Проверяется не заявка, а то, что делает мастер, когда привезённое кончилось
+/// посреди партии.
 #[test]
 fn a_crafter_is_released_when_the_batch_runs_short() {
     let mut sim = sim_with_shop();
     sim.set_auto_tidy(false);
-    sim.put_item(5, 1, SCRAP, 4); // цена ровно одной штуки
+    sim.put_item(5, 1, SCRAP, 8);
     let recipe = sim.set_recipe(100, &[(SCRAP, 4)], &[(PART, 1)], &[]);
-    sim.set_stock(recipe, 5);
+    assert!(sim.start_craft(recipe, 2));
+    sim.take_item(5, 1, SCRAP);
+    sim.put_item(5, 1, SCRAP, 4); // осталась цена ровно одной штуки
     sim.tick_n(2);
-    assert_eq!(sim.craft_left(), Some(5), "правило просит партию");
+    assert_eq!(sim.craft_left(), Some(2), "заказ на партию");
 
     sim.tick_n(40);
-    assert_eq!(sim.craft_left(), Some(4), "на что хватило — то и сделали");
+    assert_eq!(sim.craft_left(), Some(1), "на что хватило — то и сделали");
     assert_eq!(sim.craft_delivered(), Some(0), "материал кончился");
     assert_eq!(sim.crafter(), None, "заказ отпустил кота");
     assert!(!sim.is_crafting("a"), "и кот свободен для другой работы");
@@ -611,6 +616,7 @@ fn a_threshold_spreads_its_shortfall_across_free_shops() {
 #[test]
 fn a_threshold_orders_five_at_a_time() {
     let mut sim = sim_with_shop();
+    sim.put_item(5, 1, SCRAP, 40); // порция по средствам (§12.239)
     let recipe = sim.set_recipe(400, &[(SCRAP, 2)], &[(PART, 1)], &[]);
 
     sim.set_stock(recipe, 100);
@@ -623,6 +629,7 @@ fn a_threshold_orders_five_at_a_time() {
 #[test]
 fn a_threshold_orders_one_when_five_would_overshoot() {
     let mut sim = sim_with_three_shops();
+    sim.put_item(6, 1, SCRAP, 40);
     let recipe = sim.set_recipe(400, &[(SCRAP, 2)], &[(PART, 1)], &[]);
 
     sim.set_stock(recipe, 7);
@@ -639,6 +646,7 @@ fn a_threshold_orders_one_when_five_would_overshoot() {
 #[test]
 fn a_threshold_counts_pieces_already_ordered() {
     let mut sim = sim_with_three_shops();
+    sim.put_item(6, 1, SCRAP, 40);
     let recipe = sim.set_recipe(400, &[(SCRAP, 2)], &[(PART, 1)], &[]);
 
     sim.set_stock(recipe, 1);
@@ -655,6 +663,7 @@ fn a_concentrated_order_is_spread_over_the_new_shops() {
     let mut sim = sim_with_three_shops();
     sim.force_tile(3, 1, 0); // сперва мастерская одна: (2,1)
     sim.force_tile(4, 1, 0);
+    sim.put_item(6, 1, SCRAP, 40);
     let recipe = sim.set_recipe(400, &[(SCRAP, 2)], &[(PART, 1)], &[]);
 
     sim.set_stock(recipe, 15);
@@ -679,6 +688,7 @@ fn a_concentrated_order_is_spread_over_the_new_shops() {
 #[test]
 fn a_small_threshold_still_gets_a_shop() {
     let mut sim = sim_with_two_shops();
+    sim.put_item(5, 1, SCRAP, 40);
     let bolt = sim.set_recipe(400, &[(SCRAP, 2)], &[(PART, 1)], &[]);
     let nut = sim.set_recipe(400, &[(SCRAP, 2)], &[(PART, 1)], &[]);
 
@@ -697,7 +707,9 @@ fn a_small_threshold_still_gets_a_shop() {
 fn manual_pieces_count_towards_the_threshold() {
     let mut sim = sim_with_two_shops();
     let recipe = sim.set_recipe(400, &[(SCRAP, 2)], &[(PART, 1)], &[]);
-    sim.put_item(5, 1, SCRAP, 10); // на пять штук: заявка режется наличным (§12.129)
+    // На пять штук игроку и на добор правилу: обе заявки режутся наличным
+    // (§12.129, §12.239).
+    sim.put_item(5, 1, SCRAP, 20);
 
     assert!(sim.start_craft(recipe, 5));
     sim.set_stock(recipe, 5);
@@ -896,8 +908,10 @@ fn an_auto_order_is_not_cancelled_by_hand() {
 #[test]
 fn clearing_the_threshold_ends_its_order() {
     let mut sim = sim_with_shop();
+    sim.set_auto_tidy(false);
+    sim.put_item(5, 1, SCRAP, 20);
     let recipe = sim.set_recipe(100, &[(SCRAP, 2)], &[(PART, 1)], &[]);
-    sim.set_stock(recipe, 2); // материала нет: заказ ждёт и не оплачен
+    sim.set_stock(recipe, 2);
     sim.tick_n(2);
     assert!(sim.craft_left_of(recipe).is_some());
 
@@ -942,7 +956,9 @@ fn a_supplied_piece_is_cancelled_with_the_threshold() {
 #[test]
 fn a_raised_threshold_waits_for_a_free_shop() {
     let mut sim = sim_with_two_shops();
-    let recipe = sim.set_recipe(100, &[(SCRAP, 2)], &[(PART, 1)], &[]);
+    sim.put_item(5, 1, SCRAP, 40);
+    // Работа долгая: штука не должна успеть лечь под ноги и сдвинуть порог.
+    let recipe = sim.set_recipe(2000, &[(SCRAP, 2)], &[(PART, 1)], &[]);
     sim.set_stock(recipe, 1);
     sim.tick_n(1);
     assert_eq!(sim.craft_left_of(recipe), Some(1));
@@ -990,6 +1006,7 @@ fn a_threshold_counts_pieces_not_items() {
     // Три станка, чтобы оба захода легли сразу: правило кладёт по одному заказу
     // за тик (§12.97), и на одной мастерской второй ждал бы первого.
     let mut sim = sim_with_three_shops();
+    sim.put_item(6, 1, SCRAP, 40);
     let recipe = sim.set_recipe(100, &[(SCRAP, 2)], &[(PART, 3)], &[]);
 
     sim.set_stock(recipe, 5);
@@ -1054,6 +1071,7 @@ fn the_stock_rule_does_not_count_goods_on_their_way_to_a_buyer() {
     let recipe = sim.set_recipe(50, &[(SCRAP, 1)], &[(PART, 1)], &[]);
 
     sim.put_item(12, 1, PART, 2); // две детали уже лежат на складе
+    sim.put_item(12, 1, SCRAP, 10); // и лом на замену (§12.239)
     sim.set_stock(recipe, 2);
     sim.tick_n(1);
     assert_eq!(sim.craft_left_of(recipe), None, "порог закрыт — заказа нет");
@@ -1397,22 +1415,90 @@ fn a_plain_order_is_cut_by_material_too() {
     assert!(!sim.start_craft(def, 1), "тот же лом второй раз не обещаем");
 }
 
-/// А **правило-порог этим воротам не подчиняется** (§12.129): оно как раз и
-/// говорит «дозакажи, когда появится», и заказ у него ждёт материала законно
-/// (§12.30). Иначе просевший запас чинился бы только вручную и только в тот
-/// тик, когда лом уже лежит на базе.
+/// **Правило-порог ждёт материала у себя, а не на станке** (§12.239, отменяет
+/// оговорку §12.129). Заказ без материала держал бы станок, к которому мастер
+/// не придёт; правило же перепроверяет каждый тик и закажет, как только
+/// материал ляжет на склад, — «дозакажи, когда появится» остаётся в силе.
 #[test]
-fn the_threshold_rule_still_orders_without_material() {
+fn the_threshold_rule_waits_for_material_off_the_shop() {
     let mut sim = sim_with_shop();
     let def = sim.set_recipe(100, &[(SCRAP, 4)], &[(PART, 1)], &[]);
 
     sim.set_stock(def, 3);
-    sim.tick_n(2);
-    assert!(
-        sim.craft_left_of(def).unwrap_or(0) > 0,
-        "правило завело заказ"
+    sim.tick_n(5);
+    assert_eq!(sim.orders_count(), 0, "материала нет — станок свободен");
+
+    sim.put_item(5, 1, SCRAP, 8);
+    sim.tick_n(1);
+    assert_eq!(
+        sim.craft_left_of(def),
+        Some(1),
+        "материал появился — правило заказало"
     );
     assert_eq!(sim.craft_is_auto(def), Some(true), "оно, а не игрок");
+}
+
+/// **Порог без материала отдаёт станок другому** (§12.239). Реальная партия
+/// встала ровно так: шесть заказов на аптечку без единой ткани заняли все
+/// шесть мастерских, и порог на детали не получил станка ни разу.
+#[test]
+fn a_threshold_without_material_leaves_the_shop_to_another() {
+    let mut sim = sim_with_shop();
+    let cloth = 2;
+    sim.set_items(cloth + 1);
+    sim.put_item(5, 1, SCRAP, 20);
+    let medkit = sim.set_recipe(100, &[(cloth, 5)], &[(PART, 1)], &[]);
+    let part = sim.set_recipe(2000, &[(SCRAP, 2)], &[(PART, 1)], &[]);
+
+    sim.set_stock(medkit, 10);
+    sim.set_stock(part, 10);
+    sim.tick_n(3);
+    assert_eq!(sim.craft_left_of(medkit), None, "ткани нет — заказа нет");
+    assert!(sim.craft_left_of(part).is_some(), "станок достался деталям");
+}
+
+/// **Заказ правила, который стало нечем оплатить, отдаёт станок** (§12.239):
+/// материал увели, пока его не довезли. Ждать было бы нечего, а станок стоял
+/// бы занятым.
+#[test]
+fn an_unpayable_rule_order_gives_its_shop_back() {
+    let mut sim = sim_with_shop();
+    sim.set_auto_tidy(false);
+    sim.put_item(5, 1, SCRAP, 4);
+    let def = sim.set_recipe(2000, &[(SCRAP, 4)], &[(PART, 1)], &[]);
+    sim.set_stock(def, 3);
+    sim.tick_n(1);
+    assert_eq!(sim.craft_left_of(def), Some(1), "правило заказало");
+
+    sim.take_item(5, 1, SCRAP); // лом унесли до подвоза
+    sim.tick_n(1);
+    assert_eq!(sim.orders_count(), 0, "оплатить нечем — станок свободен");
+}
+
+/// **Дефицит ложится в одну ячейку, а не размазывается по всем** (§12.239).
+/// Шесть тканей при цене в пять — одна аптечка. Раньше каждый станок просил
+/// свою партию, подвоз вёз ближайшему, и вышло 4/1/1: ни одной штуки.
+#[test]
+fn scarce_material_goes_to_a_single_order() {
+    let mut sim = sim_with_three_shops();
+    sim.put_item(6, 1, SCRAP, 6);
+    let def = sim.set_recipe(2000, &[(SCRAP, 5)], &[(PART, 1)], &[]);
+
+    sim.set_stock(def, 10);
+    sim.tick_n(3);
+    assert_eq!(
+        sim.orders_count(),
+        1,
+        "материала на одну штуку — заказ один"
+    );
+    assert_eq!(sim.craft_left_of(def), Some(1), "и в нём одна штука");
+
+    sim.tick_n(40);
+    assert_eq!(
+        sim.craft_delivered(),
+        Some(5),
+        "весь материал в одной ячейке"
+    );
 }
 
 /// **Надетое разбору не материал** (§12.114d). Считается только то, что лежит
