@@ -444,15 +444,12 @@ fn the_shipped_ruleset_counts_its_lab_cells() {
     );
 }
 
-/// **Боевой рулсет: класс приезжает цепочкой — находка, лаборатория, парта**
-/// (§12.210).
+/// **Боевой рулсет: парта открыта с нулевого тика, лаборатория — находкой**
+/// (§12.210, §12.235).
 ///
-/// Порядок здесь и есть весь довод. Наукой ни ту, ни другую постройку закрыть
-/// нельзя — сама наука стоит за лабораторией, — а открытые с нулевого тика они
-/// стоят в палитре ответом на вопрос, которого игрок ещё не задал. Первая
-/// вылазка привозит непонятную штуку, и с ней приезжает лаборатория; игрок её
-/// строит, дверь «Наука» отвечает «изучать некому» — и на этот вопрос приезжает
-/// парта.
+/// Лаборатория по-прежнему ждёт первую непонятную штуку: без неё изучать
+/// нечего. А парта стоит в палитре с начала — знающий игрок учит котов
+/// «Науке» заранее, и к постройке лаборатории у неё уже есть кому работать.
 #[test]
 fn the_shipped_ruleset_opens_its_classroom_by_the_first_find() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
@@ -460,17 +457,10 @@ fn the_shipped_ruleset_opens_its_classroom_by_the_first_find() {
     let desk = i32::from(sim.tile_index("desk").expect("парта в палитре"));
 
     assert!(!sim.add_blueprint(7, 8, lab), "до находки лаборатории нет");
-    assert!(!sim.add_blueprint(7, 8, desk), "и парты тоже");
+    assert!(sim.add_blueprint(8, 8, desk), "а парта есть с начала");
 
     sim.sight("sample"); // ровно то, что привозит первая вылазка
     assert!(sim.add_blueprint(7, 8, lab), "находка открыла лабораторию");
-    assert!(
-        !sim.add_blueprint(8, 8, desk),
-        "а парта ждёт саму постройку: чертёж — это ещё не лаборатория",
-    );
-
-    sim.force_tile(7, 8, lab as i16);
-    assert!(sim.add_blueprint(8, 8, desk), "лаборатория открыла парту");
 }
 
 /// **Открывшаяся ступень палитры не закрывается** (§12.220).
@@ -484,6 +474,10 @@ fn a_demolished_predecessor_keeps_its_successor_open() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
     let lab = i32::from(sim.tile_index("lab").expect("лаборатория в палитре"));
     let desk = sim.tile_index("desk").expect("парта в палитре");
+    // В боевом контенте `after` с §12.235 не носит никто, а механизм жив —
+    // ставим ворота парте прямо здесь, как было в §12.210.
+    sim.tile_rule(desk, |r| r.after = Some(lab as i16));
+    assert!(!sim.tile_is_open(desk as usize), "до лаборатории парта закрыта");
 
     sim.sight("sample");
     sim.force_tile(7, 8, lab as i16);
