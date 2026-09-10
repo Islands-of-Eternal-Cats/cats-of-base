@@ -5842,6 +5842,15 @@ function openOnly(title) {
 // Дверь наружу при этом по-прежнему одна на все способы уйти — сам `openOnly`:
 // метка новостей гаснет и инструмент кладётся из рук ровно там же, где при
 // клике по заголовку.
+//
+// ⚠️ **Со §12.227 та же обёртка стоит и на четырёх кнопках раздела «Партия»**
+// (новая партия, сохранить, загрузить, трейс). Довод у них свой: это разовые
+// команды, после которых в разделе делать нечего, и каждая уводит взгляд с
+// тулбара — в диалог, в загрузку файла, в системный выбор файла. Раскрытый
+// раздел оставался за спиной четырьмя строками, отжимая карту, и свернуть его
+// приходилось вторым кликом по заголовку. Кнопки **внутри других разделов**
+// так по-прежнему не делают, и это не непоследовательность: тайл в «Постройке»
+// — начало разметки (§12.194), а тумблеры «Правил» переключают парами.
 function folds(go) {
   return () => {
     openOnly(null);
@@ -6120,7 +6129,7 @@ function buildToolbar() {
 
   const fresh = mkTool(
     '<span class="sw sw-cursor"></span><span>Новая партия</span>',
-    () => {
+    folds(() => {
       // Спрашиваем: действие разрушительное и необратимое — автосохранение
       // затрёт старую партию через десяток секунд.
       if (!confirm("Начать новую партию? Текущая будет потеряна.")) return;
@@ -6133,14 +6142,14 @@ function buildToolbar() {
       // Темп сбрасывается вместе с базой: на ×10 первые сутки пролетают, пока
       // игрок читает записку, а на паузе новая партия выглядит сломанной.
       setSpeed(1);
-    },
+    }),
   );
   liveTitle(fresh, "Сбросить базу к началу");
   game.appendChild(fresh);
 
   const dump = mkTool(
     '<span class="sw sw-scrap"></span><span>Сохранить в файл</span>',
-    () => worker.postMessage({ type: "save" }),
+    folds(() => worker.postMessage({ type: "save" })),
   );
   liveTitle(dump, "Скачать снимок партии");
   game.appendChild(dump);
@@ -6157,7 +6166,7 @@ function buildToolbar() {
   });
   const restore = mkTool(
     '<span class="sw sw-scrap"></span><span>Загрузить файл</span>',
-    () => picker.click(),
+    folds(() => picker.click()),
   );
   liveTitle(restore, "Открыть снимок партии");
   game.appendChild(restore);
@@ -6165,7 +6174,7 @@ function buildToolbar() {
 
   const trace = mkTool(
     '<span class="sw sw-hire"></span><span>Скачать трейс</span>',
-    () => worker.postMessage({ type: "trace" }),
+    folds(() => worker.postMessage({ type: "trace" })),
   );
   liveTitle(trace, "Журнал команд: как партия пришла в это состояние");
   game.appendChild(trace);
