@@ -6810,6 +6810,12 @@ const surplusMode = new Map();
 function tearing(item, sides) {
   const rule = saleOf(item);
   if (rule) return rule.faction === null || rule.faction === undefined;
+  // Сбыт не изучен — дорога у излишка одна, и она в разбор (§12.240). Иначе
+  // строка звала бы «сбывать сверх —» предмет, который продать ещё некуда:
+  // ворота «Автопродажи» стоят за «Торговой сетью» (§12.229), а строку
+  // держит открытой разбор. Спрошено раньше заготовки выбора: прицел «на
+  // продажу», оставшийся с прошлого клика, не обязан переживать закрытую дорогу.
+  if (autoGateHint("sales")) return true;
   const picked = surplusMode.get(item);
   if (picked) return picked === "salvage";
   return !sides.length;
@@ -10493,7 +10499,8 @@ function syncStockWindow() {
       if (r.sale.dest) {
         // Дороги в разбор ещё нет — переключателя тоже: он предлагал бы выбор
         // из одного варианта, а второй его вариант не существует (§12.126).
-        r.sale.dest.hidden = !liveTear;
+        // То же с другой стороны (§12.240): сбыт не изучен — выбирать не из чего.
+        r.sale.dest.hidden = !liveTear || !!saleGate;
         r.sale.dest.classList.toggle("on", tears);
         // Ворота **другой** стороны: переключение при стоящем правиле — это
         // команда, и ядро откажет ей по своей технологии (§12.93). Пока правила
