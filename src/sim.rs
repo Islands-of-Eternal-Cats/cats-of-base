@@ -5662,6 +5662,12 @@ impl Sim {
                     unlocked: fame >= rule.requires,
                     welcome: self.world.resource::<Standing>().covers(&rule.needs),
                     affordable: self.storage_covers(&rule.cost),
+                    // Тем же `on_base`, что стоит в шапке, — второй арифметики
+                    // «сколько у базы есть» не заводим.
+                    tidy: rule
+                        .cost
+                        .iter()
+                        .all(|&(item, need)| stock.get(item).map_or(0, |s| s.on_base) >= need),
                 });
             }
         }

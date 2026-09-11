@@ -743,6 +743,10 @@ pub(crate) struct RecruitSnap {
     pub(crate) welcome: bool,
     /// И на складе есть чем заплатить.
     pub(crate) affordable: bool,
+    /// Платы хватит, если убрать на склад валяющееся: склад плюс пол и лапы
+    /// минус бронь (`StockSnap::on_base`). По нему окно найма ставит кандидата
+    /// между «можно сейчас» и «нельзя» — это чинится временем, а не решением.
+    pub(crate) tidy: bool,
 }
 
 #[derive(Serialize)]

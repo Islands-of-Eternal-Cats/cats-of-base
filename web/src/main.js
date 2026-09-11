@@ -6568,6 +6568,12 @@ function syncRecruitButtons(list) {
     // Тот же образец, что у кнопок сделки (`syncTradeButtons`, §12.100).
     b.classList.toggle("off", !ready);
     b.classList.toggle("on", ready);
+    // Ступень в списке: можно сейчас · хватит после уборки на склад · нельзя
+    // (известность, репутация или платы нет на базе вовсе). Раскладывает
+    // `orderNewFirst` — одним проходом (§12.201).
+    const open = !r.hired && r.unlocked && r.welcome;
+    const rank = ready ? "0" : open && r.tidy ? "1" : "2";
+    if (b.dataset.rank !== rank) b.dataset.rank = rank;
     // Своего присылают тем, кому доверяют (§12.43), и репутацией за него не
     // платят — платит склад. Поэтому причин отказа три и они разные.
     const distrust = r.welcome
@@ -6580,7 +6586,7 @@ function syncRecruitButtons(list) {
         : distrust
           ? distrust
           : !r.affordable
-            ? `На складе нечем заплатить: ${payHint((meta.recruits ?? [])[i]?.cost)}`
+            ? `${r.tidy ? "Хватит, когда уберут на склад" : "На складе нечем заплатить"}: ${payHint((meta.recruits ?? [])[i]?.cost)}`
             : "Нанять";
     // Параметры называем и у закрытого кандидата: к нему идут заранее, и
     // «зачем мне этот кот» игрок спрашивает до того, как накопит.
@@ -7837,8 +7843,15 @@ function orderNewFirst(list, buttons, kind, heads) {
     heads.run.empty.hidden = running.length > 0;
     orderChildren(heads.run.col, [heads.run.head, ...running, heads.run.empty]);
   }
-  const live = buttons.filter((b, i) => shown(b) && !isRun(b) && fresh.has(i));
-  const rest = buttons.filter((b, i) => shown(b) && !isRun(b) && !fresh.has(i));
+  // Ступень внутри группы (`data-rank`, пока только у «Найма»): сортировка
+  // стабильная, так что без ранга порядок остаётся палитровым.
+  const byRank = (a, b) => (a.dataset.rank ?? 0) - (b.dataset.rank ?? 0);
+  const live = buttons
+    .filter((b, i) => shown(b) && !isRun(b) && fresh.has(i))
+    .sort(byRank);
+  const rest = buttons
+    .filter((b, i) => shown(b) && !isRun(b) && !fresh.has(i))
+    .sort(byRank);
   const order = [];
   // Заголовков нет, пока нечего отделять: подпись над единственным списком —
   // это шум ровно там, где всё в порядке (§12.73).
