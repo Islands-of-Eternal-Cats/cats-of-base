@@ -2382,6 +2382,66 @@ main#stage.mode-cursor #mode-banner {
   font-size: 11px;
   line-height: 15px;
 }
+/* Идущая тема в окне «Наука» — тем же блоком, что в панели тем справа: доля,
+   кто за ней и «Бросить». Взяться за неё второй раз нельзя, но это не отказ, а
+   работа, поэтому строку не гасим. */
+.tool.topic.off.running {
+  opacity: 1;
+}
+/* Окно «Наука» в две колонки: слева реестр тем, справа идущие. Ширина правой
+   не зависит от содержимого — иначе старт темы менял бы раскладку. */
+.win-box.narrow.sci {
+  width: min(1040px, calc(100vw - 60px));
+  /* Высота — по экрану, а не по содержимому: старт, отмена и конец темы
+     меняли число строк, и окно прыгало вместе с ними. */
+  height: calc(100vh - 80px);
+}
+/* Заголовок группы отбивается только от строки над ним. `:first-child` тут не
+   годится: перед первым видимым заголовком стоят спрятанные, и левая колонка
+   начиналась ниже правой. Скрытые строки всегда в хвосте списка
+   (`lockedTail`), так что любая строка выше заголовка — видимая; `~`, а не
+   `+`, потому что между ними бывает спрятанная строка «пусто». */
+.sci-cols .crew-head {
+  margin-top: 0;
+}
+.sci-cols .tool ~ .crew-head {
+  margin-top: 10px;
+}
+.sci-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.sci-cols > .win-list {
+  gap: 6px;
+}
+.topic-run {
+  display: block;
+  font-size: 13px;
+}
+.topic-run[hidden] {
+  display: none;
+}
+.topic-state {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+/* Внутри кнопки блочных тегов нет, поэтому полоска — `span`, и без `display:
+   block` у неё нет высоты. */
+.topic-run .bar {
+  display: block;
+}
+/* Специфичнее, чем `.win-box.narrow .win-list .tool`: тот прижимает текст влево. */
+.win-list .tool.topic .topic-cancel {
+  display: flex;
+  width: 100%;
+  margin-top: 8px;
+  justify-content: center;
+  cursor: pointer;
+}
 
 /* --- окно «Покупка» (§12.150) ---------------------------------------------
    Витрина внешнего рынка: закладка на сторону, строка на товар. Своё окно, а не

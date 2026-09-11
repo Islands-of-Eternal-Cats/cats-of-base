@@ -377,7 +377,7 @@ onPanelClick(catEl, ".cat-file", (node) => openDossier(node.dataset.id));
 onPanelClick(cellEl, ".study-off", (node) =>
   sendAction({ type: "unteach", id: node.dataset.id }),
 );
-// «Бросить» у темы в панели лаборатории (§12.233) — дословно та, что в
+// «Отменить» у темы в панели лаборатории (§12.233) — дословно та, что в
 // панели тем: по теме, а не по клетке (§12.132).
 onPanelClick(cellEl, ".research-cancel", (b) =>
   sendAction({ type: "cancelResearch", topic: Number(b.dataset.def) }),
@@ -2745,7 +2745,7 @@ function renderCellPanel(snap) {
   if (def?.teaches) parts.push(...deskCell(snap, x, y, def));
 
   // Тема в ячейке лаборатории — карточкой дословно парты (§12.233): кто
-  // изучает, докуда дошёл и «Бросить» — цена написана над кнопкой (§12.80).
+  // изучает, докуда дошёл и «Отменить» — цена написана над кнопкой (§12.80).
   if (def?.lab) parts.push(...labCell(snap, x, y));
 
   // Набор ящика — тем же порядком (§12.195). Стоит **после** полоски «Занято»
@@ -3564,8 +3564,24 @@ function missionTip(m, def) {
 //
 // С §12.132 тем идёт столько, сколько лабораторий, — и панель рисует их все.
 // Пультом она при этом остаётся, в отличие от сводки заказов (§12.96): каждая
-// строка названа своим именем, и «Бросить» у неё законна — игрок целится в
+// строка названа своим именем, и «Отменить» у неё законна — игрок целится в
 // «Быт колонии», а не в третью строку сверху.
+// Доля и состояние идущей темы — **одни на панель и на окно «Наука»**: две
+// копии одной строки однажды назовут одну тему по-разному.
+function topicPct(r) {
+  return r.total > 0 ? Math.round((r.progress / r.total) * 100) : 0;
+}
+
+// Ждёт образец — это не «ждёт исполнителя» (§12.133): первое чинится
+// вылазкой, второе временем, и путать их нельзя. Что именно везут, ядро
+// называет предметом (`owed`), а не «нужен образец» вообще (§12.53).
+function topicState(r) {
+  const owed = r.owed ?? [];
+  return owed.length
+    ? `ждёт образец: ${owed.map((n) => itemLabel(n.item)).join(", ")}`
+    : r.unit || "ждёт исполнителя";
+}
+
 function renderResearchPanel(list) {
   const rows = list ?? [];
   if (!rows.length || !meta) {
@@ -3575,16 +3591,8 @@ function renderResearchPanel(list) {
   const parts = [];
   for (const r of rows) {
     const def = (meta.research ?? [])[r.def];
-    const pct = r.total > 0 ? Math.round((r.progress / r.total) * 100) : 0;
-    // Ждёт образец — это не «ждёт исполнителя» (§12.133): первое чинится
-    // вылазкой, второе временем, и путать их нельзя. Что именно везут, ядро
-    // называет предметом (`owed`), а не «нужен образец» вообще (§12.53).
-    const owed = r.owed ?? [];
-    const state = owed.length
-      ? `ждёт образец: ${owed.map((n) => itemLabel(n.item)).join(", ")}`
-      : r.unit
-        ? esc(r.unit)
-        : "ждёт исполнителя";
+    const pct = topicPct(r);
+    const state = esc(topicState(r));
     parts.push(
       `<div class="cat-name">${esc(def?.label || def?.id || "Тема")}</div>`,
       '<div class="cat-skill">' +
@@ -3593,7 +3601,7 @@ function renderResearchPanel(list) {
         "</div>",
       `<div class="cat-sub">${state}</div>`,
       `<button class="tool research-cancel" data-key="topic@${r.def}" ` +
-        `data-def="${r.def}"><span>Бросить</span></button>`,
+        `data-def="${r.def}"><span>Отменить</span></button>`,
     );
   }
   researchEl.innerHTML = parts.join("");
@@ -3913,7 +3921,7 @@ function craftTip(g, pct) {
 // делают, сколько осталось и докуда дошла оплаченная штука.
 // Тема в ячейке лаборатории (§12.233) — той же формы, что парта: заголовок
 // «Тема · кто», полоска, строка состояния только когда учёного нет, и
-// «Бросить». **По координатам, а не `research[0]`** (§12.132): тем столько,
+// «Отменить». **По координатам, а не `research[0]`** (§12.132): тем столько,
 // сколько лабораторий, и чужая тема на пустой соседней комнате была бы враньём.
 function labCell(snap, x, y) {
   const r = (snap.research ?? []).find((v) => v.x === x && v.y === y);
@@ -3944,7 +3952,7 @@ function labCell(snap, x, y) {
       // ложится кучей на клетку — это и есть цена, и она необратима.
       `<button class="tool research-cancel" data-key="topic@${r.def}" ` +
       `data-def="${r.def}" data-tip="Плата не вернётся; завезённый образец ляжет кучей здесь">` +
-      "<span>Бросить</span></button>" +
+      "<span>Отменить</span></button>" +
       "</div>",
   ];
 }
@@ -5687,7 +5695,7 @@ const KEEPS_CELL = new Set([
   // Снятие с учёбы (§12.147) — там же и по тому же доводу: кнопка стоит в
   // панели парты, и снятое выделение спрятало бы ответ («парта свободна»).
   "unteach",
-  // «Бросить» у темы (§12.233) — там же: снятое выделение спрятало бы ответ
+  // «Отменить» у темы (§12.233) — там же: снятое выделение спрятало бы ответ
   // («лаборатория свободна»).
   "cancelResearch",
 ]);
@@ -6636,6 +6644,24 @@ function syncTopicButtons(list) {
         b._opens.textContent = text;
       }
       b._opens.hidden = !text;
+    }
+    // Идущая тема (§12.132): доля, исполнитель и «Отменить» — теми же словами,
+    // что панель тем. Пишем только на изменении (§12.84).
+    const run = t.busy
+      ? (lastSnap?.research ?? []).find((r) => r.def === i)
+      : null;
+    b.classList.toggle("running", !!run);
+    if (b._run) {
+      b._run.box.hidden = !run;
+      if (run) {
+        const pct = `${topicPct(run)}%`;
+        const state = topicState(run);
+        if (b._run.pct.textContent !== pct) {
+          b._run.pct.textContent = pct;
+          b._run.bar.style.width = pct;
+        }
+        if (b._run.state.textContent !== state) b._run.state.textContent = state;
+      }
     }
     const ready =
       !t.known &&
@@ -7799,8 +7825,20 @@ function orderNewFirst(list, buttons, kind, heads) {
   // пустотой. У «Найма» класса `locked` нет вовсе, так что фильтр там ничего
   // не меняет.
   const shown = (b) => !b.hidden && !b.classList.contains("locked");
-  const live = buttons.filter((b, i) => shown(b) && fresh.has(i));
-  const rest = buttons.filter((b, i) => shown(b) && !fresh.has(i));
+  // Идущие темы живут **в правой колонке** (`heads.run` есть только у
+  // «Науки»): узел переезжает туда целиком, со слушателем и подсказкой
+  // (§12.84), а левый список их не называет — иначе `orderChildren` каждой
+  // колонки тянул бы узел к себе, и окно перекладывалось бы каждым кадром.
+  // Колонка стоит всегда и своей ширины: группа внутри общего списка
+  // сдвигала всё под собой на каждом старте и конце темы.
+  const isRun = (b) => !!heads.run && b.classList.contains("running");
+  if (heads.run) {
+    const running = buttons.filter((b) => shown(b) && isRun(b));
+    heads.run.empty.hidden = running.length > 0;
+    orderChildren(heads.run.col, [heads.run.head, ...running, heads.run.empty]);
+  }
+  const live = buttons.filter((b, i) => shown(b) && !isRun(b) && fresh.has(i));
+  const rest = buttons.filter((b, i) => shown(b) && !isRun(b) && !fresh.has(i));
   const order = [];
   // Заголовков нет, пока нечего отделять: подпись над единственным списком —
   // это шум ровно там, где всё в порядке (§12.73).
@@ -7809,7 +7847,10 @@ function orderNewFirst(list, buttons, kind, heads) {
   // а без обычных — нечего подписывать. Второе условие не теоретическое: в
   // «Науке» бывает ровно одна открытая тема и одна витринная (§12.143), и
   // заголовок вставал над пустотой.
-  heads.rest.hidden = !live.length || !rest.length;
+  // У «Науки» (`heads.run`) заголовок стоит при любом непустом списке: справа
+  // всегда есть «Сейчас изучаются», и левая колонка без своего заголовка
+  // начиналась бы строкой напротив подписи — колонки перекашивало.
+  heads.rest.hidden = (!heads.run && !live.length) || !rest.length;
   if (live.length) order.push(heads.fresh, ...live, heads.rest);
   else order.push(heads.fresh, heads.rest);
   order.push(...rest);
@@ -8297,9 +8338,30 @@ function opensOf(topic, known = []) {
 }
 
 function buildSciWindow() {
-  const { list } = mkWindow(sciWinEl, "Наука", () => closeSciWindow(), true);
+  const { box, list } = mkWindow(sciWinEl, "Наука", () => closeSciWindow(), true);
   sciList = list;
   sciHeads = mkRegistryHeads(list, true);
+  // Пара к «Сейчас изучаются» справа — «Остальное» здесь назвало бы группу
+  // по отношению к соседней, которой может и не быть.
+  sciHeads.rest.textContent = "Доступны к изучению";
+  // Две колонки: слева то, за что можно взяться, справа — что уже идёт.
+  // Правая стоит всегда, пустая — со словом, иначе окно меняло бы ширину на
+  // первой же теме.
+  box.classList.add("sci");
+  const cols = document.createElement("div");
+  cols.className = "sci-cols";
+  const col = document.createElement("div");
+  col.className = "win-list sci-run";
+  const head = document.createElement("div");
+  head.className = "cat-sub crew-head";
+  head.textContent = "Сейчас изучаются";
+  const empty = document.createElement("div");
+  empty.className = "cat-sub";
+  empty.textContent = "Ничего не изучается — выберите тему слева";
+  col.append(head, empty);
+  box.appendChild(cols);
+  cols.append(list, col);
+  sciHeads.run = { col, head, empty };
   topicButtons.length = 0;
   (meta.research ?? []).forEach((r, i) => {
     const gives = givesOf(r);
@@ -8335,9 +8397,25 @@ function buildSciWindow() {
         // тема-предок — нет: в этом и смысл.
         '<span class="topic-locked" hidden>Артефакт со склада. Что с ним ' +
         "делать, база пока не понимает — нужна наука, до которой ещё не " +
-        "доросли</span>",
+        "доросли</span>" +
+        // Идущая тема — тем же, чем её показывает панель тем справа: доля,
+        // кто за ней и «Отменить». Панель накрыта самим модалом (§12.101), и
+        // без этого блока окно отвечало на идущую тему одним «уже изучается».
+        // Узел стоит всегда и зажигается кадром — пересборка кнопки убила бы
+        // клик (§12.84). «Отменить» — `span`, а не `button`: кнопка в кнопке
+        // невалидна, и отсекает её обработчик ниже, как «i».
+        '<span class="topic-run" hidden>' +
+        '<span class="cat-row"><span>Изучено</span><b class="topic-pct"></b></span>' +
+        '<span class="bar"><i class="topic-bar"></i></span>' +
+        '<span class="topic-state"></span>' +
+        '<span class="tool research-cancel topic-cancel">Отменить</span>' +
+        "</span>",
       (e) => {
         if (e?.target?.closest(".wiki-mark")) return;
+        if (e?.target?.closest(".topic-cancel")) {
+          sendAction({ type: "cancelResearch", topic: i });
+          return;
+        }
         if (b.classList.contains("off")) return;
         sendAction({ type: "research", topic: i });
       },
@@ -8352,6 +8430,16 @@ function buildSciWindow() {
     ];
     b._locked = b.querySelector(".topic-locked");
     b._opens = b.querySelector(".topic-opens-live");
+    b._run = {
+      box: b.querySelector(".topic-run"),
+      pct: b.querySelector(".topic-pct"),
+      bar: b.querySelector(".topic-bar"),
+      state: b.querySelector(".topic-state"),
+    };
+    liveTitle(
+      b.querySelector(".topic-cancel"),
+      "Отменить тему: образцы, которыми за неё заплатили, не вернутся",
+    );
     topicButtons.push(b);
     list.appendChild(b);
   });
