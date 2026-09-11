@@ -7843,15 +7843,8 @@ function orderNewFirst(list, buttons, kind, heads) {
     heads.run.empty.hidden = running.length > 0;
     orderChildren(heads.run.col, [heads.run.head, ...running, heads.run.empty]);
   }
-  // Ступень внутри группы (`data-rank`, пока только у «Найма»): сортировка
-  // стабильная, так что без ранга порядок остаётся палитровым.
-  const byRank = (a, b) => (a.dataset.rank ?? 0) - (b.dataset.rank ?? 0);
-  const live = buttons
-    .filter((b, i) => shown(b) && !isRun(b) && fresh.has(i))
-    .sort(byRank);
-  const rest = buttons
-    .filter((b, i) => shown(b) && !isRun(b) && !fresh.has(i))
-    .sort(byRank);
+  const live = buttons.filter((b, i) => shown(b) && !isRun(b) && fresh.has(i));
+  const rest = buttons.filter((b, i) => shown(b) && !isRun(b) && !fresh.has(i));
   const order = [];
   // Заголовков нет, пока нечего отделять: подпись над единственным списком —
   // это шум ровно там, где всё в порядке (§12.73).
@@ -7940,7 +7933,31 @@ function orderLockedLast(list, buttons, heads) {
 
 function syncHireWindow() {
   if (!hireWinOpen || !hireHeads) return;
-  orderNewFirst(hireList, recruitButtons, "recruit", hireHeads);
+  // Два списка, а не группа «Только что открылись» (§12.241): «Можно нанять» —
+  // сперва кликом сейчас, под ними те, кому хватит после уборки на склад;
+  // «Нанять нельзя» — известность, репутация или платы на базе нет вовсе.
+  // Новизну несёт кольцо на самой строке: списков здесь два, и третья группа
+  // поверх них делила бы кандидатов по другому признаку.
+  const fresh = newlyOpen("recruit");
+  recruitButtons.forEach((b, i) => b.classList.toggle("fresh", fresh.has(i)));
+  const shown = recruitButtons.filter((b) => !b.hidden);
+  const rank = (b) => Number(b.dataset.rank ?? 2);
+  const can = [
+    ...shown.filter((b) => rank(b) === 0),
+    ...shown.filter((b) => rank(b) === 1),
+  ];
+  const cannot = shown.filter((b) => rank(b) === 2);
+  hireHeads.can.hidden = !can.length;
+  hireHeads.cannot.hidden = !cannot.length;
+  // Все дети до единого, скрытые в конце: `orderChildren` сверяет длины (§12.201).
+  orderChildren(hireList, [
+    hireHeads.can,
+    ...can,
+    hireHeads.cannot,
+    ...cannot,
+    hireHeads.empty,
+    ...recruitButtons.filter((b) => b.hidden),
+  ]);
   setEmptyLine(hireHeads, recruitButtons, "Все кандидаты уже на базе");
 }
 
@@ -8489,7 +8506,19 @@ function closeHireWindow() {
 function buildHireWindow() {
   const { list } = mkWindow(hireWinEl, "Найм", () => closeHireWindow(), true);
   hireList = list;
-  hireHeads = mkRegistryHeads(list);
+  const head = (text, cls) => {
+    const el = document.createElement("div");
+    el.className = cls;
+    el.textContent = text;
+    el.hidden = true;
+    list.appendChild(el);
+    return el;
+  };
+  hireHeads = {
+    can: head("Можно нанять", "cat-sub crew-head"),
+    cannot: head("Нанять нельзя", "cat-sub crew-head"),
+    empty: head("", "cat-sub"),
+  };
   recruitButtons.length = 0;
   (meta.recruits ?? []).forEach((r, i) => {
     const b = mkTool(
