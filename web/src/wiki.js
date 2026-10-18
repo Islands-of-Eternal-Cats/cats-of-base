@@ -163,7 +163,28 @@ export function setArticleTeased(fn) {
 function bodyOf(key) {
   const art = articles.get(key);
   if (!art) return "";
-  return art.teaser && teased(key) ? art.teaser : art.body;
+  return unlocked(art.teaser && teased(key) ? art.teaser : art.body);
+}
+
+/// Условный кусок `{{вид:id|текст}}` (§12.273): текст стоит в статье, только
+/// когда открыта названная вещь, — теми же воротами, что и её собственная
+/// статья. Справочник знает не больше базы (§12.251), и это касается не только
+/// ссылок: слово «мастерская» в статье о детали рассказывает о постройке, которой
+/// в палитре ещё нет (§12.126), даже если ссылкой оно не стало. Кусок может
+/// занимать целый абзац — тогда вместе с ним пропадает и абзац. Вложенных
+/// кусков нет: условие одно, и второе внутри читалось бы головоломкой. Зато
+/// ключей у куска бывает несколько через запятую (`{{item:a,recruit:b|…}}`) —
+/// тогда открыты обязаны быть все: «анализатор Антенны» — одна фраза о двух вещах.
+/// ⚠️ Текст обязан читаться и без куска — что ставить в куски, стережёт
+/// `a_bare_link_never_names_what_opens_later` в `src/tests/wiki.rs`.
+function unlocked(text) {
+  return text.replace(
+    /\{\{([a-z]+:[a-z0-9_]+(?:\s*,\s*[a-z]+:[a-z0-9_]+)*)\|([\s\S]*?)\}\}/gi,
+    (m, keys, inner) =>
+      keys.split(",").every((k) => gate(resolve(k.trim().toLowerCase())))
+        ? inner
+        : "",
+  );
 }
 
 /// Версия статьи как метка: по её смене вид объявляет «Запись дополнена».
@@ -216,6 +237,7 @@ export function renderArticle(key, nameOf) {
   };
   return bodyOf(key)
     .split(/\n\s*\n/)
+    .filter((block) => block.trim())
     .map((block) => {
       const quote = block.startsWith("> ");
       const text = esc(quote ? block.replace(/^>\s?/gm, "") : block)
