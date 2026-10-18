@@ -340,7 +340,8 @@ fn a_solid_rack_slows_no_one() {
 /// пробираться сквозь неё.
 #[test]
 fn the_path_avoids_clutter_when_the_detour_is_cheaper() {
-    // Два пути до (3,1): напрямик через завал (2 шага) или понизу (4 шага).
+    // Два пути до (3,1): напрямик через завал (2 шага) или понизу — с §12.271
+    // двумя диагоналями через (2,2), 6 тиков против 8 сквозь кучу.
     let mut sim = sim_from(&["#####", "#a..#", "#...#", "#####"]);
     sim.set_auto_tidy(false);
     sim.put_item(2, 1, 0, 64); // +6 тиков на вход: крюк в два шага дешевле
@@ -350,7 +351,7 @@ fn the_path_avoids_clutter_when_the_detour_is_cheaper() {
     sim.tick_n(1);
     assert_eq!(
         sim.stride_of("a").map(|(to, _, _)| to),
-        Some((1, 2)),
+        Some((2, 2)),
         "кот пошёл в обход: сквозь завал дольше, чем вокруг него",
     );
 }

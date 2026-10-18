@@ -60,7 +60,7 @@ pub(crate) fn move_units(
             // Пол, в который кот шагает, могли снести за время шага. Кот при
             // этом числится в своей клетке, поэтому терять нечего: шаг
             // отменяется, маршрут перекладывается с места.
-            if !map.walkable(&rules, s.to.0, s.to.1) {
+            if !map.can_step(&rules, (pos.x, pos.y), s.to) {
                 commands.entity(e).remove::<Stride>();
                 repath(&map, &rules, &mut path, (pos.x, pos.y));
                 continue;
@@ -88,11 +88,11 @@ pub(crate) fn move_units(
             continue;
         }
         let next = *path.steps.last().unwrap();
-        if !map.walkable(&rules, next.0, next.1) {
+        if !map.can_step(&rules, (pos.x, pos.y), next) {
             repath(&map, &rules, &mut path, (pos.x, pos.y));
             continue;
         }
-        let span = map.step_cost(next.0, next.1);
+        let span = map.move_cost((pos.x, pos.y), next);
         commands.entity(e).insert(Stride {
             to: next,
             left: span,

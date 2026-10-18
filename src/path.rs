@@ -1,11 +1,11 @@
-//! Поиск пути: дерево кратчайших **по времени** маршрутов по 4-связной сетке
+//! Поиск пути: дерево кратчайших **по времени** маршрутов по 8-связной сетке (§12.271)
 //! проходимых клеток (Дейкстра; §12.249).
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 use crate::components::TileRules;
-use crate::map::{BaseMap, DIRS};
+use crate::map::{BaseMap, WALK_DIRS};
 
 /// Дерево кратчайших путей от клетки по проходимым соседям.
 ///
@@ -86,16 +86,16 @@ impl Reach {
                 return r;
             }
             let (cx, cy) = ((ci as i32) % w, (ci as i32) / w);
-            for (dx, dy) in DIRS {
+            for (dx, dy) in WALK_DIRS {
                 let (nx, ny) = (cx + dx, cy + dy);
                 if nx < 0 || ny < 0 || nx >= w || ny >= h {
                     continue;
                 }
                 let ni = (ny * w + nx) as usize;
-                if done[ni] || !map.walkable(rules, nx, ny) {
+                if done[ni] || !map.can_step(rules, (cx, cy), (nx, ny)) {
                     continue;
                 }
-                let next = cost + i32::from(map.step_cost(nx, ny));
+                let next = cost + i32::from(map.move_cost((cx, cy), (nx, ny)));
                 if r.dist[ni] != -1 && r.dist[ni] <= next {
                     continue;
                 }
