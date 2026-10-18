@@ -565,6 +565,12 @@ world.addChild(tileLayer);
 world.addChild(scrapLayer);
 world.addChild(bpLayer);
 world.addChild(dealLayer);
+// Нижний на экране кот рисуется поверх верхнего (§12.271): коты не входят в
+// проходимость (инвариант 8) и на диагонали налезают друг на друга, а порядок
+// по `y` читает наложение глубиной, а не столкновением. Ключ — `zIndex`,
+// который пишет `stepUnits` вместе с позицией; Pixi пересортирует слой только
+// когда ключ изменился.
+unitLayer.sortableChildren = true;
 world.addChild(unitLayer);
 world.addChild(workLayer);
 world.addChild(overlay);
@@ -3119,6 +3125,7 @@ function stepUnits(ticker) {
     c.y = c.fromY + (c.toY - c.fromY) * k;
     wadeUnit(c, ticker.deltaMS);
   }
+  for (const c of units.values()) c.zIndex = c.y;
   // Глиф работы крутится здесь же, а не в своём тикере: `speed` — то самое, чем
   // умножается доля тика, поэтому на паузе мир и картинка встают вместе. Второй
   // копии «сколько сейчас идёт время» в проекте быть не должно (§12.140).
