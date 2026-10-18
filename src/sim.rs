@@ -36,7 +36,7 @@ use crate::jobs::{BUILD_WORK, Plan, may_build, site_clutter};
 use crate::map::{BaseMap, rect_cells};
 use crate::missions::{
     Crew, comms_span, crew_danger, crew_force, crew_traits, duration, faction_is_met, gate_cells,
-    gate_count, guide_cut, guide_of, guide_value, outcome, phase, travel,
+    gate_count, guide_cut, guide_of, guide_value, outcome, phase, sway, travel,
 };
 use crate::movement::note_clutter;
 use crate::movement::{Busy, is_stuck};
@@ -286,7 +286,39 @@ impl Sim {
             // же `duration`, каким срок замёрзнет на уходе. Нужен там, где
             // отряда ещё нет и считать не на кого.
             span_slow: duration(&rule, rule.squad, Crew::default()),
+            drops: self.raid_drops(def),
         }
+    }
+
+    /// Чей найм закроет полный успех этого заказа (§12.272): кандидаты, открытые
+    /// сейчас, которым сдвинутая репутация перестанет доверять. Сдвиг считает
+    /// тот же `sway`, что и конец работы отряда, — с полной долей, потому что
+    /// это и есть край, к которому игрок целится.
+    pub(crate) fn raid_drops(&mut self, def: usize) -> Vec<usize> {
+        let Some(rule) = self.world.resource::<MissionRules>().0.get(def).cloned() else {
+            return Vec::new();
+        };
+        if rule.against.is_none() || rule.standing <= 0 {
+            return Vec::new();
+        }
+        let mut after = self.world.resource::<Standing>().clone();
+        sway(
+            &mut after,
+            self.world.resource::<FactionRules>(),
+            &rule,
+            100,
+        );
+        let needs: Vec<_> = self
+            .world
+            .resource::<RecruitRules>()
+            .0
+            .iter()
+            .map(|r| r.needs.clone())
+            .collect();
+        (0..needs.len())
+            .filter(|&r| self.recruit_is_open(r) && !self.recruit_is_hired(r))
+            .filter(|&r| !after.covers(&needs[r]))
+            .collect()
     }
 
     /// Открыт ли кандидат — то же выражение, что и в снимке (`RecruitSnap`).
@@ -596,8 +628,23 @@ impl Sim {
                 // отмечается молча (`set_open` ниже), поэтому приезд самой вещи
                 // новостью уже не станет: строка на экране была.
                 let dup = kind == NewsKind::Item && open && !self.world.resource::<Seen>().saw(def);
+                // **Кандидат звучит один раз за партию** (§12.272): открылся
+                // впервые — новость, закрылся или открылся снова — молча.
+                // Репутация знаковая (§12.43), и у порога она ходит туда-сюда
+                // каждой вылазкой; игрок, держащийся от фракции подальше
+                // намеренно, читал бы «не откликается» упрёком. Потерю он
+                // видит до решения — в карточке заказа (`RaidSnap::drops`), —
+                // а после — строкой причины в «Найме».
+                let mut quiet = false;
+                if kind == NewsKind::Recruit {
+                    let mut met = self.world.resource_mut::<RecruitsMet>();
+                    quiet = !open || met.met(def);
+                    if open {
+                        met.mark(def);
+                    }
+                }
                 let mut news = self.world.resource_mut::<News>();
-                if !first && open != was && !dup {
+                if !first && open != was && !dup && !quiet {
                     news.push(kind, def, open, at);
                 }
                 news.set_open(kind, def, open);
@@ -2022,6 +2069,7 @@ impl Sim {
         // выбранные рулсетом.
         world.insert_resource(Seen(vec![false; rs.items.len()]));
         world.insert_resource(RaidsMet(vec![false; rs.missions.len()]));
+        world.insert_resource(RecruitsMet(vec![false; rs.recruits.len()]));
         world.insert_resource(Mastery::default());
         // Лента новостей (§12.120). Базовой линии у неё пока нет: снимет её
         // первый же `note_news`, и стартовая доступность новостью не станет.
@@ -6366,11 +6414,12 @@ impl Sim {
                 let mut q = self.world.query::<&UnitId>();
                 q.iter(&self.world).map(|u| u.0.clone()).collect()
             };
-            for rule in &rules {
+            for (def, rule) in rules.iter().enumerate() {
                 recruits.push(RecruitSnap {
                     hired: hired.contains(&rule.id),
                     unlocked: fame >= rule.requires,
                     welcome: self.world.resource::<Standing>().covers(&rule.needs),
+                    met: self.world.resource::<RecruitsMet>().met(def),
                     affordable: self.storage_covers(&rule.cost),
                     // Тем же `on_base`, что стоит в шапке, — второй арифметики
                     // «сколько у базы есть» не заводим.

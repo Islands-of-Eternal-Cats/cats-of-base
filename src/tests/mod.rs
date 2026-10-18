@@ -157,6 +157,7 @@ fn sim_from(rows: &[&str]) -> Sim {
     // Пустая она ровно один тик — `note_seen` отметит всё, что схема положила.
     world.insert_resource(Seen::default());
     world.insert_resource(RaidsMet::default());
+    world.insert_resource(RecruitsMet::default());
     world.insert_resource(Mastery::default());
     world.insert_resource(PerkRules::default());
     world.insert_resource(AbilityRules::default());
@@ -2822,6 +2823,11 @@ impl Sim {
     }
 
     /// Репутация базы у фракции: копится не она, а сторона.
+    /// Был ли кандидат открыт целиком хоть раз (§12.272).
+    fn recruit_met(&self, def: usize) -> bool {
+        self.world.resource::<RecruitsMet>().met(def)
+    }
+
     fn standing(&self, faction: usize) -> i32 {
         self.world.resource::<Standing>().value_of(faction)
     }

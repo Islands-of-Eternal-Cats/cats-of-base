@@ -555,3 +555,51 @@ fn the_shipped_ruleset_announces_its_automation() {
         rules
     );
 }
+
+// --- кандидат звучит один раз (§12.272) ----------------------------------------
+
+/// Репутация знаковая и ходит у порога туда-сюда (§12.43): игрок, который
+/// держится от фракции подальше намеренно, не должен получать «вышел на связь» /
+/// «не откликается» каждой вылазкой. Новость — только первое открытие.
+#[test]
+fn a_recruit_is_announced_once_however_standing_swings() {
+    let mut sim = sim_bare();
+    let faction = sim.set_faction(100);
+    let nail = sim.set_recruit("nail", 0, &[], &[]);
+    sim.set_recruit_needs(nail, &[(faction, 20)]);
+    sim.tick_n(2);
+    assert!(sim.news().is_empty(), "без доверия кандидат молчит");
+
+    for i in 0..6 {
+        sim.set_standing(faction, if i % 2 == 0 { 30 } else { 10 });
+        sim.tick_n(1);
+    }
+    assert_eq!(
+        sim.news(),
+        vec![(NewsKind::Recruit, nail, true)],
+        "одно «вышел на связь», ни одного «не откликается»"
+    );
+    assert!(sim.recruit_met(nail), "открытый кандидат запомнен");
+}
+
+/// Цена выбора стороны видна до нажатия: заказ против фракции называет
+/// кандидатов, чей найм закроет его полный успех, — тем же `sway`, каким
+/// двинется репутация.
+#[test]
+fn a_raid_names_the_recruits_it_would_drive_away() {
+    let mut sim = sim_bare();
+    let faction = sim.set_faction(100);
+    let nail = sim.set_recruit("nail", 0, &[], &[]);
+    sim.set_recruit_needs(nail, &[(faction, 20)]);
+    sim.set_standing(faction, 30);
+    let hit = sim.set_mission(1, 10, &[]);
+    sim.set_mission_factions(hit, None, Some(faction), 15);
+    let tap = sim.set_mission(1, 10, &[]);
+    sim.set_mission_factions(tap, None, Some(faction), 5);
+    sim.tick_n(1);
+    assert_eq!(sim.raid_drops(hit), vec![nail], "30 − 15 < 20");
+    assert!(sim.raid_drops(tap).is_empty(), "30 − 5 ещё доверяют");
+
+    sim.set_standing(faction, 10);
+    assert!(sim.raid_drops(hit).is_empty(), "закрытого закрывать нечем");
+}

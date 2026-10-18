@@ -7981,9 +7981,11 @@ function syncRecruitButtons(list) {
     if (b.dataset.rank !== rank) b.dataset.rank = rank;
     // Своего присылают тем, кому доверяют (§12.43), и репутацией за него не
     // платят — платит склад. Поэтому причин отказа три и они разные.
-    const distrust = r.welcome
-      ? null
-      : trustGap((meta.recruits ?? [])[i]?.needs);
+    // Кандидат, которого база уже держала открытым (§12.272, `RecruitSnap::met`),
+    // — «потерял», а не «не дорос»: ленты о его уходе нет, и сказать это
+    // словом остаётся здесь.
+    const gap = r.welcome ? null : trustGap((meta.recruits ?? [])[i]?.needs);
+    const distrust = gap && r.met ? `Отношения испортились: ${gap}` : gap;
     const why = r.hired
       ? "Уже на базе"
       : !r.unlocked
@@ -13766,13 +13768,25 @@ function factionName(id) {
 // Заказчик и пострадавший: репутация — единственная знаковая шкала, и цену
 // выбора стороны игрок обязан видеть до нажатия (§12.43). У идущей вылазки она
 // же отвечает на «с кем мы сейчас ссоримся».
-function missionSidesRow(def) {
+//
+// `drops` — кандидаты, чей найм закроет полный успех (§12.272, `RaidSnap::drops`
+// из ядра): ленты «кандидат больше не откликается» нет, и потеря видна здесь,
+// до решения, а не тикером после. У идущей вылазки её не пишем — решение принято.
+function missionSidesRow(def, drops = []) {
   if (!def.patron && !def.against) return "";
   const fname = (id) => esc(factionName(id));
   const moves = [];
   if (def.patron) moves.push(`${fname(def.patron)} +${def.standing ?? 0}`);
   if (def.against) moves.push(`${fname(def.against)} −${def.standing ?? 0}`);
-  return `<div class="cat-sub">репутация: ${moves.join(" · ")}</div>`;
+  const lost = drops
+    .map((r) =>
+      esc(meta?.recruits?.[r]?.label || meta?.recruits?.[r]?.id || "?"),
+    )
+    .join(", ");
+  const warn = lost
+    ? `<div class="cat-sub raidwin-why">закроет найм: ${lost}</div>`
+    : "";
+  return `<div class="cat-sub">репутация: ${moves.join(" · ")}</div>${warn}`;
 }
 
 // Одна карточка заказа: что получим, чем рискуем и почему нельзя. Всё, что
@@ -13940,7 +13954,7 @@ function raidCard(i, node) {
       node?.loots?.[i],
       node?.gathers?.[i],
     ),
-    missionSidesRow(def),
+    missionSidesRow(def, raids[i]?.drops ?? []),
   ]) {
     if (row) rows.push(row);
   }

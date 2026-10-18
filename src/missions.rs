@@ -125,6 +125,27 @@ pub(crate) fn raid_danger(danger: i32, guide: i32) -> i32 {
 /// На уходе она не меняет ничего: состав больше предела `launch_at` не примет.
 ///
 /// Ноль в `squad_max` — «предела нет» (синтетические схемы), лапы идут как есть.
+/// Подвинуть репутацию по исходу заказа: заказчику вверх, пострадавшему вниз,
+/// на `standing` той же долей `share`, что и добычу (§12.43).
+///
+/// Одно выражение на конец работы отряда (`run_missions`) и на прогноз «чей
+/// найм закроет этот заказ» (§12.272, `Sim::raid_drops`): разойдись они — и
+/// карточка предупредила бы не о том, что случится (инвариант 14).
+pub(crate) fn sway(
+    standing: &mut Standing,
+    factions: &FactionRules,
+    rule: &MissionRule,
+    share: i32,
+) {
+    let moved = rule.standing * share / 100;
+    if let Some(f) = rule.patron {
+        standing.add(f, moved, factions.span_of(f));
+    }
+    if let Some(f) = rule.against {
+        standing.add(f, -moved, factions.span_of(f));
+    }
+}
+
 fn capped_paws(rule: &MissionRule, paws: usize) -> usize {
     if rule.squad_max == 0 {
         paws
@@ -1022,13 +1043,7 @@ pub(crate) fn run_missions(
             // Заказчику вверх, пострадавшему вниз, и **ровно настолько же**:
             // это и делает нейтралитет нулевым, а не бесплатным. Две зеркальные
             // вылазки, взятые по очереди, оставляют базу там же, где нашли.
-            let moved = rule.standing * out.share / 100;
-            if let Some(f) = rule.patron {
-                standing.add(f, moved, factions.span_of(f));
-            }
-            if let Some(f) = rule.against {
-                standing.add(f, -moved, factions.span_of(f));
-            }
+            sway(&mut standing, &factions, rule, out.share);
             // Домой отряд несёт долю — по ней возвращение положит добычу.
             mission.verdict = Some(Verdict {
                 share: out.share,

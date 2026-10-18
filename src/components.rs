@@ -1128,6 +1128,30 @@ impl Mastery {
 #[derive(Resource, Default)]
 pub(crate) struct RaidsMet(pub(crate) Vec<bool>);
 
+/// Кандидаты, хоть раз открытые целиком — известностью и доверием разом
+/// (§12.272). Дословно `RaidsMet`: монотонна, как `Seen`, отмечает её
+/// наблюдатель `note_news`, едет в снимок.
+///
+/// Ради неё новость о кандидате звучит **один раз за партию**: репутация
+/// знаковая (§12.43), и колебание у порога иначе слало бы «вышел на связь» /
+/// «не откликается» каждой второй вылазкой. Она же даёт окну «Найм» сказать
+/// «отношения испортились» вместо «нужна репутация» — потерял, а не не дорос.
+#[derive(Resource, Default)]
+pub(crate) struct RecruitsMet(pub(crate) Vec<bool>);
+
+impl RecruitsMet {
+    pub(crate) fn met(&self, def: usize) -> bool {
+        self.0.get(def).copied().unwrap_or(false)
+    }
+
+    pub(crate) fn mark(&mut self, def: usize) {
+        if self.0.len() <= def {
+            self.0.resize(def + 1, false);
+        }
+        self.0[def] = true;
+    }
+}
+
 impl RaidsMet {
     /// Был ли заказ открыт целиком хоть раз.
     pub(crate) fn met(&self, def: usize) -> bool {
@@ -2470,7 +2494,7 @@ pub(crate) struct Money(pub(crate) i32);
 /// работают они только вместе: двигает её **только выполненный заказ** (той же
 /// долей, что добычу, — значит провал не двигает вовсе), она **никогда не
 /// платит** (валюта по-прежнему предметы), и **дорога назад есть всегда**.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub(crate) struct Standing(pub(crate) Vec<i32>);
 
 impl Standing {

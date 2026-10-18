@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 43;
+pub(crate) const FORMAT: u32 = 44;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -168,6 +168,7 @@ pub(crate) const SAVED: &[&str] = &[
     // Заказы, открытые хоть раз (§12.246): без этого загруженная партия
     // спрятала бы в строку «нужна репутация» заказ, который игрок уже видел.
     "RaidsMet",
+    "RecruitsMet",
     // До какого уровня дорастали коты базы (§12.257): без этого загруженная
     // партия закрыла бы парту, если учёный сейчас в плену.
     "Mastery",
@@ -349,6 +350,9 @@ pub(crate) struct StateDto {
     /// Заказы, открытые целиком хоть раз (§12.246). Позиционно по `missions:`.
     #[serde(default)]
     pub(crate) raids_met: Vec<bool>,
+    /// Кандидаты, открытые целиком хоть раз (§12.272). Позиционно по `recruits:`.
+    #[serde(default)]
+    pub(crate) recruits_met: Vec<bool>,
     /// Лучший уровень по домену, когда-либо бывший у кота базы (§12.257).
     /// Позиционно по `skills:`.
     #[serde(default)]
@@ -885,6 +889,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
             techs: world.resource::<Techs>().0.clone(),
             seen: world.resource::<Seen>().0.clone(),
             raids_met: world.resource::<RaidsMet>().0.clone(),
+            recruits_met: world.resource::<RecruitsMet>().0.clone(),
             mastery: world.resource::<Mastery>().0.clone(),
             chronicle: chronicle.0.iter().map(|h| (h.def, h.ready)).collect(),
             goals: world
@@ -1068,6 +1073,14 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
     {
         let mut met = world.resource_mut::<RaidsMet>();
         for (def, &m) in s.raids_met.iter().enumerate() {
+            if m {
+                met.mark(def);
+            }
+        }
+    }
+    {
+        let mut met = world.resource_mut::<RecruitsMet>();
+        for (def, &m) in s.recruits_met.iter().enumerate() {
             if m {
                 met.mark(def);
             }
