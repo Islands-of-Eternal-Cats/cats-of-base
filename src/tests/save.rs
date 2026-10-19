@@ -295,9 +295,9 @@ fn a_saved_game_continues_identically() {
 fn a_crew_survives_a_save() {
     let mut live = Sim::new(CORE).expect("рулсет");
     let node = *live
-        .gate_cells_of()
+        .node_cells_of()
         .first()
-        .expect("гараж в стартовой застройке");
+        .expect("рация в стартовой застройке");
     // Стартовый отряд собран контентом (§12.207), поэтому проверяем изменение
     // состава игроком: вычёркиваем одного и ждём двоих оставшихся.
     assert!(live.dismiss("sp3"));
@@ -672,10 +672,10 @@ fn an_auto_raid_rule_survives_a_save() {
     let mut live = Sim::new(CORE).expect("рулсет");
     live.without_timeline();
     let node = live
-        .gate_cells_of()
+        .node_cells_of()
         .first()
         .copied()
-        .expect("гараж в застройке");
+        .expect("рация в застройке");
     // Отряд на гараже стоит с нулевого тика (§12.207).
     let crew = live.roster_at(node.0, node.1);
     assert!(!crew.is_empty(), "стартовый отряд гаража");

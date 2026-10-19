@@ -45,6 +45,13 @@ pub(crate) fn gate_cells(map: &BaseMap, rules: &TileRules, owners: &Owners) -> V
     slot_cells(map, rules, owners, TileRules::is_gate)
 }
 
+/// Клетки раций в порядке обхода — **список отрядов** (§12.276): рация держит
+/// состав и слот вылазки, а шлюз остался дверью, одной на базу. Порядок
+/// фиксирован, значит и номер отряда, и очередь заявок детерминированы (§11).
+pub(crate) fn node_cells(map: &BaseMap, rules: &TileRules, owners: &Owners) -> Vec<(i32, i32)> {
+    slot_cells(map, rules, owners, TileRules::is_relay_node)
+}
+
 /// Чем кончится вылазка. Считается и на конце работы (§12.244), и каждый кадр для панели:
 /// прогноз и результат обязаны быть одним и тем же выражением, иначе игрок
 /// увидит одно, а получит другое.
@@ -558,8 +565,13 @@ pub(crate) fn gather_squad(
         //
         // Ушедшего отряда это не касается: он отсеян `left_base` выше и
         // вернётся туда, откуда ушёл, даже если гараж успели снести (§12.22).
+        // С §12.276 отряд живёт на рации: снесли её — отряда нет. Шлюз не
+        // сносится, но проверяется тоже: дверь, которой нет, не ведёт никуда.
         let gate = mission.gate;
-        if !tiles.is_gate(map.tile_at(gate.0, gate.1)) {
+        let node = mission.node;
+        if !tiles.is_relay_node(map.tile_at(node.0, node.1))
+            || !tiles.is_gate(map.tile_at(gate.0, gate.1))
+        {
             for &(cat_e, ..) in &squad {
                 commands.entity(cat_e).remove::<(Squad, Path, Stride)>();
             }
@@ -605,8 +617,8 @@ pub(crate) fn faction_is_met(rules: &MissionRules, done: &Raids, faction: usize)
     })
 }
 
-pub(crate) fn gate_count(map: &BaseMap, tiles: &TileRules, owners: &Owners) -> usize {
-    gate_cells(map, tiles, owners).len()
+pub(crate) fn node_count(map: &BaseMap, tiles: &TileRules, owners: &Owners) -> usize {
+    node_cells(map, tiles, owners).len()
 }
 
 /// Есть ли на базе силы прийти за пленным — считается **до** того, как его

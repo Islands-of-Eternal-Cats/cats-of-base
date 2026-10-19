@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 44;
+pub(crate) const FORMAT: u32 = 45;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -652,6 +652,9 @@ pub(crate) struct MissionDto {
     /// бы `None`, то есть отряд без двери. Это и есть тот случай, ради которого
     /// `FORMAT` поднимают руками, — поднят до 26.
     pub(crate) gate: (i32, i32),
+    /// Рация отряда (§12.276): слот и состав уехали с шлюза на неё. Без поля
+    /// старый снимок разобрался бы молча с отрядом без рации — `FORMAT` 45.
+    pub(crate) node: (i32, i32),
     pub(crate) left: i32,
     /// Набежавшая связь (§12.60). Состояние вылазки, а не правило: без него
     /// загруженная партия теряла бы накопленный бонус.
@@ -832,6 +835,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                 mission: e.get::<Mission>().map(|m| MissionDto {
                     def: m.def,
                     gate: m.gate,
+                    node: m.node,
                     left: m.left,
                     span: m.span,
                     covered: m.covered,
@@ -1345,6 +1349,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
                 covered: m.covered,
                 def: m.def,
                 gate: m.gate,
+                node: m.node,
                 left: m.left,
                 span: m.span,
                 site: m.site,

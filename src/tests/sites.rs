@@ -853,7 +853,7 @@ fn the_shipped_ruleset_lets_the_first_squad_answer_a_fresh_blight() {
         .expect("участок с заказом");
 
     // Стартовый отряд целиком — тот, что у базы есть в первый день.
-    let gate = sim.gate_cell().expect("гараж стартовой застройки");
+    let gate = sim.node_cell().expect("рация стартовой застройки");
     let crew: Vec<String> = sim.unit_ids();
     for id in &crew {
         sim.enlist(id, gate.0, gate.1);

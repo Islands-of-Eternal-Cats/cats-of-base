@@ -36,7 +36,7 @@ use crate::jobs::{BUILD_WORK, Plan, may_build, site_clutter};
 use crate::map::{BaseMap, rect_cells};
 use crate::missions::{
     Crew, comms_span, crew_danger, crew_force, crew_traits, duration, faction_is_met, gate_cells,
-    gate_count, guide_cut, guide_of, guide_value, outcome, phase, sway, travel,
+    guide_cut, guide_of, guide_value, node_cells, node_count, outcome, phase, sway, travel,
 };
 use crate::movement::note_clutter;
 use crate::movement::{Busy, is_stuck};
@@ -1191,7 +1191,16 @@ impl Sim {
     /// автоматом. Отряд принадлежит двери: слот, состав и шлюз съехались на одну
     /// клетку, ту самую, которую игрок и нажимает.
     fn gate_nodes(&mut self) -> usize {
-        self.gate_cells_of().len()
+        self.node_cells_of().len()
+    }
+
+    /// Клетки раций в порядке обхода — список отрядов (§12.276). Считает его
+    /// `missions::node_cells`, одно выражение на фасад и систему.
+    pub(crate) fn node_cells_of(&mut self) -> Vec<(i32, i32)> {
+        let owners = self.owners();
+        let map = self.world.resource::<BaseMap>();
+        let rules = self.world.resource::<TileRules>();
+        node_cells(map, rules, &owners)
     }
 
     /// Клетки гаражей в порядке обхода карты — он фиксирован, значит и номер
@@ -1224,18 +1233,16 @@ impl Sim {
     fn free_gate_cell(&mut self) -> Option<(i32, i32)> {
         let taken: Vec<(i32, i32)> = {
             let mut q = self.world.query::<&Mission>();
-            q.iter(&self.world).map(|m| m.gate).collect()
+            q.iter(&self.world).map(|m| m.node).collect()
         };
-        self.gate_cells_of()
+        self.node_cells_of()
             .into_iter()
             .find(|cell| !taken.contains(cell))
     }
 
-    /// Гараж ли в этой клетке.
+    /// Отряд ли в этой клетке — с §12.276 это рация.
     fn is_gate_at(&mut self, x: i32, y: i32) -> bool {
-        let map = self.world.resource::<BaseMap>();
-        let rules = self.world.resource::<TileRules>();
-        rules.is_gate(map.tile_at(x, y))
+        self.is_relay_at(x, y)
     }
 
     /// Рация ли в этой клетке.
@@ -1248,7 +1255,7 @@ impl Sim {
     /// Свободен ли **этот** гараж: вылазки за ним сейчас нет.
     fn node_is_free(&mut self, x: i32, y: i32) -> bool {
         let mut q = self.world.query::<&Mission>();
-        !q.iter(&self.world).any(|m| m.gate == (x, y))
+        !q.iter(&self.world).any(|m| m.node == (x, y))
     }
 
     /// Постоянный состав отряда этого узла, по `id` (§12.61).
@@ -1608,6 +1615,7 @@ impl Sim {
                         .filter(|&prev| prev < def)
                         .map(|prev| prev as i16),
                     internal: t.internal,
+                    fixed: t.fixed,
                     quiet: t.quiet,
                     noisy: t.noisy,
                     clean: t.clean,
@@ -2143,7 +2151,7 @@ impl Sim {
             // штабе, — просто поставленная контентом. Задачи за ней нет
             // (`Enlisted` — конфигурация), значит цепочка о ней и не узнает,
             // пока игрок не отправит отряд.
-            if let Some([x, y]) = u.garage {
+            if let Some([x, y]) = u.radio {
                 world.entity_mut(cat).insert(Enlisted { spot: (x, y) });
             }
         }
@@ -2447,6 +2455,17 @@ impl Sim {
         // кладёт свои клетки сам, через `place_structure`.
         if self.world.resource::<TileRules>().is_internal(t) {
             return false;
+        }
+        // Шлюз не ставится и не сносится (§12.276): дверь наружу одна, в
+        // палитре её нет, и снесённая она заперла бы базу навсегда — вылазка
+        // единственный путь восстановления (§12.210). Снос ставит `-1`, а
+        // улучшение поверх — свой тайл, поэтому спрашиваем про то, что стоит.
+        {
+            let rules = self.world.resource::<TileRules>();
+            let here = self.world.resource::<BaseMap>().tile_at(x, y);
+            if rules.is_fixed(t) || rules.is_fixed(here) {
+                return false;
+            }
         }
         // Правило доступа (§12.111) и зонирование (§12.157) — вторые ворота
         // разметки и по тому же доводу: у полки обязан быть проход, а лежанка
@@ -3401,15 +3420,20 @@ impl Sim {
         // отряд приписан к своему гаражу заранее, и подменять его другим на
         // основании того, что кто-то заперт, значит отменять решение игрока
         // молча. Не дошедший до двери держит сбор — это видно и чинится.
-        let gate = match node {
+        let node = match node {
             Some(spot) => spot,
             None => match self.free_gate_cell() {
                 Some(spot) => spot,
                 None => return false,
             },
         };
+        // Дверь одна на базу (§12.276): первый шлюз по обходу карты.
+        let Some(gate) = self.gate_cells_of().into_iter().next() else {
+            return false;
+        };
         let mission_e = self.world.spawn(Mission {
             def,
+            node,
             gate,
             site: aim,
             // Срок пока неизвестен: он зависит от того, сколько лап дойдёт до
@@ -3492,7 +3516,7 @@ impl Sim {
         if self.crew_of(mission_e).iter().any(|&(_, away)| away) {
             return false;
         }
-        let node = self.world.get::<Mission>(mission_e).map(|m| m.gate);
+        let node = self.world.get::<Mission>(mission_e).map(|m| m.node);
         if let Some((x, y)) = node {
             self.world.resource_mut::<AutoRaids>().set_on(x, y, false);
         }
@@ -6002,8 +6026,8 @@ impl Sim {
                 }
                 missions.push(MissionSnap {
                     def: m.def,
-                    x: m.gate.0,
-                    y: m.gate.1,
+                    x: m.node.0,
+                    y: m.node.1,
                     left: m.left,
                     total: span,
                     squad: mine().map(|(_, id, ..)| id.clone()).collect(),
@@ -6274,7 +6298,7 @@ impl Sim {
         // назвать ядро (§12.53).
         let gates = {
             let owners = self.owners();
-            gate_count(
+            node_count(
                 self.world.resource::<BaseMap>(),
                 self.world.resource::<TileRules>(),
                 &owners,
@@ -6296,7 +6320,7 @@ impl Sim {
         // Отряды поимённо: с §12.152 у каждого гаража свой состав, и панель
         // обязана называть его словом — иначе кнопка вылазки берёт отряд ниоткуда.
         let nodes: Vec<NodeSnap> = {
-            let cells = self.gate_cells_of();
+            let cells = self.node_cells_of();
             cells
                 .into_iter()
                 .map(|(x, y)| {

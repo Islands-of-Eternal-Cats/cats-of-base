@@ -215,6 +215,7 @@ fn sim_from(rows: &[&str]) -> Sim {
             wake: 0,
             heal: 0,
             gate: false,
+            fixed: false,
             teaches: String::new(),
             lab: false,
             shop: false,
@@ -1874,8 +1875,21 @@ impl Sim {
         }
     }
 
-    /// Сделать тайл шлюзом: отсюда отряд уходит на миссию и сюда возвращается.
+    /// Сделать тайл шлюзом **и рацией разом**: отсюда отряд уходит на миссию,
+    /// сюда возвращается, и здесь же он приписан (§12.276).
+    ///
+    /// С §12.276 дверь и отряд — разные клетки (шлюз один, отрядов столько,
+    /// сколько раций), но тестам вылазок различие — шум: схема с одной такой
+    /// клеткой ведёт себя ровно как до §12.276. Развести их — `set_exit`.
     fn set_gate(&mut self, tile: i16, on: bool) {
+        self.tile_rule(tile, |r| {
+            r.gate = on;
+            r.relay = on;
+        });
+    }
+
+    /// Сделать тайл только шлюзом — дверью без отряда (§12.276).
+    fn set_exit(&mut self, tile: i16, on: bool) {
         self.tile_rule(tile, |r| r.gate = on);
     }
 
@@ -1974,7 +1988,7 @@ impl Sim {
     /// служит виду причиной словом (§12.53): снесли все гаражи — уйти некуда.
     fn gate_count(&mut self) -> usize {
         let owners = self.owners_now();
-        crate::missions::gate_count(
+        crate::missions::node_count(
             self.world.resource::<BaseMap>(),
             self.world.resource::<TileRules>(),
             &owners,
@@ -2278,6 +2292,11 @@ impl Sim {
     }
 
     /// Первый гараж по обходу карты — тот же, что берёт `launch` без узла.
+    /// Первая рация по обходу — клетка первого отряда (§12.276).
+    fn node_cell(&mut self) -> Option<(i32, i32)> {
+        self.node_cells_of().first().copied()
+    }
+
     fn gate_cell(&mut self) -> Option<(i32, i32)> {
         let owners = self.owners();
         crate::missions::gate_cells(
@@ -2952,11 +2971,11 @@ impl Sim {
         q.iter(&self.world).next().map(|m| m.gate)
     }
 
-    /// Гараж, который держит слот вылазки по этому заказу (§12.61, §12.152).
+    /// Рация, которая держит слот вылазки по этому заказу (§12.276).
     /// Адресуется по заказу, а не по номеру: порядок обхода ECS недетерминирован.
     fn mission_node(&mut self, def: usize) -> Option<(i32, i32)> {
         let mut q = self.world.query::<&Mission>();
-        q.iter(&self.world).find(|m| m.def == def).map(|m| m.gate)
+        q.iter(&self.world).find(|m| m.def == def).map(|m| m.node)
     }
 
     /// Завести цель партии; вернёт её индекс (§12.58).
