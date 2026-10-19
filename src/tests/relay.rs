@@ -633,3 +633,19 @@ fn an_order_onto_a_relay_node_posts_the_cat() {
     assert!(sim.set_target("a", 3, 1), "приказ на рацию принят");
     assert_eq!(sim.post_of("a"), Some((3, 1)), "и это приписка");
 }
+
+/// Клик по рации приписывает связиста **и** ведёт кота к ней сразу (§12.276):
+/// дома эфир пуст, и одна приписка не двигала кота вовсе — рация читалась
+/// непроходимой.
+#[test]
+fn ordering_onto_a_radio_posts_and_walks_there() {
+    let mut sim = sim_from(&["#######", "#a....#", "#######"]);
+    sim.set_relay(1, true);
+    sim.set_comms(1, 1);
+    sim.force_tile(5, 1, 1);
+
+    assert!(sim.set_target("a", 5, 1), "приказ принят");
+    assert_eq!(sim.post_of("a"), Some((5, 1)), "и связист приписан");
+    sim.tick_n(30);
+    assert_eq!(sim.pos_of("a"), (5, 1), "кот дошёл до рации");
+}
