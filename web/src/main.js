@@ -13949,6 +13949,8 @@ function raidCard(i, node) {
     `дорога ${roadN}` + (terms && roadN < (def.travel ?? 0) ? " (тропы)" : "");
   const workTxt =
     `работа ${work}` + (terms && work > (def.work ?? 0) ? " (сбор)" : "");
+  const linked =
+    !empty && node?.operator_boost > 0 && node.linked_spans?.[i] != null;
   if (slow != null) {
     if (work === 0) {
       facts.push(["срок", `${spanText(slow)} = ${road}, и только`]);
@@ -13968,13 +13970,14 @@ function raidCard(i, node) {
         // (`capped_paws`). Это не второй экземпляр обрезки, а её подпись:
         // «работа 480 / 5 котов» под пределом в четыре объясняло бы число,
         // которого в сроке нет.
-        `${spanText(g.span)} = ${road} + ${workTxt} / ` +
-          pawsWord(Math.min(g.paws, g.most)) +
-          // Радист приписан — срок со связью рядом (§12.278): прогноз ядра,
-          // если он продержит эфир всю дорогу.
-          (node?.operator_boost > 0 && node.linked_spans?.[i] != null
-            ? ` · с радистом ≈ ${node.linked_spans[i]}`
-            : ""),
+        // Радист приписан — срок со связью **первым числом** и с «≈» (§12.278):
+        // это прогноз ядра на случай, если он продержит эфир всю дорогу, а
+        // делится в формуле только дорога, — и это видно из самой записи.
+        (linked
+          ? `≈${spanText(node.linked_spans[i])} = ${road} / ${roadFactor(node.operator_boost)} (радист) + `
+          : `${spanText(g.span)} = ${road} + `) +
+          `${workTxt} / ` +
+          pawsWord(Math.min(g.paws, g.most)),
       ]);
     }
   }
@@ -14132,6 +14135,10 @@ function raidCard(i, node) {
 // Ускорение дороги словом (§12.277): кратностью, а не процентом. «Дорога +50 %»
 // читалось как «дороги стало на половину больше», а «−33 %» звало бы считать,
 // что от чего. Ядро шлёт прибавку скорости в процентах — здесь только подача.
+function roadFactor(pct) {
+  return String((100 + pct) / 100).replace(".", ",");
+}
+
 function roadSpeedWord(pct) {
   const k = (100 + pct) / 100;
   return k >= 2 ? "вдвое быстрее" : `в ${String(k).replace(".", ",")} раза быстрее`;
