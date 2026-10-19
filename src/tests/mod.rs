@@ -1969,9 +1969,7 @@ impl Sim {
     /// Набежавшая связь у вылазки по этому заказу (§12.60).
     fn covered_of(&mut self, def: usize) -> Option<i32> {
         let mut q = self.world.query::<&Mission>();
-        q.iter(&self.world)
-            .find(|m| m.def == def)
-            .map(|m| m.covered)
+        q.iter(&self.world).find(|m| m.def == def).map(|m| m.saved)
     }
 
     /// Сколько узлов связи построено — потолок одновременных вылазок (§12.59).

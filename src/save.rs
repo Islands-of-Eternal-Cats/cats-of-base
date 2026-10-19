@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 45;
+pub(crate) const FORMAT: u32 = 46;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -660,6 +660,9 @@ pub(crate) struct MissionDto {
     /// загруженная партия теряла бы накопленный бонус.
     #[serde(default)]
     pub(crate) covered: i32,
+    /// Срезанные связью тики (§12.277). Поле прибавилось — `FORMAT` 46.
+    #[serde(default)]
+    pub(crate) saved: i32,
     /// Замороженный на уходе срок вылазки (§12.70). Состояние, а не правило:
     /// он посчитан по числу дошедших лап, и из рулсета его уже не вывести.
     #[serde(default)]
@@ -839,6 +842,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                     left: m.left,
                     span: m.span,
                     covered: m.covered,
+                    saved: m.saved,
                     verdict: m.verdict.map(|v| (v.share, v.failed)),
                     site: m.site,
                     travel: m.travel,
@@ -1347,6 +1351,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
         if let Some(m) = &dto.mission {
             e.insert(Mission {
                 covered: m.covered,
+                saved: m.saved,
                 def: m.def,
                 gate: m.gate,
                 node: m.node,

@@ -134,52 +134,50 @@ fn full_duty_adds_the_node_power() {
     assert!(covered > 0, "связь копится по ходу, а не одним замером");
 }
 
-/// Сила узла доходит до исхода: тот же отряд с рацией вытягивает вылазку,
-/// которую без неё провалил бы. Связь входит в **ту же** силу, а не пятым
-/// слагаемым исхода (инвариант 14).
+/// Связь возвращает отряд **раньше** (§12.277): тот же заказ с дежурным
+/// у рации короче, а исход — сила против сложности — от неё не зависит.
 #[test]
-fn comms_turn_a_failure_into_a_haul() {
-    // Сила отряда — 1 (кот без навыка), сложность 4: вдвое меньше нужного,
-    // то есть провал. Рация силой 2 доводит до 3 — уже не провал.
-    let bare = {
-        let (mut sim, _) = sim_with_comms(0, 30);
-        let m = sim.set_risky_mission(1, 30, 4, 0, &[(0, 20)]);
+fn comms_bring_the_squad_home_sooner() {
+    let back_at = |power: i32| {
+        let (mut sim, m) = sim_with_comms(power, 60);
+        if power > 0 {
+            sim.post_relay("b", 1, 2);
+        }
         sim.launch(m, squad(&["a"]));
-        sim.tick_n(70);
-        sim.scrap_total()
+        let mut t = 0;
+        while sim.is_away("a") || t < 5 {
+            sim.tick_n(1);
+            t += 1;
+            assert!(t < 500, "отряд не вернулся");
+        }
+        t
     };
-    let wired = {
-        let (mut sim, _) = sim_with_comms(2, 30);
-        let m = sim.set_risky_mission(1, 30, 4, 0, &[(0, 20)]);
-        sim.post_relay("b", 1, 2);
-        sim.launch(m, squad(&["a"]));
-        sim.tick_n(70);
-        sim.scrap_total()
-    };
-
-    assert_eq!(bare, 0, "без связи отряд провалился");
-    assert!(wired > 0, "со связью вернулся с добычей: {wired}");
+    let bare = back_at(0);
+    let wired = back_at(4); // рация 4 + связист без навыка: вдвое быстрее
+    assert!(
+        wired < bare,
+        "со связью вернулись раньше: {wired} против {bare}"
+    );
 }
 
-/// Обрыв под самый конец **не** съедает бонус целиком: доля округляется к
-/// ближайшему, а не отбрасывается. При силе рации в единицу деление нацело
-/// давало бы ноль всю вылазку и единицу в последний тик — то самое «всё или
-/// ничего», от которого счёт за тик и уводит.
+/// Связь режет **только дорогу**: работа на месте идёт своим счётом, иначе
+/// дежурный у рации копал бы за отряд (§12.277).
 #[test]
-fn a_link_dropped_at_the_end_still_counts() {
-    let (mut sim, _) = sim_with_comms(1, 40);
-    let m = sim.set_risky_mission(1, 40, 4, 0, &[(0, 20)]);
-    sim.post_relay("b", 1, 2);
-    sim.launch(m, squad(&["a"]));
-    // Даём связи набежать почти всю вылазку и обрываем на последних тиках.
-    sim.tick_n(45);
-    sim.unpost_relay("b");
-    sim.tick_n(30);
-
-    assert!(
-        sim.scrap_total() > 0,
-        "почти полное дежурство всё равно дало свой плюс",
-    );
+fn comms_never_cut_the_work() {
+    let span_of = |power: i32| {
+        let (mut sim, m) = sim_with_comms(power, 60);
+        sim.set_mission_work(m, 200);
+        if power > 0 {
+            sim.post_relay("b", 1, 2);
+        }
+        sim.launch(m, squad(&["a"]));
+        sim.tick_n(150);
+        sim.covered_of(m).unwrap_or(-1)
+    };
+    // На 150-м тике отряд ещё работает (200 очков на одну лапу), а срезано
+    // не больше всей дороги.
+    let cut = span_of(4);
+    assert!(cut > 0 && cut <= 30, "срезана только дорога туда: {cut}");
 }
 
 /// Оборванная связь стоит бонуса пропорционально, а не целиком: накопленное не

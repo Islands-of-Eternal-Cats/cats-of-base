@@ -35,13 +35,13 @@ use crate::hauling::{plan_spend, stored_counts};
 use crate::jobs::{BUILD_WORK, Plan, may_build, site_clutter};
 use crate::map::{BaseMap, rect_cells};
 use crate::missions::{
-    Crew, comms_span, crew_danger, crew_force, crew_traits, duration, faction_is_met, gate_cells,
-    guide_cut, guide_of, guide_value, node_cells, node_count, outcome, phase, sway, travel,
+    Crew, crew_danger, crew_force, crew_traits, duration, faction_is_met, gate_cells, guide_cut,
+    guide_of, guide_value, node_cells, node_count, outcome, phase, sway, travel,
 };
 use crate::movement::note_clutter;
 use crate::movement::{Busy, is_stuck};
 use crate::path::{Reach, find_path};
-use crate::relay::relay_force;
+use crate::relay::road_boost;
 use crate::ruleset::{
     AbilityDef, BlightDef, EventDef, FactionDef, GoalDef, ItemDef, MissionDef, PerkDef, RecipeDef,
     RecruitDef, ResearchDef, Ruleset, SiteDef, SkillDef, StatDef, TileDef,
@@ -3441,6 +3441,7 @@ impl Sim {
             left: 0,
             span: 0,
             covered: 0,
+            saved: 0,
             verdict: None,
             travel: 0,
             toll: 0,
@@ -6007,14 +6008,14 @@ impl Sim {
                     0 => rule.map_or(0, |r| travel(r, traits)),
                     _ => m.travel,
                 };
-                // Связь делится на срок **до конца работы** — тем же
-                // выражением, что в `run_missions` (§12.244).
-                let comms = relay_force(m.covered, comms_span(road, span));
+                // С §12.277 связь в силу не входит: она режет дорогу, и
+                // в снимок едет числом уже срезанных тиков (`comms`).
+                let comms = m.saved;
                 let raw = mine().map(|&(.., force, _, _, _, _)| force);
                 let force: i32 = match rule {
                     Some(r) => crew_force(r, raw),
                     None => raw.sum(),
-                } + comms;
+                };
                 let mut out = outcome(danger, force);
                 // Отработавший отряд несёт домой уже посчитанный исход
                 // (§12.244): прогноз тут больше не прогноз, а факт, и очаг,
@@ -6305,7 +6306,7 @@ impl Sim {
         };
         // Что связь даёт прямо сейчас — сумма вкладов дошедших дежурных
         // (§12.152). Тем же `duty_gain`, каким копит `run_missions`.
-        let comms_now: i32 = {
+        let comms_now: i32 = road_boost({
             let mut q = self
                 .world
                 .query_filtered::<(&OnDuty, Option<&Skills>), Without<Path>>();
@@ -6315,7 +6316,7 @@ impl Sim {
             q.iter(&self.world)
                 .map(|(d, sk)| crate::relay::duty_gain(tiles, map, skills, sk, d.spot))
                 .sum()
-        };
+        });
         // Отряды поимённо: с §12.152 у каждого гаража свой состав, и панель
         // обязана называть его словом — иначе кнопка вылазки берёт отряд ниоткуда.
         let nodes: Vec<NodeSnap> = {

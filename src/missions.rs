@@ -31,7 +31,7 @@ use crate::components::*;
 use crate::hauling::spill;
 use crate::map::BaseMap;
 use crate::path::find_path;
-use crate::relay::{duty_gain, relay_force};
+use crate::relay::{duty_gain, road_boost};
 use crate::sites::stage_danger;
 use crate::skills::{SKILL_RAID, SKILL_RELAY, level_of};
 use crate::slots::{Owners, slot_cells};
@@ -464,20 +464,12 @@ pub(crate) fn phase(travel: i32, span: i32, left: i32) -> Phase {
 /// «оценка», а тот же член суммы.
 ///
 /// Это и есть граница, на которой считается исход: `left` дошёл до этого числа
-/// — отряд отработал, и с этого тика он только идёт домой. Зовут трое —
-/// `phase`, `run_missions` и `comms_span`, — и второго экземпляра быть не
+/// — отряд отработал, и с этого тика он только идёт домой. Зовут двое —
+/// `phase` и `run_missions`, — и второго экземпляра быть не
 /// должно (инвариант 14).
 pub(crate) fn back_ticks(travel: i32, span: i32) -> i32 {
     let work = (span - travel).max(0);
     (span - travel / 2 - work).max(0)
-}
-
-/// Сколько тиков вылазки связь имеет значение (§12.244): до конца работы.
-/// Дорога домой в этот счёт не входит — исход уже посчитан, и эфир отряду
-/// больше ничего не даёт. На это число делится набежавшая связь и в
-/// `run_missions`, и в прогнозе снимка (инвариант 14).
-pub(crate) fn comms_span(travel: i32, span: i32) -> i32 {
-    span - back_ticks(travel, span)
 }
 
 /// Исход по силе отряда и сложности вылазки — **без броска кубика** (§12.23).
@@ -789,12 +781,27 @@ pub(crate) fn run_missions(
             // Отряд, который уже отработал, только идёт домой (§12.244): эфир
             // ему больше ничего не даёт, и связь за эти тики не копится —
             // иначе дежурство после дела поднимало бы уже посчитанный исход.
-            if mission.verdict.is_none() {
-                anyone_away = true;
-                mission.covered += duty_total;
-            }
-
+            anyone_away = true;
             mission.left -= 1;
+
+            // Связь режет **дорогу** (§12.277): туда и обратно, но не работу на
+            // месте. Срез идёт лишними шагами срока и никогда не переступает
+            // границу стадии — иначе он съел бы тики работы, а переход в
+            // `Back` (где считается исход) случился бы мимо проверки ниже.
+            let (trip, span) = (mission.travel, mission.span);
+            let road = |left: i32| phase(trip, span, left);
+            let here = road(mission.left);
+            if here != Phase::Work && mission.left > 0 {
+                mission.covered += road_boost(duty_total);
+                while mission.covered >= 100 && mission.left > 0 && road(mission.left - 1) == here {
+                    mission.left -= 1;
+                    mission.saved += 1;
+                    mission.covered -= 100;
+                }
+                // Упёршийся в границу остаток не копится впрок: работа его
+                // не тратит, а на дорогу домой он дал бы рывок без дежурного.
+                mission.covered = mission.covered.min(100);
+            }
 
             // Возвращение (§12.244): исход посчитан на конце работы, домой отряд
             // несёт только добычу и (если шли за своим) пленных. Ниже — только
@@ -872,8 +879,7 @@ pub(crate) fn run_missions(
             // исхода: инвариант 14 держит `outcome` одним выражением на прогноз
             // и на результат. Делится она на срок **до конца работы**, потому
             // что дальше не копится.
-            let force: i32 = crew_force(rule, squad.iter().map(|&(.., f, _)| f))
-                + relay_force(mission.covered, comms_span(mission.travel, mission.span));
+            let force: i32 = crew_force(rule, squad.iter().map(|&(.., f, _)| f));
             // Опасность — та, какую встретил этот отряд: проводник режет её
             // делением (§12.70), а разведка умножает на число лап (§12.113).
             // Считается тем же выражением, что и в прогнозе для панели: игрок
