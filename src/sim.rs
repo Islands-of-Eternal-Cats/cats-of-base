@@ -4186,6 +4186,65 @@ impl Sim {
         out
     }
 
+    /// Во сколько процентов ускорит дорогу приписанный к этой рации радист,
+    /// когда сядет (§12.278): тот же `duty_gain` и `road_boost`, что в поле.
+    pub(crate) fn operator_boost_at(&mut self, x: i32, y: i32) -> i32 {
+        let mut q = self
+            .world
+            .query::<(&Posted, Option<&Skills>, Option<&Away>)>();
+        let map = self.world.resource::<BaseMap>();
+        let tiles = self.world.resource::<TileRules>();
+        let skills = self.world.resource::<SkillRules>();
+        let gain: i32 = q
+            .iter(&self.world)
+            .filter(|(p, _, away)| p.spot == (x, y) && away.is_none())
+            .map(|(p, sk, _)| crate::relay::duty_gain(tiles, map, skills, sk, p.spot))
+            .sum();
+        road_boost(gain)
+    }
+
+    /// Сроки заказов для отряда этой рации с её радистом (§12.278).
+    fn node_linked_spans(&mut self, x: i32, y: i32) -> Vec<i32> {
+        let boost = self.operator_boost_at(x, y);
+        let spans = self.node_spans(x, y);
+        let (roads, _) = self.node_terms(x, y);
+        spans
+            .iter()
+            .zip(roads.iter())
+            .map(|(&span, &road)| crate::missions::linked_span(road, span, boost))
+            .collect()
+    }
+
+    /// Кто приписан радистом к этой рации (§12.278); пусто — никто.
+    pub(crate) fn operator_of(&mut self, x: i32, y: i32) -> String {
+        let mut q = self.world.query::<(&UnitId, &Posted)>();
+        let mut ids: Vec<String> = q
+            .iter(&self.world)
+            .filter(|(_, p)| p.spot == (x, y))
+            .map(|(id, _)| id.0.clone())
+            .collect();
+        ids.sort_unstable();
+        ids.into_iter().next().unwrap_or_default()
+    }
+
+    /// Ускорение дороги у отряда этой рации прямо сейчас (§12.278): вклады
+    /// дошедших дежурных **на этой клетке**, тем же `duty_gain` и `road_boost`,
+    /// какими копит `run_missions` (инвариант 14).
+    pub(crate) fn boost_at(&mut self, x: i32, y: i32) -> i32 {
+        let mut q = self
+            .world
+            .query_filtered::<(&OnDuty, Option<&Skills>), Without<Path>>();
+        let map = self.world.resource::<BaseMap>();
+        let tiles = self.world.resource::<TileRules>();
+        let skills = self.world.resource::<SkillRules>();
+        road_boost(
+            q.iter(&self.world)
+                .filter(|(d, _)| d.spot == (x, y))
+                .map(|(d, sk)| crate::relay::duty_gain(tiles, map, skills, sk, d.spot))
+                .sum(),
+        )
+    }
+
     /// Кто из состава держит сбор, по `id` и по алфавиту (§12.184).
     ///
     /// **То же выражение, что и ворота** (`squad_is_fit` считается по нему):
@@ -4218,6 +4277,27 @@ impl Sim {
             })
             .map(|(id, ..)| id.0.clone())
             .collect();
+        // Радист отряда держит сбор тем же правилом (§12.278): спит, ранен или
+        // устал — отряд без него не уйдёт. Пленного не ждут (`run_missions`).
+        let mut ops = self.world.query::<(
+            &UnitId,
+            &Posted,
+            Option<&Away>,
+            Option<&Health>,
+            Option<&Rest>,
+            Option<&Energy>,
+        )>();
+        for (id, post, away, health, rest, energy) in ops.iter(&self.world) {
+            if post.spot != (x, y) || away.is_some() {
+                continue;
+            }
+            let fit = health.is_none_or(|h: &Health| h.0 > hurt)
+                && rest.is_none()
+                && energy.is_none_or(|e: &Energy| e.0 > tired);
+            if !fit {
+                out.push(id.0.clone());
+            }
+        }
         out.sort_unstable();
         out
     }
@@ -5108,7 +5188,16 @@ impl Sim {
                 cat.remove::<(Path, Stride)>();
             }
         }
-        self.world.entity_mut(cat_e).insert(Posted { spot: (x, y) });
+        // Радист и боец — роли взаимоисключающие (§12.278): радист остаётся
+        // на базе, и числиться заодно в отряде, который уходит, ему нельзя.
+        // Поданного в заявку не трогаем — состав ушедшего не переигрывают.
+        if self.world.get::<Squad>(cat_e).is_some() {
+            return false;
+        }
+        self.world
+            .entity_mut(cat_e)
+            .remove::<Enlisted>()
+            .insert(Posted { spot: (x, y) });
         true
     }
 
@@ -5166,9 +5255,15 @@ impl Sim {
         if self.world.get::<Squad>(cat_e).is_some() {
             return false;
         }
-        self.world
-            .entity_mut(cat_e)
-            .insert(Enlisted { spot: (x, y) });
+        // Боец не сидит у рации (§12.278): зачисление снимает приписку радиста
+        // вместе с дежурством, как это делает `unpost_relay`.
+        let on_duty = self.world.get::<OnDuty>(cat_e).is_some();
+        let mut cat = self.world.entity_mut(cat_e);
+        cat.remove::<Posted>();
+        if on_duty {
+            cat.remove::<(OnDuty, Path, Stride)>();
+        }
+        cat.insert(Enlisted { spot: (x, y) });
         true
     }
 
@@ -6071,7 +6166,7 @@ impl Sim {
                     // спасательной вылазки читается как «половина кота» (§12.40).
                     rescue: rule.is_some_and(|r| r.rescue),
                     comms,
-                    manned: !manned.is_empty(),
+                    manned: manned.contains(&m.node),
                     trails: traits.road_cut,
                     samples: traits.work_toll,
                     gather: rule.map_or(100, |r| crate::missions::gather(traits, r.squad_max)),
@@ -6304,19 +6399,6 @@ impl Sim {
                 &owners,
             ) as i32
         };
-        // Что связь даёт прямо сейчас — сумма вкладов дошедших дежурных
-        // (§12.152). Тем же `duty_gain`, каким копит `run_missions`.
-        let comms_now: i32 = road_boost({
-            let mut q = self
-                .world
-                .query_filtered::<(&OnDuty, Option<&Skills>), Without<Path>>();
-            let map = self.world.resource::<BaseMap>();
-            let tiles = self.world.resource::<TileRules>();
-            let skills = self.world.resource::<SkillRules>();
-            q.iter(&self.world)
-                .map(|(d, sk)| crate::relay::duty_gain(tiles, map, skills, sk, d.spot))
-                .sum()
-        });
         // Отряды поимённо: с §12.152 у каждого гаража свой состав, и панель
         // обязана называть его словом — иначе кнопка вылазки берёт отряд ниоткуда.
         let nodes: Vec<NodeSnap> = {
@@ -6426,6 +6508,10 @@ impl Sim {
                         auto_fail,
                         fit,
                         unfit: self.unfit_of(x, y),
+                        operator: self.operator_of(x, y),
+                        boost: self.boost_at(x, y),
+                        operator_boost: self.operator_boost_at(x, y),
+                        linked_spans: self.node_linked_spans(x, y),
                         undressed: self.undressed_of(x, y),
                     }
                 })
@@ -6801,7 +6887,6 @@ impl Sim {
             raids,
             relays,
             gates,
-            comms_now,
             nodes,
             sites,
             fame,

@@ -686,11 +686,6 @@ let dragUnit = null;
 // держит гараж, — и остались чистой связью: дежурный на рации прибавляет силы
 // всем идущим отрядам разом (§12.60).
 let relays = 0;
-// Сколько силы прибавляет связь прямо сейчас — сумма вкладов всех дошедших
-// дежурных (§12.152). Складывает это **ядро** (`comms_now`), а не JS: тем же
-// `duty_gain`, каким копит `run_missions`, — второй экземпляр инвариант 14
-// запрещает.
-let commsNow = 0;
 // Сколько на базе гаражей — и, с §12.152, сколько у базы отрядов и сколько
 // вылазок разом (§12.53). Снесли все гаражи, и не уйдёт ни один. Считает ядро
 // (`gates` в снимке) теми же клетками, по которым держит слоты `gate_count`;
@@ -2488,7 +2483,6 @@ function renderSnapshot(snap) {
   shops = snap.shops ?? 0;
   stores = snap.stores ?? 0;
   relays = snap.relays ?? 0;
-  commsNow = snap.comms_now ?? 0;
   gates = snap.gates ?? 0;
   nodes = snap.nodes ?? [];
   // Шапка показывает **избранное** — то, что игрок сам отметил `★` в окне
@@ -4065,7 +4059,10 @@ function crewList(snap, x, y) {
     // заголовки брались из одного места: разойдись они — кот оказался бы под
     // чужой подписью, а это хуже, чем список без подписей вовсе.
     const no = squadNo(e);
-    const band = mine ? 0 : no ? 3 : 2;
+    // Радист отряда (§12.278) — отдельное место: он числится за этой рацией,
+    // но остаётся на базе, и в состав не входит (роли взаимоисключающие).
+    const op = e.post_x === x && e.post_y === y;
+    const band = mine ? 0 : op ? 1 : no ? 3 : 2;
     // Раненого ядро в отряд не пустит (§12.37), и молчащая строка читалась бы
     // как поломка: причину называем словом, как её называет кнопка вылазки.
     const hurt = wounded.has(e.id);
@@ -4152,7 +4149,11 @@ function crewList(snap, x, y) {
       // встал бы над ними четвёртой строкой.
       '<span class="crew-text">' +
       `<span class="crew-id">${esc(e.id)}${where ? `<i class="crew-at">${where}</i>` : ""}</span>` +
-      fieldLine(e, led, node, guide) +
+      // Радисту сила отряда ни при чём — он остаётся на базе (§12.278); его
+      // вклад в дело — скорость дороги, её и пишем.
+      (op
+        ? `<span class="crew-field">в эфире: дорога ${roadSpeedWord(node?.operator_boost ?? 0)}</span>`
+        : fieldLine(e, led, node, guide)) +
       (note
         ? `<i class="crew-note${idle ? " bad" : toil ? " toil" : ""}">${esc(note)}</i>`
         : "") +
@@ -4190,7 +4191,7 @@ function crewList(snap, x, y) {
   // группы уже сливались вручную (§12.22), теперь это общее правило.
   const heads = [
     "Состав отряда",
-    "Состав отряда",
+    "Радист · остаётся на базе",
     "Свободные коты",
     "В других отрядах",
   ];
@@ -4202,12 +4203,15 @@ function crewList(snap, x, y) {
     // Исключение — «В других отрядах» при двух и более гаражах (§12.247):
     // группа стоит всегда, даже пустой, — иначе она появляется и исчезает
     // вслед за чужим набором, и список под составом прыгает.
-    if (!group.length && !(band === 3 && nodes.length > 1)) continue;
+    // Место радиста стоит всегда, пока рации есть что дать (§12.278): пустое
+    // оно и говорит, что отряд уходит без связи.
+    const opSlot = band === 1 && !!tileDefAt(x, y)?.comms;
+    if (!group.length && !(band === 3 && nodes.length > 1) && !opSlot) continue;
     // Слитые группы (узел в поле) идут одним списком, а не двумя под одинаковой
     // подписью: разрыв между ними читался бы как деление, которого нет.
     const last = groups.at(-1);
     if (last?.head === heads[band]) last.rows.push(...group);
-    else groups.push({ head: heads[band], rows: [...group] });
+    else groups.push({ head: heads[band], rows: [...group], op: band === 1 });
   }
   return groups;
 }
@@ -4456,8 +4460,11 @@ function cellWork(snap, x, y, def) {
     if (!def.comms) {
       out.push("дежурить незачем: рация без связи");
     } else if (on) {
-      out.push(`на связи ${esc(on.id)} · дорога ${roadSpeedWord(commsNow)} у всех отрядов`);
-    } else if ((snap.missions ?? []).some((m) => m.away)) {
+      const n = nodes.findIndex((v) => v.x === x && v.y === y) + 1;
+      out.push(
+        `на связи ${esc(on.id)} · дорога ${roadSpeedWord(nodeAt(x, y)?.boost ?? 0)} у Отряда ${n}`,
+      );
+    } else if ((snap.missions ?? []).some((m) => m.away && m.x === x && m.y === y)) {
       out.push("связи нет: некому дежурить");
     } else {
       out.push("эфир пуст: в поле никого");
@@ -13516,7 +13523,12 @@ function syncCrewRows(node) {
   const order = [];
   groups.forEach((g, gi) => {
     const head = mk(`head${gi}`, "cat-sub crew-head");
-    const text = `${g.head} · ${g.rows.length}`;
+    // У места радиста счёта нет — оно одно; пустое называет, как его занять.
+    const text = g.op
+      ? g.rows.length
+        ? g.head
+        : "Радист · не назначен — 📻 у кота, отряд уйдёт без связи"
+      : `${g.head} · ${g.rows.length}`;
     if (head.textContent !== text) head.textContent = text;
     const list = mk(`list${gi}`, "crew-list");
     order.push(head, list);
@@ -13957,7 +13969,12 @@ function raidCard(i, node) {
         // «работа 480 / 5 котов» под пределом в четыре объясняло бы число,
         // которого в сроке нет.
         `${spanText(g.span)} = ${road} + ${workTxt} / ` +
-          pawsWord(Math.min(g.paws, g.most)),
+          pawsWord(Math.min(g.paws, g.most)) +
+          // Радист приписан — срок со связью рядом (§12.278): прогноз ядра,
+          // если он продержит эфир всю дорогу.
+          (node?.operator_boost > 0 && node.linked_spans?.[i] != null
+            ? ` · с радистом ≈ ${node.linked_spans[i]}`
+            : ""),
       ]);
     }
   }
@@ -14123,11 +14140,11 @@ function roadSpeedWord(pct) {
 function commsPart(raid) {
   // Скорость, а не срезанные тики (§12.277): «дорога −7» без единицы не читается
   // и ползёт сама. Считает её ядро (`comms_now`), связь общая.
-  if (raid.manned && commsNow > 0) {
-    const on = (lastSnap?.entities ?? [])
-      .filter((e) => e.job === "relay" && !e.moving)
-      .map((e) => esc(e.id));
-    return [`связь: дорога ${roadSpeedWord(commsNow)}${on.length ? ` · ${on.join(" · ")}` : ""}`];
+  // Связь именная (§12.278): говорим про радиста **этого** отряда.
+  const node = nodeAt(raid.x, raid.y);
+  if (raid.manned && (node?.boost ?? 0) > 0) {
+    const who = node.operator ? ` · ${esc(node.operator)}` : "";
+    return [`связь: дорога ${roadSpeedWord(node.boost)}${who}`];
   }
   // Срезанное не отнимается: оборвавшаяся связь называет себя, но цифры нет.
   return raid.comms > 0 ? ["связь оборвалась"] : [];

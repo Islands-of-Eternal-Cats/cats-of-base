@@ -13,7 +13,8 @@ use super::*;
 /// коты `a`, `b`, `c` и вылазка на одного. Возвращает симуляцию и её индекс.
 fn sim_with_comms(power: i32, ticks: i32) -> (Sim, usize) {
     let mut sim = sim_from(&["#######", "#a.b.c#", "#.....#", "#######"]);
-    sim.set_gate(1, true);
+    // Шлюз отдельно, отряд — на рации (§12.276), и радист ведёт именно его.
+    sim.set_exit(1, true);
     sim.force_tile(2, 1, 1);
     sim.set_relay(3, true);
     sim.set_comms(3, power);
@@ -200,110 +201,107 @@ fn a_broken_link_keeps_what_it_earned() {
     assert_eq!(after, mid, "накопленное не отнимается");
 }
 
-// --- связь общая (§12.152) ---------------------------------------------------
+// --- связь именная (§12.278) -------------------------------------------------
 
-/// Мир с двумя гаражами в (1,2) и (2,2), одной рацией в (3,2) силой `power` и
-/// котами `a`, `b`, `c`, `d`. Вылазки на одного.
-///
-/// До §12.152 такой схемы не могло быть вовсе: слот держала рация, и двум
-/// отрядам полагались две рации, каждая со своим дежурным.
-fn sim_with_two_gates_one_radio(power: i32, ticks: i32) -> (Sim, usize) {
+/// Мир: шлюз в (1,2), две рации — отряд 1 на (3,2) силой `p1`, отряд 2 на
+/// (5,2) силой `p2` — и коты `a`, `b`, `c`, `d`. Вылазки на одного.
+fn sim_with_two_radios(p1: i32, p2: i32, ticks: i32) -> (Sim, usize, usize) {
     let mut sim = sim_from(&["#########", "#a.b.c.d#", "#.......#", "#########"]);
-    sim.set_gate(1, true);
+    sim.set_exit(1, true);
     sim.force_tile(1, 2, 1);
-    sim.force_tile(2, 2, 1);
     sim.set_relay(3, true);
-    sim.set_comms(3, power);
+    sim.set_comms(3, p1);
     sim.force_tile(3, 2, 3);
-    let mission = sim.set_mission(1, ticks, &[(0, 5)]);
-    (sim, mission)
+    sim.set_relay(4, true);
+    sim.set_comms(4, p2);
+    sim.force_tile(5, 2, 4);
+    let first = sim.set_mission(1, ticks, &[(0, 5)]);
+    let second = sim.set_mission(1, ticks, &[(0, 5)]);
+    (sim, first, second)
 }
 
-/// **Одна дежурная рация кроет обе идущие вылазки** — это и есть весь §12.152.
-///
-/// До него связь была именной: дежурный сидел у рации **своего** отряда, потому
-/// что рация и держала слот. Слот уехал на гараж, приписки «эта рация ведёт эту
-/// вылазку» не стало, и второй реестр ради неё заводить было бы нечем — у рации
-/// нет владельца.
+/// Радист ведёт **свой** отряд, а не все разом: отряд чужой рации идёт
+/// обычным шагом (§12.278).
 #[test]
-fn one_radio_covers_every_raid_at_once() {
-    let (mut sim, first) = sim_with_two_gates_one_radio(2, 200);
-    let second = sim.set_mission(1, 200, &[(0, 5)]);
-    sim.enlist("a", 1, 2);
-    sim.enlist("b", 2, 2);
-    sim.post_relay("d", 3, 2);
+fn an_operator_leads_only_his_own_squad() {
+    let (mut sim, first, second) = sim_with_two_radios(2, 2, 200);
+    sim.enlist("a", 3, 2);
+    sim.enlist("b", 5, 2);
+    sim.post_relay("c", 3, 2);
+    assert!(sim.launch_node(first, 3, 2, -1));
+    assert!(sim.launch_node(second, 5, 2, -1));
+    sim.tick_n(40);
 
+    assert!(sim.covered_of(first).unwrap_or(0) > 0, "свой отряд ускорен");
+    assert_eq!(sim.covered_of(second), Some(0), "чужой — нет");
+}
+
+/// Сильный радист ведёт свой отряд быстрее, чем слабый — свой: вклады больше
+/// не складываются в общий котёл (§12.278).
+#[test]
+fn a_stronger_operator_leads_faster() {
+    let (mut sim, first, second) = sim_with_two_radios(1, 3, 200);
+    sim.enlist("a", 3, 2);
+    sim.enlist("b", 5, 2);
+    sim.post_relay("c", 3, 2);
+    sim.post_relay("d", 5, 2);
+    sim.launch_node(first, 3, 2, -1);
+    sim.launch_node(second, 5, 2, -1);
+    sim.tick_n(60);
+
+    let weak = sim.covered_of(first).expect("первая идёт");
+    let strong = sim.covered_of(second).expect("вторая идёт");
     assert!(
-        sim.launch_node(first, 1, 2, -1),
-        "первый гараж отправил отряд"
-    );
-    assert!(sim.launch_node(second, 2, 2, -1), "второй тоже");
-    sim.tick_n(30);
-    assert_eq!(sim.duty_of("d"), Some((3, 2)), "связист на месте");
-
-    let one = sim.covered_of(first).expect("первая идёт");
-    let two = sim.covered_of(second).expect("вторая идёт");
-    assert!(one > 0, "связь копится у первой вылазки");
-    assert_eq!(
-        one, two,
-        "и ровно та же — у второй: рация не выбирает, кому"
+        strong > weak,
+        "сильный радист срезал больше: {strong} против {weak}"
     );
 }
 
-/// Вторая рация складывается с первой: связь у обеих вылазок растёт вдвое
-/// быстрее. Строить рации по-прежнему есть зачем — просто не ради слота.
+/// Отряд с приписанным радистом **не уходит**, пока тот не сел за рацию —
+/// и называет его в списке держащих сбор (§12.278).
 #[test]
-fn a_second_manned_radio_doubles_the_link() {
-    let one = {
-        let (mut sim, m) = sim_with_two_gates_one_radio(2, 200);
-        sim.enlist("a", 1, 2);
-        sim.post_relay("d", 3, 2);
-        sim.launch_node(m, 1, 2, -1);
-        sim.tick_n(40);
-        sim.covered_of(m).expect("идёт")
-    };
-    let two = {
-        let (mut sim, m) = sim_with_two_gates_one_radio(2, 200);
-        sim.force_tile(4, 2, 3); // вторая рация рядом
-        sim.enlist("a", 1, 2);
-        sim.post_relay("d", 3, 2);
-        sim.post_relay("c", 4, 2);
-        sim.launch_node(m, 1, 2, -1);
-        sim.tick_n(40);
-        sim.covered_of(m).expect("идёт")
-    };
+fn a_squad_waits_for_its_operator() {
+    let (mut sim, first, _) = sim_with_two_radios(2, 2, 200);
+    sim.set_needs(100, 30, 1);
+    sim.enlist("a", 3, 2);
+    sim.post_relay("d", 3, 2);
+    sim.set_energy("d", 10); // радист вымотан и ляжет спать
+    sim.tick_n(2);
+    assert!(sim.launch_node(first, 3, 2, -1), "заявка принята");
+    sim.tick_n(20);
 
-    assert!(two > one, "две рации дают больше одной: {two} против {one}");
+    assert!(!sim.is_away("a"), "без радиста отряд дома");
+    assert!(
+        sim.unfit_of(3, 2).contains(&"d".to_string()),
+        "и держит сбор радист"
+    );
+}
+
+/// Радист и боец — роли взаимоисключающие (§12.278): приписка к рации
+/// вычёркивает из состава, зачисление в отряд снимает с рации.
+#[test]
+fn operator_and_soldier_exclude_each_other() {
+    let (mut sim, ..) = sim_with_two_radios(2, 2, 200);
+    sim.enlist("a", 3, 2);
+    sim.post_relay("a", 5, 2);
+    assert_eq!(sim.enlisted_at("a"), None, "радист не в отряде");
+    assert_eq!(sim.post_of("a"), Some((5, 2)));
+
+    sim.enlist("a", 3, 2);
+    assert_eq!(sim.post_of("a"), None, "боец не у рации");
+    assert_eq!(sim.enlisted_at("a"), Some((3, 2)));
 }
 
 /// Пустой эфир — законное состояние: вылазка уходит без бонуса, как уходила до
 /// §12.60. Дежурного нет — связь не копится ни у кого.
 #[test]
 fn an_empty_ether_costs_nothing_but_the_bonus() {
-    let (mut sim, m) = sim_with_two_gates_one_radio(2, 200);
-    sim.enlist("a", 1, 2);
-    sim.launch_node(m, 1, 2, -1);
+    let (mut sim, m, _) = sim_with_two_radios(2, 2, 200);
+    sim.enlist("a", 3, 2);
+    sim.launch_node(m, 3, 2, -1);
     sim.tick_n(40);
 
     assert_eq!(sim.covered_of(m), Some(0), "связи нет, а вылазка идёт");
-}
-
-/// Дежурный встаёт, когда в поле не осталось **ни одной** вылазки, а не когда
-/// кончилась «его». Своей у него больше нет.
-#[test]
-fn duty_outlasts_the_first_raid_and_ends_with_the_last() {
-    let (mut sim, short) = sim_with_two_gates_one_radio(2, 30);
-    let long = sim.set_mission(1, 400, &[(0, 5)]);
-    sim.enlist("a", 1, 2);
-    sim.enlist("b", 2, 2);
-    sim.post_relay("d", 3, 2);
-    sim.launch_node(short, 1, 2, -1);
-    sim.launch_node(long, 2, 2, -1);
-    sim.tick_n(60);
-
-    assert_eq!(sim.raid_left(short), None, "короткая вылазка закрылась");
-    assert!(sim.raid_left(long).is_some(), "длинная ещё идёт");
-    assert_eq!(sim.duty_of("d"), Some((3, 2)), "и связист сидит дальше");
 }
 
 // --- приписка игроком -------------------------------------------------------
@@ -646,4 +644,21 @@ fn ordering_onto_a_radio_posts_and_walks_there() {
     assert_eq!(sim.post_of("a"), Some((5, 1)), "и связист приписан");
     sim.tick_n(30);
     assert_eq!(sim.pos_of("a"), (5, 1), "кот дошёл до рации");
+}
+
+/// Сел радист — отряд ушёл (§12.278): ждут ровно его посадки, не дольше, и
+/// уже на сборе радист сидит у рации своего отряда.
+#[test]
+fn a_squad_leaves_once_its_operator_sits() {
+    let (mut sim, first, _) = sim_with_two_radios(2, 2, 200);
+    sim.enlist("a", 3, 2);
+    sim.post_relay("d", 3, 2);
+    assert!(sim.launch_node(first, 3, 2, -1));
+    let mut t = 0;
+    while !sim.is_away("a") {
+        sim.tick_n(1);
+        t += 1;
+        assert!(t < 100, "отряд так и не ушёл");
+    }
+    assert_eq!(sim.duty_of("d"), Some((3, 2)), "радист у своей рации");
 }
