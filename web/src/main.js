@@ -899,6 +899,7 @@ worker.onmessage = (e) => {
     // партии прозвучит залпом новостей и возвращений (§12.253).
     soundQuiet = true;
     awaySeen = null;
+    knownSeen = -1;
     meta = m.meta;
     paletteColors = meta.palette.map((p) => hex(p.color));
     itemColors = (meta.items ?? []).map((i) => hex(i.color));
@@ -2641,6 +2642,7 @@ function renderSnapshot(snap) {
   syncBinWindow();
   renderNews(snap);
   soundSquads(snap);
+  soundResearch(snap);
   syncDoors(snap);
   syncNewsMarks();
   syncStockWindow();
@@ -6999,6 +7001,7 @@ const KEEPS_CELL = new Set([
 // --- звук (§12.253) -----------------------------------------------------------
 let soundQuiet = true;
 let awaySeen = null;
+let knownSeen = -1;
 let soundBtn = null;
 let soundBusBtns = [];
 
@@ -7047,6 +7050,15 @@ function soundSquads(snap) {
     }
   }
   awaySeen = now;
+}
+
+// Тема изучена: число `known` у тем выросло между снимками. Базовая линия —
+// первый снимок мира (`knownSeen = -1` на `ready`), иначе загрузка партии
+// сыграла бы фанфару за каждую давно изученную тему.
+function soundResearch(snap) {
+  const n = (snap.topics ?? []).filter((t) => t.known).length;
+  if (knownSeen >= 0 && n > knownSeen && !soundQuiet) play("research");
+  knownSeen = n;
 }
 
 function sendAction(msg) {
