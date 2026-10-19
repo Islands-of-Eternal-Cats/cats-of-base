@@ -34,6 +34,10 @@ body {
 body {
   display: flex;
   flex-direction: column;
+  /* Игра во всё окно: прокрутки у документа нет и быть не должно. Холст
+     Pixi и всплывающие узлы вылезают за край на пиксели (округление
+     масштаба, подсказка у края), и браузер рисовал обе полосы. */
+  overflow: hidden;
 }
 
 header {
@@ -197,6 +201,7 @@ main#stage {
   flex: 1;
   min-height: 0;
   position: relative;
+  overflow: hidden;
 }
 /* Пейнт-овер: виньетка по краю сцены — глубина, а не сигнал. Не ловит мышь. */
 main#stage::before {
