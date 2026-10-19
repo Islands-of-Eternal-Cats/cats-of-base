@@ -6499,6 +6499,30 @@ impl Sim {
         let tiles_open: Vec<bool> = (0..self.world.resource::<TileRules>().0.len())
             .map(|def| self.tile_is_open(def))
             .collect();
+        // Видимость снаряжения и доменов (§12.268, §12.196) — отдельно от тегов
+        // отказа: те отвечают «почему нельзя», эти — «есть ли это у игрока».
+        let gear_open: Vec<bool> = {
+            let items = self.world.resource::<ItemRules>();
+            let techs = self.world.resource::<Techs>();
+            let seen = self.world.resource::<Seen>();
+            (0..items.0.len())
+                .map(|i| crate::gear::outfit_known(items, techs, seen, i))
+                .collect()
+        };
+        let skills_open: Vec<bool> = {
+            let rules = self.world.resource::<SkillRules>();
+            let tiles = self.world.resource::<TileRules>();
+            let map = self.world.resource::<BaseMap>();
+            (0..rules.0.len())
+                .map(|k| {
+                    rules.taught_cap(k) > 0
+                        && (0..tiles.0.len()).any(|t| {
+                            tiles.teaches_of(t as i16) == Some(k)
+                                && (tiles_open[t] || map.was_erected(t as i16))
+                        })
+                })
+                .collect()
+        };
         // Журнал застройки (§12.220) наружу: дверь «Наука» и статья о науке ждут
         // первой достроенной лаборатории — монотонно, снос её не прячет.
         let tiles_built: Vec<bool> = {
@@ -6784,6 +6808,8 @@ impl Sim {
             recipes,
             stocking,
             techs,
+            gear_open,
+            skills_open,
             tiles_open,
             tiles_built,
             structures_open,

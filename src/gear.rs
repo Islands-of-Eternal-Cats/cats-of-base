@@ -44,6 +44,14 @@ use crate::path::Reach;
 /// Снятие спрашивает только первые два: запертая отмена оставила бы приписку
 /// несбрасываемой (довод §12.93).
 #[allow(clippy::too_many_arguments)]
+/// Открыта ли вещь игроку как снаряжение вообще (§12.131, §12.268): база её
+/// видела, она надеваемая и понята технологией. Это вопрос **видимости**, а не
+/// отказа кнопки: отлучка и прочие причины его не перекрывают, и окно дела
+/// прячет строку по нему, а не по тегу `outfit_gate`.
+pub(crate) fn outfit_known(items: &ItemRules, techs: &Techs, seen: &Seen, item: usize) -> bool {
+    seen.saw(item) && items.equippable(item) && items.wearable(item, techs)
+}
+
 pub(crate) fn outfit_gate(
     items: &ItemRules,
     techs: &Techs,
@@ -59,19 +67,17 @@ pub(crate) fn outfit_gate(
     if items.personal(item) {
         return "personal";
     }
-    // Невиданное и непонятое спрашиваются раньше отлучки: по этим тегам вид
-    // прячет строку, и кот в поле иначе показывал бы неизученную вещь (§12.131).
-    if on && !seen.saw(item) {
-        return "unseen";
-    }
-    if on && (!items.equippable(item) || !items.wearable(item, techs)) {
-        return "unknown";
-    }
     if away {
         return "away";
     }
     if !on {
         return "";
+    }
+    if !seen.saw(item) {
+        return "unseen";
+    }
+    if !items.equippable(item) || !items.wearable(item, techs) {
+        return "unknown";
     }
     if !items.skilled(item, skill_rules, skills) {
         return "unskilled";

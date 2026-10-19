@@ -10955,7 +10955,7 @@ function syncDossierGear(ui, e) {
     row.hidden =
       !worn &&
       !want &&
-      (gate === "unseen" || gate === "unknown" || gate === "personal");
+      (gate === "personal" || !(lastSnap?.gear_open ?? [])[i]);
     if (row.hidden) continue;
     any = true;
     const personal = gate === "personal";
@@ -10993,9 +10993,10 @@ function syncDossierGear(ui, e) {
 
 // Открыта ли хоть одна парта — тайл с `teaches` (§12.259). Считает ядро
 // (`tiles_open`), вид только спрашивает.
-function teachingOpen() {
-  const open = lastSnap?.tiles_open ?? [];
-  return (meta.tiles ?? []).some((t, i) => t.teaches && open[i]);
+// Открыт ли домен для учёбы — готовым ответом ядра (`skills_open`), отдельно
+// от тега отказа: «кот в поле» не должен перекрывать «парт ещё нет».
+function skillOpen(i) {
+  return !!(lastSnap?.skills_open ?? [])[i];
 }
 
 function syncDossier() {
@@ -11070,10 +11071,7 @@ function syncDossier() {
     // 0 / 24» — строка про пустоту. А домен, которому учат, стоит и с нулём —
     // иначе вместе со строкой пропадает «Учить», единственный вход в него
     // (пробоотборник требует «Науку» 1, §12.269).
-    row.hidden =
-      s.level === 0 &&
-      s.xp === 0 &&
-      (s.teach === "untaught" || (s.teach === "nodesk" && !teachingOpen()));
+    row.hidden = s.level === 0 && s.xp === 0 && !skillOpen(i);
     if (row.hidden) continue;
     const levels = def.levels ?? [];
     const from = s.level > 0 ? levels[s.level - 1] : 0;
@@ -11122,10 +11120,7 @@ function syncDossier() {
     // (`nodesk`): стоящую на карте парту ядро пускает без оглядки на палитру
     // (`desk_gate`), и второй экземпляр ворот в виде прятал кнопку там, где
     // `teach` соглашается (инвариант 14).
-    btn.hidden =
-      s.teach === "untaught" ||
-      topped ||
-      (s.teach === "nodesk" && !teachingOpen());
+    btn.hidden = !skillOpen(i) || topped;
     setHtml(btn.firstChild, learning ? "Снять с учёбы" : "Учить");
     btn.classList.toggle("off", !learning && !!why);
     liveTitle(
