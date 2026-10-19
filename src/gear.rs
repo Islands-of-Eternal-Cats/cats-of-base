@@ -59,17 +59,19 @@ pub(crate) fn outfit_gate(
     if items.personal(item) {
         return "personal";
     }
+    // Невиданное и непонятое спрашиваются раньше отлучки: по этим тегам вид
+    // прячет строку, и кот в поле иначе показывал бы неизученную вещь (§12.131).
+    if on && !seen.saw(item) {
+        return "unseen";
+    }
+    if on && (!items.equippable(item) || !items.wearable(item, techs)) {
+        return "unknown";
+    }
     if away {
         return "away";
     }
     if !on {
         return "";
-    }
-    if !seen.saw(item) {
-        return "unseen";
-    }
-    if !items.equippable(item) || !items.wearable(item, techs) {
-        return "unknown";
     }
     if !items.skilled(item, skill_rules, skills) {
         return "unskilled";
