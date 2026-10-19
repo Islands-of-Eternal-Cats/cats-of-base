@@ -2336,6 +2336,8 @@ function renderSnapshot(snap) {
     c.workDemolish = e.job === "demolish";
     // Учит только дошедший (§12.258): идущий к парте ещё не объясняет.
     c.teaching = e.job === "teach" && !e.moving;
+    // Радист в эфире покачивается тоже, но едва заметно (`teachUnit`).
+    c.onAir = e.job === "relay" && !e.moving;
     if (jump || e.step_span <= 0) {
       c.x = from.x;
       c.y = from.y;
@@ -3171,9 +3173,10 @@ function wadeUnit(c, deltaMS) {
 // стороны в сторону, не подпрыгивая — прыжок читался суетой, а не рассказом. Темп тот же,
 // что у стука и брода: по `speed` и не выше ×5, иначе на ×10 рассказ
 // превращается в дрожь. Трансформ пишется только учащим и один раз на выходе.
+// Радист у рации (§12.277) идёт тем же узлом, но тише — см. ниже.
 const TEACH_SPEED_CAP = 5;
 function teachUnit(c, deltaMS) {
-  if (!(deltaMS > 0 && c.teaching && !c.wading && !c.down)) {
+  if (!(deltaMS > 0 && (c.teaching || c.onAir) && !c.wading && !c.down)) {
     if (c.swaying) {
       c.swaying = false;
       c.body.rotation = 0;
@@ -3183,9 +3186,12 @@ function teachUnit(c, deltaMS) {
     return;
   }
   c.swaying = true;
+  // Радист слушает эфир: качание вдвое медленнее и в два с половиной раза
+  // мельче учительского — сидит, а не рассказывает.
+  const [period, amp] = c.teaching ? [700, 0.1] : [1400, 0.04];
   c.teachPhase =
-    (c.teachPhase ?? 0) + (deltaMS * Math.min(speed, TEACH_SPEED_CAP)) / 700;
-  c.body.rotation = Math.sin(c.teachPhase) * 0.1;
+    (c.teachPhase ?? 0) + (deltaMS * Math.min(speed, TEACH_SPEED_CAP)) / period;
+  c.body.rotation = Math.sin(c.teachPhase) * amp;
 }
 
 // Кот, дошедший до площадки, **стучит** по ней: тело кивает в сторону клетки
