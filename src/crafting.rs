@@ -540,6 +540,7 @@ pub(crate) fn plan_craft(
 pub(crate) fn spread_craft(
     map: Res<BaseMap>,
     tiles: Res<TileRules>,
+    rules: Res<CraftRules>,
     mut commands: Commands,
     mut orders: Query<(Entity, &mut Craft)>,
     structs: Res<StructureRules>,
@@ -565,11 +566,30 @@ pub(crate) fn spread_craft(
         order.left -= split;
         let def = order.def;
         let order_auto = order.auto;
+        // **Завезённое за уехавшие штуки уезжает вместе с ними.** Остаться оно
+        // не может: исходному заказу материал за них больше не нужен, а новый
+        // попросил бы его со склада второй раз. Лишнее на станке никто не
+        // считает (ни подвоз, ни порог, ни излишек разбора), и с последней
+        // штукой оно пропадало: разбор съедал вдвое больше комбинезонов, чем
+        // правило отдавало ему сверх порога, и порог пошива тут же шил новые.
+        let mut moved: Vec<(usize, i32)> = Vec::new();
+        if let Some(rule) = rules.0.get(def) {
+            for &(item, per) in &rule.cost {
+                let keep = per * order.left;
+                if let Some(slot) = order.delivered.iter_mut().find(|(i, _)| *i == item)
+                    && slot.1 > keep
+                {
+                    let n = (slot.1 - keep).min(per * split);
+                    slot.1 -= n;
+                    moved.push((item, n));
+                }
+            }
+        }
         commands.spawn(Craft {
             def,
             left: split,
             progress: 0,
-            delivered: Vec::new(),
+            delivered: moved,
             assignee: None,
             cell,
             auto: order_auto,
@@ -796,6 +816,9 @@ pub(crate) fn work_craft(
         order.delivered.retain(|&(_, n)| n > 0);
         // Штука готова — и это единственное место, где заказ кончается сам.
         if order.left <= 0 {
+            // Лишнего здесь быть не должно, но если оно есть — оно не исчезает
+            // (инвариант 8): ложится кучей на клетку станка.
+            spill_delivered(&mut commands, &mut stacks, order.cell, &order.delivered);
             commands.entity(task.0).despawn();
             commands.entity(cat_e).remove::<Crafting>();
         }
