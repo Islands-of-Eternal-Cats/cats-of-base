@@ -13957,8 +13957,18 @@ function raidCard(i, node) {
   const terms = !empty && node?.roads?.[i] != null;
   const work = terms ? node.works[i] : (def.work ?? 0);
   const roadN = terms ? node.roads[i] : (def.travel ?? 0);
-  const road =
-    `дорога ${roadN}` + (terms && roadN < (def.travel ?? 0) ? " (тропы)" : "");
+  // Что сократило дорогу — процентами, одними скобками (§12.256, §12.278):
+  // «дорога 45 (−25 % тропы, −50 % радист)». Процент троп — тот же, что в
+  // шапке отряда (`node.trails`, считает ядро); у радиста — `roadCut`.
+  const trailCut =
+    terms && roadN < (def.travel ?? 0) && node?.trails > 0
+      ? `−${node.trails} % тропы`
+      : "";
+  const roadWhy = (...parts) => {
+    const why = parts.filter(Boolean);
+    return why.length ? ` (${why.join(", ")})` : "";
+  };
+  const road = `дорога ${roadN}${roadWhy(trailCut)}`;
   const workTxt =
     `работа ${work}` + (terms && work > (def.work ?? 0) ? " (сбор)" : "");
   // Радист приписан (§12.278) — срок со связью **первым числом** и с «≈»: это
@@ -13971,8 +13981,7 @@ function raidCard(i, node) {
   const linkedSpan = linked ? node.linked_spans[i] : null;
   const linkedRoad = linked
     ? `дорога ${roadN - (node.spans[i] - linkedSpan)}` +
-      (terms && roadN < (def.travel ?? 0) ? " (тропы)" : "") +
-      ` (−${roadCut(node.operator_boost)} % радист)`
+      roadWhy(trailCut, `−${roadCut(node.operator_boost)} % радист`)
     : "";
   if (slow != null) {
     if (work === 0) {
