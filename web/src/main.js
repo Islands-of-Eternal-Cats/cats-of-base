@@ -2400,7 +2400,14 @@ function renderSnapshot(snap) {
       };
     })();
     const tableTurn = table?.dx ?? 0;
-    const facingAway = !!table && table.dy < 0;
+    // Со спины кот виден ещё в двух случаях: **идёт вверх** по экрану — то
+    // есть от зрителя, и мордой к нам он читался пятящимся, — и **работает
+    // над клеткой выше себя**: лицом к площадке, как боковой разворот выше.
+    // Остановился без дела — снова лицом: иначе кот, дошедший вверх до
+    // лежанки, так и стоял бы к зрителю спиной.
+    const goingUp = e.step_span > 0 && e.to_y < e.y;
+    const workingUp = !e.moving && c.workX >= 0 && c.workY < e.y;
+    const facingAway = (!!table && table.dy < 0) || goingUp || workingUp;
     const turn = partner
       ? partner
       : tableTurn
