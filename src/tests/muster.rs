@@ -263,10 +263,10 @@ fn seats_fill_the_sides_before_the_corners() {
 fn the_shipped_ruleset_keeps_beds_away_from_the_muster_table() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
     let bed = i32::from(sim.tile_index("bed").expect("лежанка"));
-    // Стол брифинга — якорем в (4, 10), нижний ряд стульев на y = 12.
-    assert!(!sim.add_blueprint(6, 13, bed), "вплотную под стулом");
-    assert!(!sim.add_blueprint(7, 13, bed), "наискосок от угла");
-    assert!(sim.add_blueprint(8, 13, bed), "через клетку — можно");
+    // Стол брифинга — якорем в (3, 10): слоты x 3–5, нижний ряд на y = 12.
+    assert!(!sim.add_blueprint(5, 13, bed), "вплотную под слотом");
+    assert!(!sim.add_blueprint(6, 13, bed), "наискосок от угла");
+    assert!(sim.add_blueprint(7, 13, bed), "через клетку — можно");
 }
 
 /// Недостроенный стол — ещё не отряд (§12.282): стулья бесплатны и встают

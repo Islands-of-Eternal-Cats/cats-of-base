@@ -337,7 +337,7 @@ build:
   # место брифинга — **штампом, а не рамкой** (§12.279): восемь стульев, выложенных
   # рамкой, были бы восемью отрядами (§12.161). Стоит оно поверх пола жилой
   # комнаты, и стартовые коты сидят за ним с нулевого тика.
-  - { structure: muster, at: [4, 10] }
+  - { structure: muster, at: [3, 10] }
 
 # Стартовый запас — кучами на складе. Сама стартовая застройка (`build`)
 # бесплатна: это уже стоящая база, а не работа котов. Разобрать её при этом
@@ -1079,11 +1079,11 @@ recruits:
 # на всю базу. Задачи за припиской нет, никто никуда не идёт: отряд стоит дома,
 # пока игрок сам не нажмёт «Отправить».
 units:
-  - { id: excellent,  sprite: cat_excellent,  pos: [4, 11], garage: [5, 11],
+  - { id: excellent,  sprite: cat_excellent,  pos: [3, 11], garage: [4, 11],
       stats: { mind: 5, reflex: 7, stamina: 6 } }
-  - { id: sp2, sprite: cat_helper, pos: [6, 11], perks: [hauler], garage: [5, 11],
+  - { id: sp2, sprite: cat_helper, pos: [5, 11], perks: [hauler], garage: [4, 11],
       stats: { mind: 5, reflex: 5, stamina: 8 } }
-  - { id: sp3, sprite: cat_helper, pos: [5, 12], garage: [5, 11],
+  - { id: sp3, sprite: cat_helper, pos: [4, 12], garage: [4, 11],
       stats: { mind: 8, reflex: 4, stamina: 6 } }
 
 # Наука (§12.26). Тема — та же разметка работы, что и чертёж: игрок выбирает,
