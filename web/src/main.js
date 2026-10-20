@@ -2382,14 +2382,26 @@ function renderSnapshot(snap) {
     // а не весь узел: метки состояний — соседние дети контейнера, и они бы
     // уехали вместе с ним.
     // Работающий смотрит на свою площадку, а не туда, откуда пришёл.
+    // Севший за стол сбора (§12.280) — на стол: центр берём по местам отряда
+    // из ядра (`seats`), а не по клетке стола, чтобы повёрнутый штамп и стол
+    // любой формы не требовали второго правила. Сидящие сверху и снизу
+    // остаются как были: силуэт умеет смотреть только влево и вправо.
     const partner = deskPartner(e);
+    const tableTurn = (() => {
+      if (e.job !== "squad" || e.moving) return 0;
+      const xs = (nodeAt(e.x, e.y)?.seats ?? []).map(([sx]) => sx);
+      if (!xs.length) return 0;
+      return Math.min(...xs) + Math.max(...xs) - 2 * e.x;
+    })();
     const turn = partner
       ? partner
-      : c.workX >= 0 && c.workX !== e.x
-        ? c.workX - e.x
-        : was && was.x !== e.x
-          ? e.x - was.x
-          : 0;
+      : tableTurn
+        ? tableTurn
+        : c.workX >= 0 && c.workX !== e.x
+          ? c.workX - e.x
+          : was && was.x !== e.x
+            ? e.x - was.x
+            : 0;
     if (turn) {
       const face = turn > 0 ? 1 : -1;
       // Только на смене: `scale` и `x` — это грязный трансформ у Pixi, и писать
