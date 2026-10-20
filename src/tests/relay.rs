@@ -206,8 +206,8 @@ fn a_broken_link_keeps_what_it_earned() {
 
 /// Мир: два места брифинга со шлюзом — отряд 1 в (1,2), отряд 2 в (2,2) —
 /// и две рации: (5,2) силой `p1` и (3,2) силой `p2`; коты `a`, `b`, `c`, `d`.
-/// Радист садится за ближайшую свободную рацию (§12.285), поэтому `c` из (5,1)
-/// займёт первую, а `d` из (7,1) — оставшуюся. Вылазки на одного.
+/// Радист садится за ближайшую к столу свободную рацию (§12.285, §12.286):
+/// к рации он идёт от брифинга. Вылазки на одного.
 fn sim_with_two_radios(p1: i32, p2: i32, ticks: i32) -> (Sim, usize, usize) {
     let mut sim = sim_from(&["#########", "#a.b.c.d#", "#.......#", "#########"]);
     sim.set_gate(1, true);
@@ -253,8 +253,14 @@ fn a_stronger_operator_leads_faster() {
     sim.launch_node(second, 2, 2, -1);
     sim.tick_n(60);
 
-    let weak = sim.covered_of(first).expect("первая идёт");
-    let strong = sim.covered_of(second).expect("вторая идёт");
+    // Радисты выходят к рациям от столов (§12.286), и кто какую займёт, решает
+    // дорога: сильная рация (3,2) ближе к обоим столам, её берёт первый по `id`.
+    let (strong_m, weak_m) = match sim.duty_of("c") {
+        Some((3, 2)) => (first, second),
+        _ => (second, first),
+    };
+    let weak = sim.covered_of(weak_m).expect("слабая идёт");
+    let strong = sim.covered_of(strong_m).expect("сильная идёт");
     assert!(
         strong > weak,
         "сильный радист срезал больше: {strong} против {weak}"
@@ -659,5 +665,9 @@ fn a_squad_leaves_once_its_operator_sits() {
         t += 1;
         assert!(t < 100, "отряд так и не ушёл");
     }
-    assert_eq!(sim.duty_of("d"), Some((5, 2)), "радист у ближайшей рации");
+    assert_eq!(
+        sim.duty_of("d"),
+        Some((3, 2)),
+        "радист у ближайшей к столу рации"
+    );
 }

@@ -1491,6 +1491,10 @@ note_seen → check_goals`.
    ней — обычный приказ. Общей связи (§12.152) и `comms_now` больше нет; прогноз —
    `NodeSnap::operator_boost` и `linked_spans` (`missions::linked_span`). Единственный
    неснимаемый шлюз §12.276 отменён §12.285.
+   ⚠️ **С §12.286 радист сидит брифинг за столом своего отряда** (стул после бойцов, его даёт
+   `gather_squad`), и брифинг ждёт его тоже; за рацию он садится, когда отряд выбрал дверь.
+   Стул держит **тот же `OnDuty`** — поэтому «держит связь» везде проверяется ещё и тем, что
+   клетка `OnDuty` — рация (`run_missions`, `manned`, `operator_boost_at`); подпись — `brief`.
    **Вылазок идёт столько, сколько построено гаражей** (§12.59, §12.152): гараж — третье
    применение «комната = слот» после мастерской и торгового поста (§12.55). До §12.152 счёт вела
    **рация** — единственная чистая лицензия, за которой никто не работает, — а гараж был просто
@@ -2000,7 +2004,7 @@ note_seen → check_goals`.
 
 ## Тесты
 
-940 тестов живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `jobs` · `demolition` ·
+944 теста живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `jobs` · `demolition` ·
 `hauling` · `tidying` · `skills` · `stats` · `study` · `research` · `needs` · `news` · `food` · `health` · `items` · `layers` · `missions` · `muster` ·
 `captivity` · `fame` · `factions` · `trade` · `terrain` · `timeline` · `gear` · `crafting` · `crowd` · `panel` ·
 `goals` · `record` · `relay` · `sampling` · `save` · `seen` · `structures` · `tutoring` · `bins` · `tech_tree` · `wiki`); общие хелперы и сборка мира —

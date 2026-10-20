@@ -4304,8 +4304,12 @@ impl Sim {
             .iter(&self.world)
             .filter(|(p, _, _, away)| p.spot == (x, y) && away.is_none())
             .map(|(_, duty, sk, _)| match duty {
-                Some(d) => crate::relay::duty_gain(tiles, map, skills, sk, d.spot),
-                None => radios
+                // Сидит за рацией — по ней; за столом брифинга (§12.286) или ещё
+                // не сел — по лучшей на базе.
+                Some(d) if tiles.is_relay_node(map.tile_at(d.spot.0, d.spot.1)) => {
+                    crate::relay::duty_gain(tiles, map, skills, sk, d.spot)
+                }
+                _ => radios
                     .iter()
                     .map(|&r| crate::relay::duty_gain(tiles, map, skills, sk, r))
                     .max()
@@ -5876,6 +5880,15 @@ impl Sim {
                     job: match busy.job {
                         "study" if !busy.moving && waiting.contains(&id.0) => "wait_teacher",
                         "teach" if !busy.moving && lonely.contains(&id.0) => "wait_pupil",
+                        // Радист за столом брифинга (§12.286): `OnDuty` на стуле,
+                        // а не у рации, — он слушает, а не держит связь.
+                        "relay"
+                            if duty.is_some_and(|d| {
+                                !tiles.is_relay_node(map.tile_at(d.spot.0, d.spot.1))
+                            }) =>
+                        {
+                            "brief"
+                        }
                         "build"
                             if assignment.is_some_and(|a| sites.get(&a.0).is_some_and(|s| s.2)) =>
                         {
@@ -6143,9 +6156,18 @@ impl Sim {
                 .collect();
             // Кто прямо сейчас держит связь: дошедший дежурный, без маршрута
             // (§12.60). Ровно тот же признак, по которому копит `run_missions`.
+            // С §12.285 ключ — стол отряда из приписки, а не клетка рации; стул
+            // за столом брифинга (§12.286) эфиром не считается.
             let manned: Vec<(i32, i32)> = {
-                let mut q = self.world.query_filtered::<&OnDuty, Without<Path>>();
-                q.iter(&self.world).map(|d| d.spot).collect()
+                let mut q = self
+                    .world
+                    .query_filtered::<(&OnDuty, &Posted), Without<Path>>();
+                let map = self.world.resource::<BaseMap>();
+                let tiles = self.world.resource::<TileRules>();
+                q.iter(&self.world)
+                    .filter(|(d, _)| tiles.is_relay_node(map.tile_at(d.spot.0, d.spot.1)))
+                    .map(|(_, p)| p.spot)
+                    .collect()
             };
             let active = self.abilities_active();
             let mut q = self.world.query::<(Entity, &Mission)>();

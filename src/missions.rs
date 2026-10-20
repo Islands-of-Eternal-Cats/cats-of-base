@@ -624,6 +624,32 @@ pub(crate) fn gather_squad(
         // назначенного, отряд ждёт, пока тот встанет (§12.23, §12.37).
         (Without<Rest>, Without<Equipping>, Without<Healing>),
     >,
+    // Радисты (§12.286): за стол брифинга садится и приписанный к отряду
+    // радист. Все, кто на базе, — по ним считается «сели ли все».
+    operators: Query<(&Posted, &UnitId), Without<Away>>,
+    // Уже сидящие (или идущие) на своём стуле — их стул держит `OnDuty`.
+    seated_ops: Query<(Entity, &Posted, &UnitId, &Position, &OnDuty, Option<&Path>)>,
+    // Свободные — те же фильтры, что у `assign_relay`: радиста не срывают с
+    // начатого дела, брифинг его просто ждёт.
+    free_ops: Query<
+        (Entity, &Posted, &UnitId, &Position),
+        (
+            Without<Assignment>,
+            Without<Haul>,
+            Without<Rest>,
+            Without<Study>,
+            Without<Researching>,
+            Without<Crafting>,
+            Without<Equipping>,
+            Without<Eating>,
+            Without<Healing>,
+            Without<Treating>,
+            Without<Squad>,
+            Without<OnDuty>,
+            Without<Away>,
+            Without<Path>,
+        ),
+    >,
 ) {
     if missions.is_empty() {
         return;
@@ -683,12 +709,48 @@ pub(crate) fn gather_squad(
         // Все сели — брифинг, а за ним дверь (§12.280). «Все» — это весь
         // состав: спящий в `squad` не попал, и пока он спит, `ids` длиннее.
         // Встал кто-то посреди брифинга — счёт с нуля.
+        // Радисты отряда садятся **после** бойцов (§12.286): их номера за
+        // столом продолжают состав, по `id`.
+        let mut ops: Vec<&str> = operators
+            .iter()
+            .filter(|(p, _)| p.spot == node)
+            .map(|(_, id)| id.0.as_str())
+            .collect();
+        ops.sort_unstable();
+        let op_seat = |id: &str| {
+            let j = ops.iter().position(|&o| o == id).unwrap_or(0);
+            seat_of(&seats, ids.len() + j)
+        };
+
         if mission.exit.is_none() {
             let seated = squad
                 .iter()
                 .filter(|&&(_, rank, at, walking)| !walking && seat_of(&seats, rank) == Some(at))
                 .count();
-            if seated == ids.len() && seated > 0 {
+            let ops_seated = seated_ops
+                .iter()
+                .filter(|(_, p, id, at, duty, path)| {
+                    p.spot == node
+                        && Some(duty.spot) == op_seat(id.0.as_str())
+                        && (at.x, at.y) == duty.spot
+                        && path.is_none_or(|p| p.steps.is_empty())
+                })
+                .count();
+            // Радиста, пришедшего к столу, сажаем на его стул: `OnDuty` на
+            // стуле — та же занятость, что у рации, и раздатчики его не тронут.
+            for (cat_e, p, id, at) in &free_ops {
+                if p.spot != node {
+                    continue;
+                }
+                let Some(seat) = op_seat(id.0.as_str()) else {
+                    continue;
+                };
+                let steps = find_path(map, &tiles, (at.x, at.y), seat).unwrap_or_default();
+                commands
+                    .entity(cat_e)
+                    .insert((OnDuty { spot: seat }, Path { steps }));
+            }
+            if seated == ids.len() && ops_seated == ops.len() && seated > 0 {
                 if mission.brief >= tiles.brief_of(map.tile_at(node.0, node.1)) {
                     mission.exit = nearest_exit(map, &tiles, node);
                 } else {
@@ -858,6 +920,8 @@ pub(crate) fn run_missions(
     // миссиям; ключ — стол отряда, а сила — рация под лапами.
     let duty_at: Vec<((i32, i32), i32)> = duty
         .iter()
+        // Стул за столом брифинга (§12.286) — тоже `OnDuty`, но не эфир.
+        .filter(|(_, on_duty, ..)| tiles.is_relay_node(map.tile_at(on_duty.spot.0, on_duty.spot.1)))
         .filter_map(|(_, on_duty, skills, post)| {
             let gain = duty_gain(&tiles, &map, &skill_rules, skills, on_duty.spot);
             post.map(|p| (p.spot, gain))
@@ -1234,7 +1298,10 @@ pub(crate) fn run_missions(
         let node = mission.node;
         let seated_elsewhere = duty
             .iter()
-            .filter(|(.., p)| p.is_none_or(|p| p.spot != node))
+            .filter(|(_, d, _, p)| {
+                p.is_none_or(|p| p.spot != node)
+                    && tiles.is_relay_node(map.tile_at(d.spot.0, d.spot.1))
+            })
             .count();
         let operator_waits = roster
             .iter()
@@ -1281,7 +1348,10 @@ pub(crate) fn run_missions(
     // поле (`assign_relay`, §12.278), так что пустой эфир работой не считается
     // и здесь (§12.17).
     if anyone_away && let Some(skill) = comms {
-        for (cat_e, ..) in &duty {
+        for (cat_e, d, ..) in &duty {
+            if !tiles.is_relay_node(map.tile_at(d.spot.0, d.spot.1)) {
+                continue;
+            }
             commands.entity(cat_e).insert(Worked(skill));
         }
     }

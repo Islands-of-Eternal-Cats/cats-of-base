@@ -2369,6 +2369,9 @@ function renderSnapshot(snap) {
   const briefing = new Set(
     (snap.missions ?? []).filter((m) => m.briefing).flatMap((m) => m.squad),
   );
+  const briefNodes = new Set(
+    (snap.missions ?? []).filter((m) => m.briefing).map((m) => `${m.x},${m.y}`),
+  );
   for (const e of snap.entities) {
     seen.add(e.id);
     const c = units.get(e.id) ?? createUnit(e);
@@ -2405,7 +2408,12 @@ function renderSnapshot(snap) {
     // Учит только дошедший (§12.258): идущий к парте ещё не объясняет.
     // Брифинг за столом брифинга (§12.280) качается тем же `teachUnit`: со
     // стороны это тот же разговор, только слушают все разом.
-    c.teaching = (e.job === "teach" || briefing.has(e.id)) && !e.moving;
+    // Радист отряда слушает тот же брифинг (§12.286) — за своим столом.
+    c.teaching =
+      (e.job === "teach" ||
+        briefing.has(e.id) ||
+        (e.job === "brief" && briefNodes.has(`${e.post_x},${e.post_y}`))) &&
+      !e.moving;
     // Радист в эфире покачивается тоже, но едва заметно (`teachUnit`).
     c.onAir = e.job === "relay" && !e.moving;
     if (jump || e.step_span <= 0) {
@@ -3622,6 +3630,9 @@ function jobLabel(e) {
       return "ждёт ученика";
     case "relay":
       return going ? "идёт к рации" : "держит связь с отрядом";
+    // Радист на брифинге своего отряда (§12.286): стул за столом, а не рация.
+    case "brief":
+      return going ? "идёт на брифинг" : "слушает брифинг";
     case "build":
       return going ? "идёт на площадку" : "строит";
     case "demolish":

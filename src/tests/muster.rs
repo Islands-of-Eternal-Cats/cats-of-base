@@ -371,3 +371,85 @@ fn a_new_table_takes_the_next_number_wherever_it_stands() {
     let mut loaded = Sim::load(yaml, &saved).expect("загрузка");
     assert_eq!(loaded.node_cells_of(), order, "порядок пережил сохранение");
 }
+
+// --- радист на брифинге (§12.286) ------------------------------------------
+
+/// Рация в зале и её клетка.
+const RADIO: i16 = 5;
+const RADIO_AT: (i32, i32) = (9, 3);
+/// Стул радиста: третий по `seat_order` — левая сторона стола.
+const SEAT_OP: (i32, i32) = (2, 2);
+
+/// Тот же зал, плюс рация и кот `c` — радист отряда стола.
+fn hall_with_radio() -> Sim {
+    let mut sim = sim_from(&[
+        "###########",
+        "#.........#",
+        "#.........#",
+        "#.........#",
+        "#....c.a.b#",
+        "###########",
+    ]);
+    sim.set_muster(TABLE, true);
+    sim.set_solid(TABLE, true);
+    sim.set_exit(EXIT, true);
+    let def = table_with_slots(&mut sim);
+    sim.force_structure(def, 2, 1);
+    sim.force_tile(NEAR.0, NEAR.1, EXIT);
+    sim.force_tile(FAR.0, FAR.1, EXIT);
+    sim.set_relay(RADIO, true);
+    sim.set_comms(RADIO, 1);
+    sim.force_tile(RADIO_AT.0, RADIO_AT.1, RADIO);
+    let node = sim.node_cells_of()[0];
+    assert!(sim.post_relay("c", node.0, node.1), "радист приписан");
+    sim
+}
+
+/// Радист слушает брифинг вместе с отрядом, а за рацию садится, когда отряд
+/// встал и пошёл к двери: до этого рация пуста.
+#[test]
+fn the_operator_sits_through_the_briefing_then_takes_the_radio() {
+    let mut sim = hall_with_radio();
+    let def = sim.set_mission(2, 60, &[]);
+    assert!(sim.launch(def, squad(&["a", "b"])));
+
+    let mut sat = false;
+    for _ in 0..300 {
+        sim.tick_n(1);
+        if sim.mission_exit().is_none() {
+            assert_ne!(
+                sim.duty_of("c"),
+                Some(RADIO_AT),
+                "на брифинге за рацию не садятся"
+            );
+            sat |= sim.pos_of("c") == SEAT_OP;
+        }
+        if sim.is_away("a") {
+            assert!(sat, "радист сидел за столом");
+            assert_eq!(
+                sim.duty_of("c"),
+                Some(RADIO_AT),
+                "а ушли — при радисте в эфире"
+            );
+            assert_eq!(sim.pos_of("c"), RADIO_AT);
+            return;
+        }
+    }
+    panic!("отряд так и не ушёл");
+}
+
+/// Спящий радист держит брифинг, как спящий боец: дверь не выбирается, пока
+/// он не сел за стол.
+#[test]
+fn a_sleeping_operator_holds_the_briefing() {
+    let mut sim = hall_with_radio();
+    sim.set_needs(1000, 30, 1);
+    sim.set_energy("c", 0);
+    let def = sim.set_mission(2, 60, &[]);
+    assert!(sim.launch(def, squad(&["a", "b"])));
+    sim.tick_n(120);
+
+    assert!(sim.is_resting("c"), "радист спит");
+    assert_eq!(sim.mission_exit(), None, "брифинг не начат без радиста");
+    assert!(!sim.is_away("a"), "отряд дома");
+}

@@ -152,9 +152,20 @@ pub(crate) fn assign_relay(
     >,
 ) {
     // Кому помогать (§12.278, §12.285): связь именная — радист приписан к
-    // **столу** отряда и нужен, только пока у этого отряда есть вылазка, уже
-    // на сборе: отряд ждёт своего радиста и без него не уходит.
-    let away_nodes: Vec<(i32, i32)> = missions.iter().map(|(_, m)| m.node).collect();
+    // **столу** отряда и нужен, только пока у этого отряда есть вылазка.
+    // **Пока отряд на брифинге, радист сидит с ним за столом** (§12.286): его
+    // стул держит `gather_squad`, а сюда он приходит, когда отряд встал и
+    // выбрал дверь (`exit`) — тогда и садится за рацию.
+    let briefing: Vec<(i32, i32)> = missions
+        .iter()
+        .filter(|(_, m)| m.exit.is_none())
+        .map(|(_, m)| m.node)
+        .collect();
+    let away_nodes: Vec<(i32, i32)> = missions
+        .iter()
+        .filter(|(_, m)| m.exit.is_some())
+        .map(|(_, m)| m.node)
+        .collect();
 
     // Рации, на которых дежурство **что-то даёт**. Нулевой `comms` значит
     // «дежурить незачем», и кота сюда не зовут: гонять его к рации, от которой
@@ -171,6 +182,10 @@ pub(crate) fn assign_relay(
     // рации, поэтому она же и единственный признак «сидит по делу».
     let mut evicted: Vec<Entity> = Vec::new();
     for (cat_e, duty, post) in &posted {
+        // Стул за столом брифинга — не наш: его держит и снимает `gather_squad`.
+        if !radios.contains(&duty.spot) && post.is_some_and(|p| briefing.contains(&p.spot)) {
+            continue;
+        }
         let gone = !radios.contains(&duty.spot);
         let needed = post.is_some_and(|p| away_nodes.contains(&p.spot));
         if gone || !needed {
@@ -183,6 +198,7 @@ pub(crate) fn assign_relay(
         .iter()
         .filter(|(e, ..)| !evicted.contains(e))
         .map(|(_, d, _)| d.spot)
+        .filter(|spot| radios.contains(spot))
         .collect();
     let mut open: Vec<(i32, i32)> = radios
         .iter()
