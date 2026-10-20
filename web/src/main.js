@@ -1488,6 +1488,16 @@ function drawMap(map) {
     x < 0 || y < 0 || x >= W || y >= H ? -1 : mapCells[y * W + x];
   const g = new Graphics();
   const T = TILE;
+  // Какой плитой клетка выглядит. Места за столом сбора (§12.279) — полом:
+  // штамп 3×3 тонированной комнатой стоял громадой среди построек 1×1, а
+  // стулья отдельной мебели не имеют. Видно один стол, а где лежанку не
+  // поставить, подсвечивает маска стройки (§12.157). Подменяется только
+  // картинка: тайл в ядре и в панели клетки — по-прежнему место сбора.
+  const floorIdx = (meta.palette ?? []).findIndex((t) => t?.base);
+  const surface = (v) => {
+    const d = (meta.palette ?? [])[v];
+    return d?.muster && !d.solid && floorIdx >= 0 ? floorIdx : v;
+  };
 
   // 1. Скала: сплошной тёмный камень с крапом. Сетки на пустоте нет — там
   // строить пока нечего, и клетки читались как «незаполненная таблица».
@@ -1531,7 +1541,7 @@ function drawMap(map) {
     for (let x = 0; x < W; x++) {
       const v = at(x, y);
       if (v < 0) continue;
-      const tint = paletteColors[v] ?? COLORS.floor;
+      const tint = paletteColors[surface(v)] ?? COLORS.floor;
       const n = cellNoise(x, y, 1);
       const base = shade(mixColor(COLORS.floor, tint, 0.38), (n - 0.5) * 0.12);
       g.rect(x * T, y * T, T, T).fill(base);
@@ -1633,11 +1643,15 @@ function drawMap(map) {
       }
       // Внутренние перегородки между комнатами разного типа — тонкая линия:
       // это не стена, а граница зоны, через неё ходят.
-      const v = at(x, y);
-      if (at(x + 1, y) >= 0 && at(x + 1, y) !== v) {
+      // Сравниваются плиты (`surface`), а не тайлы: иначе стулья, нарисованные
+      // полом, обвело бы рамкой 3×3 — той самой громадой.
+      const v = surface(at(x, y));
+      const east = at(x + 1, y);
+      const south = at(x, y + 1);
+      if (east >= 0 && surface(east) !== v) {
         g.rect(px + T - 1.5, py, 1.5, T).fill({ color: 0x000000, alpha: 0.45 });
       }
-      if (at(x, y + 1) >= 0 && at(x, y + 1) !== v) {
+      if (south >= 0 && surface(south) !== v) {
         g.rect(px, py + T - 1.5, T, 1.5).fill({ color: 0x000000, alpha: 0.45 });
       }
     }
