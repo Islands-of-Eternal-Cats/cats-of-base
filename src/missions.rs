@@ -84,6 +84,37 @@ pub(crate) fn seat_of(seats: &[(i32, i32)], rank: usize) -> Option<(i32, i32)> {
     (!seats.is_empty()).then(|| seats[rank % seats.len()])
 }
 
+/// Порядок мест за столом (§12.279): **сначала стороны, потом углы**.
+///
+/// По обходу карты первые трое садились в верхний ряд — шеренгой перед
+/// столом, а не вокруг него. Стороны идут верх · низ · лево · право, чтобы
+/// уже двое сидели друг напротив друга; углы — следом, в порядке обхода.
+/// Центр — середина рамки мест (в удвоенных координатах, без дробей), так
+/// что повёрнутый штамп рассаживается так же.
+pub(crate) fn seat_order(mut seats: Vec<(i32, i32)>) -> Vec<(i32, i32)> {
+    let (Some(x0), Some(x1)) = (
+        seats.iter().map(|s| s.0).min(),
+        seats.iter().map(|s| s.0).max(),
+    ) else {
+        return seats;
+    };
+    let y0 = seats.iter().map(|s| s.1).min().unwrap_or(0);
+    let y1 = seats.iter().map(|s| s.1).max().unwrap_or(0);
+    let (cx, cy) = (x0 + x1, y0 + y1);
+    seats.sort_by_key(|&(x, y)| {
+        let (dx, dy) = (2 * x - cx, 2 * y - cy);
+        let side = match (dx.signum(), dy.signum()) {
+            (0, -1) => 0, // верх
+            (0, 1) => 1,  // низ
+            (-1, 0) => 2, // лево
+            (1, 0) => 3,  // право
+            _ => 4,       // углы
+        };
+        (side, y, x)
+    });
+    seats
+}
+
 /// Чем кончится вылазка. Считается и на конце работы (§12.244), и каждый кадр для панели:
 /// прогноз и результат обязаны быть одним и тем же выражением, иначе игрок
 /// увидит одно, а получит другое.
@@ -619,7 +650,7 @@ pub(crate) fn gather_squad(
         // §12.279). Правило то же, по которому снесённый станок уносит свой
         // заказ (§12.96): вылазка живёт в объекте, а объекта больше нет.
         let node = mission.node;
-        let seats = seats_at(map, &tiles, &owners, node, TileRules::is_muster);
+        let seats = seat_order(seats_at(map, &tiles, &owners, node, TileRules::is_muster));
         if !tiles.is_muster(map.tile_at(node.0, node.1)) || seats.is_empty() {
             for &(cat_e, ..) in &squad {
                 commands.entity(cat_e).remove::<(Squad, Path, Stride)>();
