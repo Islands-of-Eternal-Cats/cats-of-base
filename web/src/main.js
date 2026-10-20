@@ -2387,12 +2387,20 @@ function renderSnapshot(snap) {
     // любой формы не требовали второго правила. Сидящие сверху и снизу
     // остаются как были: силуэт умеет смотреть только влево и вправо.
     const partner = deskPartner(e);
-    const tableTurn = (() => {
-      if (e.job !== "squad" || e.moving) return 0;
-      const xs = (nodeAt(e.x, e.y)?.seats ?? []).map(([sx]) => sx);
-      if (!xs.length) return 0;
-      return Math.min(...xs) + Math.max(...xs) - 2 * e.x;
+    // Сидящий ниже середины стола смотрит от зрителя — рисуется со спины.
+    const table = (() => {
+      if (e.job !== "squad" || e.moving) return null;
+      const seats = nodeAt(e.x, e.y)?.seats ?? [];
+      if (!seats.length) return null;
+      const xs = seats.map(([sx]) => sx);
+      const ys = seats.map(([, sy]) => sy);
+      return {
+        dx: Math.min(...xs) + Math.max(...xs) - 2 * e.x,
+        dy: Math.min(...ys) + Math.max(...ys) - 2 * e.y,
+      };
     })();
+    const tableTurn = table?.dx ?? 0;
+    const facingAway = !!table && table.dy < 0;
     const turn = partner
       ? partner
       : tableTurn
@@ -2424,11 +2432,11 @@ function renderSnapshot(snap) {
     // Дремлет (§12.52: задачи нет, а место для сна под лапами) — глаза
     // полуприкрыты: не спит, но и не работает. Ключ `nap` даёт ядро (`Busy`).
     const drowsy = e.job === "nap" && !e.moving;
-    const look = `${!!worn?.suit}|${worn?.belt.join(",") ?? ""}|${napping}|${drowsy}`;
+    const look = `${!!worn?.suit}|${worn?.belt.join(",") ?? ""}|${napping}|${drowsy}|${facingAway}`;
     if (look !== c.look) {
       c.look = look;
       c.body.clear();
-      drawCat(c.body, c.fur, worn, c.arm, napping, drowsy);
+      drawCat(c.body, c.fur, worn, c.arm, napping, drowsy, facingAway);
     }
     c.load.visible = e.carrying > 0;
     // Глиф груза — **новый узел** на смене типа, а не подмена контекста у
@@ -2762,7 +2770,19 @@ function wornLook(gear) {
   };
 }
 
-function drawCat(g, fur, worn, arm, asleep = false, drowsy = false) {
+// `back` — кот со спины (§12.280): тот, кто сидит за столом сбора ниже его
+// середины, смотрит от зрителя. Нет морды и розового в ушах, хвост лежит
+// поверх корпуса, а не за ним, нагрудных подсумков не видно — лямки и ремень
+// остаются: они и сзади те же.
+function drawCat(
+  g,
+  fur,
+  worn,
+  arm,
+  asleep = false,
+  drowsy = false,
+  back = false,
+) {
   const r = TILE * 0.3;
   const geared = !!worn?.suit;
   const belt = worn?.belt ?? [];
@@ -2773,15 +2793,19 @@ function drawCat(g, fur, worn, arm, asleep = false, drowsy = false) {
   const boot = 0x1f1b16;
 
   // Хвост — за спиной, влево и вниз; единственное, по чему виден разворот у
-  // стоящего.
-  for (const [w, col] of [
-    [r * 0.5, dark],
-    [r * 0.3, fur],
-  ]) {
-    g.moveTo(-r * 0.4, r * 0.55)
-      .quadraticCurveTo(-r * 1.4, r * 0.9, -r * 1.35, -r * 0.1)
-      .stroke({ color: col, width: w, cap: "round" });
-  }
+  // стоящего. Со спины он рисуется последним, поверх корпуса (см. ниже).
+  const tail = (from, ctrl, to) => {
+    for (const [w, col] of [
+      [r * 0.5, dark],
+      [r * 0.3, fur],
+    ]) {
+      g.moveTo(...from)
+        .quadraticCurveTo(...ctrl, ...to)
+        .stroke({ color: col, width: w, cap: "round" });
+    }
+  };
+  if (!back)
+    tail([-r * 0.4, r * 0.55], [-r * 1.4, r * 0.9], [-r * 1.35, -r * 0.1]);
 
   // Ноги и ботинки. Обводка — тёмная копия шире фигуры (см. корпус).
   for (const [k, col] of [
@@ -2846,9 +2870,19 @@ function drawCat(g, fur, worn, arm, asleep = false, drowsy = false) {
     // (§12.34) — сила отряда, видимая с карты.
     g.rect(-r * 0.5, -r * 0.55, r * 0.22, r * 1.05).fill(suitLight);
     g.rect(r * 0.28, -r * 0.55, r * 0.22, r * 1.05).fill(suitLight);
-    g.roundRect(-r * 0.45, -r * 0.05, r * 0.36, r * 0.34, 1.5).fill(0x6b6a4e);
-    g.roundRect(r * 0.09, -r * 0.05, r * 0.36, r * 0.34, 1.5).fill(0x6b6a4e);
+    if (!back) {
+      g.roundRect(-r * 0.45, -r * 0.05, r * 0.36, r * 0.34, 1.5).fill(0x6b6a4e);
+      g.roundRect(r * 0.09, -r * 0.05, r * 0.36, r * 0.34, 1.5).fill(0x6b6a4e);
+    }
     g.rect(-r * 0.75, r * 0.3, r * 1.5, r * 0.12).fill(0x8a7a3a);
+  } else if (back) {
+    // Спина — ровный мех без грудки, по хребту чуть темнее.
+    g.roundRect(-r * 0.1, -r * 0.5, r * 0.2, r * 0.8, r * 0.1).fill({
+      color: shade(fur, -0.15),
+      alpha: 0.8,
+    });
+    if (belt.length)
+      g.rect(-r * 0.75, r * 0.3, r * 1.5, r * 0.12).fill(0x5a4a2a);
   } else {
     // Светлая грудка — как у большинства окрасов.
     g.ellipse(0, -r * 0.05, r * 0.32, r * 0.42).fill({
@@ -2882,6 +2916,16 @@ function drawCat(g, fur, worn, arm, asleep = false, drowsy = false) {
         .fill(col);
     }
     g.circle(0, hy, hr * k).fill(col);
+  }
+  if (back) {
+    // Затылок: розового в ушах не видно, пятно окраса — на макушке, а
+    // хвост — поверх корпуса, вниз и в сторону.
+    g.ellipse(0, hy - hr * 0.35, hr * 0.42, hr * 0.28).fill({
+      color: furDark,
+      alpha: 0.7,
+    });
+    tail([0, r * 0.25], [r * 0.15, r * 1.25], [r * 1.0, r * 1.05]);
+    return;
   }
   for (const sx of [-1, 1]) {
     g.moveTo(sx * hr * 0.6, hy - hr * 0.5)
