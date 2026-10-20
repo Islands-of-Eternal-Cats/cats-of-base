@@ -2328,6 +2328,11 @@ function renderSnapshot(snap) {
     }
     return 0;
   };
+  // Кто сидит на брифинге (§12.280): состав вылазки, которая говорит
+  // `briefing`. Признак у вылазки, а не у кота — брифинг про отряд целиком.
+  const briefing = new Set(
+    (snap.missions ?? []).filter((m) => m.briefing).flatMap((m) => m.squad),
+  );
   for (const e of snap.entities) {
     seen.add(e.id);
     const c = units.get(e.id) ?? createUnit(e);
@@ -2362,7 +2367,9 @@ function renderSnapshot(snap) {
     c.workY = e.work_y ?? -1;
     c.workDemolish = e.job === "demolish";
     // Учит только дошедший (§12.258): идущий к парте ещё не объясняет.
-    c.teaching = e.job === "teach" && !e.moving;
+    // Брифинг за столом сбора (§12.280) качается тем же `teachUnit`: со
+    // стороны это тот же разговор, только слушают все разом.
+    c.teaching = (e.job === "teach" || briefing.has(e.id)) && !e.moving;
     if (jump || e.step_span <= 0) {
       c.x = from.x;
       c.y = from.y;
@@ -2914,6 +2921,19 @@ function drawCat(g, fur, worn, arm, asleep = false, drowsy = false) {
 
 function createUnit(e) {
   const c = new Container();
+  // Свой ритм у каждого кота (§12.280): сдвиг фазы и темп покачивания из
+  // `id`. С общей фазой трое за столом качались строем, как метроном, — а
+  // слушающие кивают каждый в своё время. Хеш, а не `Math.random`: случайность
+  // в виде законна, но кот, перезагруженный с партией, менял бы походку.
+  let h = 0;
+  for (const ch of e.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  // Перемешать биты: у соседних `id` («sp2», «sp3») сырой хеш отличается на
+  // единицу, и оба кота качались бы почти в такт.
+  h = (h ^ (h >>> 16)) >>> 0;
+  h = Math.imul(h, 0x45d9f3b) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  c.teachPhase = ((h % 1000) / 1000) * Math.PI * 2;
+  c.teachRate = 0.8 + ((h >>> 10) % 400) / 1000;
   const body = new Graphics();
   // Передняя рука — ребёнок тела: зеркалится вместе с ним (`c.face`), а
   // поворачивается сама, вокруг плеча. Инструмент — ребёнок руки, виден только
@@ -3212,7 +3232,8 @@ function teachUnit(c, deltaMS) {
   }
   c.swaying = true;
   c.teachPhase =
-    (c.teachPhase ?? 0) + (deltaMS * Math.min(speed, TEACH_SPEED_CAP)) / 700;
+    (c.teachPhase ?? 0) +
+    (deltaMS * Math.min(speed, TEACH_SPEED_CAP) * (c.teachRate ?? 1)) / 700;
   c.body.rotation = Math.sin(c.teachPhase) * 0.1;
 }
 
@@ -4655,7 +4676,9 @@ function squadRow(node, n, m) {
       ? (RAID_PHASE[m.phase] ?? "в поле")
       : m.march
         ? "к шлюзу"
-        : "сбор";
+        : m.briefing
+          ? "брифинг"
+          : "сбор";
   // Подпись под полоской — **по какому делу**: заказ у занятого отряда, а у
   // того, что дома, — его состояние словом (правило повтора, пустой состав,
   // «ждут приказа»). У отряда дома заказа нет, и «—» на этом месте было бы
@@ -6589,6 +6612,7 @@ function nodeAt(tx, ty) {
 // разошлись бы на первой же правке.
 function gatherWord(m) {
   if (m.march) return "идут к шлюзу";
+  if (m.briefing) return "брифинг за столом";
   if (exits === 0) return "сели за стол, а шлюза нет";
   return "рассаживаются за столом";
 }

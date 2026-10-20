@@ -187,3 +187,32 @@ fn a_torn_down_table_disbands_the_gathering_squad() {
     assert_eq!(sim.raid_count(), 0);
     assert!(!sim.in_squad("a") && !sim.in_squad("b"));
 }
+
+/// Брифинг (§12.280): севший отряд сидит за столом `brief` тиков и только
+/// потом выбирает дверь. Дверь, выбранная раньше, звала бы к выходу посреди
+/// разговора.
+#[test]
+fn a_seated_squad_sits_through_the_briefing() {
+    let mut sim = hall();
+    sim.set_brief(SEAT, 20);
+    let def = sim.set_mission(2, 30, &[]);
+    assert!(sim.launch(def, squad(&["a", "b"])));
+
+    // Ждём, пока сядут все.
+    let mut sat_at = None;
+    for t in 0..200 {
+        sim.tick_n(1);
+        if sim.pos_of("a") == SEAT_A && sim.pos_of("b") == SEAT_B {
+            sat_at = Some(t);
+            break;
+        }
+    }
+    assert!(sat_at.is_some(), "так и не сели");
+
+    sim.tick_n(15);
+    assert_eq!(sim.mission_exit(), None, "брифинг ещё идёт");
+    assert_eq!(sim.pos_of("a"), SEAT_A, "и сидят на местах");
+
+    sim.tick_n(10);
+    assert_eq!(sim.mission_exit(), Some(NEAR), "отслушали — к шлюзу");
+}

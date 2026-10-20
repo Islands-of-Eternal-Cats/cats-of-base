@@ -657,6 +657,9 @@ pub(crate) struct MissionDto {
     pub(crate) node: (i32, i32),
     #[serde(default)]
     pub(crate) exit: Option<(i32, i32)>,
+    /// Сколько отряд уже просидел на брифинге (§12.280).
+    #[serde(default)]
+    pub(crate) brief: i32,
     pub(crate) left: i32,
     /// Набежавшая связь (§12.60). Состояние вылазки, а не правило: без него
     /// загруженная партия теряла бы накопленный бонус.
@@ -838,6 +841,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                     def: m.def,
                     node: m.node,
                     exit: m.exit,
+                    brief: m.brief,
                     left: m.left,
                     span: m.span,
                     covered: m.covered,
@@ -1352,6 +1356,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
                 def: m.def,
                 node: m.node,
                 exit: m.exit,
+                brief: m.brief,
                 left: m.left,
                 span: m.span,
                 site: m.site,

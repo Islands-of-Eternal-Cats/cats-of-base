@@ -636,15 +636,22 @@ pub(crate) fn gather_squad(
             mission.exit = nearest_exit(map, &tiles, node);
         }
 
-        // Все сели — пора к двери. «Все» — это весь состав: спящий в `squad`
-        // не попал, и пока он спит, `ids` длиннее.
+        // Все сели — брифинг, а за ним дверь (§12.280). «Все» — это весь
+        // состав: спящий в `squad` не попал, и пока он спит, `ids` длиннее.
+        // Встал кто-то посреди брифинга — счёт с нуля.
         if mission.exit.is_none() {
             let seated = squad
                 .iter()
                 .filter(|&&(_, rank, at, walking)| !walking && seat_of(&seats, rank) == Some(at))
                 .count();
             if seated == ids.len() && seated > 0 {
-                mission.exit = nearest_exit(map, &tiles, node);
+                if mission.brief >= tiles.brief_of(map.tile_at(node.0, node.1)) {
+                    mission.exit = nearest_exit(map, &tiles, node);
+                } else {
+                    mission.brief += 1;
+                }
+            } else {
+                mission.brief = 0;
             }
         }
 

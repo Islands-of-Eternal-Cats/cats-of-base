@@ -1592,6 +1592,7 @@ impl Sim {
                     heal: t.heal,
                     gate: t.gate,
                     muster: t.muster,
+                    brief: t.brief,
                     teaches: skill_index(&t.teaches),
                     lectern: t.lectern,
                     lab: t.lab,
@@ -3433,6 +3434,7 @@ impl Sim {
             def,
             node,
             exit: None,
+            brief: 0,
             site: aim,
             // Срок пока неизвестен: он зависит от того, сколько лап дойдёт до
             // шлюза, и замерзает в момент ухода (§12.70).
@@ -6028,6 +6030,7 @@ impl Sim {
                     size: rule.map_or(0, |r| r.squad),
                     away: mine().any(|&(_, _, away, ..)| away),
                     march: m.exit.is_some() && !mine().any(|&(_, _, away, ..)| away),
+                    briefing: m.exit.is_none() && m.brief > 0,
                     // Куда ушли (§12.199): цель заморожена в заявке, и по ней
                     // карта в штабе метит участок. `-1` — заказ без места.
                     site: m.site.map_or(-1, |s| s as i32),

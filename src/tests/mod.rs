@@ -217,6 +217,7 @@ fn sim_from(rows: &[&str]) -> Sim {
             heal: 0,
             gate: false,
             muster: false,
+            brief: 0,
             teaches: String::new(),
             lab: false,
             shop: false,
@@ -1907,6 +1908,12 @@ impl Sim {
     /// уходит через ближайший шлюз (`set_exit`).
     fn set_muster(&mut self, tile: i16, on: bool) {
         self.tile_rule(tile, |r| r.muster = on);
+    }
+
+    /// Сколько тиков отряд сидит за столом этого тайла, прежде чем встать
+    /// (§12.280). В схеме ноль — встают сразу.
+    fn set_brief(&mut self, tile: i16, ticks: i32) {
+        self.tile_rule(tile, |r| r.brief = ticks);
     }
 
     /// Сделать тайл шлюзом без места сбора (§12.279): дверь, но не отряд.
