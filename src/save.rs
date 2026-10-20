@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 46;
+pub(crate) const FORMAT: u32 = 47;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -574,6 +574,9 @@ pub(crate) struct StructureDto {
     pub(crate) def: usize,
     pub(crate) anchor: (i32, i32),
     pub(crate) rot: u8,
+    /// Порядок постановки (§12.284): по нему номера отрядов.
+    #[serde(default)]
+    pub(crate) serial: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -651,16 +654,22 @@ pub(crate) struct MissionDto {
     /// разобрался бы **молча и наполовину**: `node` пропал бы, а `gate` приехал
     /// бы `None`, то есть отряд без двери. Это и есть тот случай, ради которого
     /// `FORMAT` поднимают руками, — поднят до 26.
-    pub(crate) gate: (i32, i32),
-    /// Рация отряда (§12.276): слот и состав уехали с шлюза на неё. Без поля
-    /// старый снимок разобрался бы молча с отрядом без рации — `FORMAT` 45.
+    ///
+    /// С §12.279 поля снова два, но другие: `node` — место брифинга, держащее
+    /// слот, и `exit` — шлюз, выбранный, когда все сели. `FORMAT` поднят до 45.
     pub(crate) node: (i32, i32),
+    #[serde(default)]
+    pub(crate) exit: Option<(i32, i32)>,
+    /// Сколько отряд уже просидел на брифинге (§12.280).
+    #[serde(default)]
+    pub(crate) brief: i32,
     pub(crate) left: i32,
     /// Набежавшая связь (§12.60). Состояние вылазки, а не правило: без него
     /// загруженная партия теряла бы накопленный бонус.
     #[serde(default)]
     pub(crate) covered: i32,
-    /// Срезанные связью тики (§12.277). Поле прибавилось — `FORMAT` 46.
+    /// Срезанные связью тики (§12.277). Поле прибавилось — `FORMAT` 46; с
+    /// §12.285 `Posted` называет стол отряда, а не рацию, — `FORMAT` 47.
     #[serde(default)]
     pub(crate) saved: i32,
     /// Замороженный на уходе срок вылазки (§12.70). Состояние, а не правило:
@@ -806,6 +815,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                     def: s.def,
                     anchor: s.anchor,
                     rot: s.rot,
+                    serial: s.serial,
                 }),
                 stack: e.get::<Stack>().map(|s| (s.item, s.count)),
                 to_store: e.contains::<ToStore>(),
@@ -837,8 +847,9 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                 }),
                 mission: e.get::<Mission>().map(|m| MissionDto {
                     def: m.def,
-                    gate: m.gate,
                     node: m.node,
+                    exit: m.exit,
+                    brief: m.brief,
                     left: m.left,
                     span: m.span,
                     covered: m.covered,
@@ -1308,6 +1319,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
                 def: s.def,
                 anchor: s.anchor,
                 rot: s.rot,
+                serial: s.serial,
             });
         }
         if let Some((item, count)) = dto.stack {
@@ -1353,8 +1365,9 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
                 covered: m.covered,
                 saved: m.saved,
                 def: m.def,
-                gate: m.gate,
                 node: m.node,
+                exit: m.exit,
+                brief: m.brief,
                 left: m.left,
                 span: m.span,
                 site: m.site,

@@ -9,12 +9,13 @@
 
 use super::*;
 
-/// Мир: шлюз (тайл 1) в (2,1), узел связи (тайл 3) в (1,2) с силой `power`,
+/// Мир: место брифинга со шлюзом (тайл 1) в (2,1), рация (тайл 3) в (1,2) с силой `power`,
 /// коты `a`, `b`, `c` и вылазка на одного. Возвращает симуляцию и её индекс.
 fn sim_with_comms(power: i32, ticks: i32) -> (Sim, usize) {
     let mut sim = sim_from(&["#######", "#a.b.c#", "#.....#", "#######"]);
-    // Шлюз отдельно, отряд — на рации (§12.276), и радист ведёт именно его.
-    sim.set_exit(1, true);
+    // Отряд за столом-шлюзом (2,1), рация отдельно (§12.285): радист приписан
+    // к отряду, а садится за рацию.
+    sim.set_gate(1, true);
     sim.force_tile(2, 1, 1);
     sim.set_relay(3, true);
     sim.set_comms(3, power);
@@ -62,12 +63,12 @@ fn nobody_takes_the_radio_on_their_own() {
 #[test]
 fn one_node_holds_one_operator() {
     let (mut sim, m) = sim_with_comms(2, 200);
-    sim.post_relay("b", 1, 2);
+    sim.post_relay("b", 2, 1);
     sim.launch(m, squad(&["a"]));
     sim.tick_n(20);
     assert_eq!(sim.duty_of("b"), Some((1, 2)), "первый сел");
 
-    assert!(sim.post_relay("c", 1, 2), "игрок сажает другого");
+    assert!(sim.post_relay("c", 2, 1), "игрок сажает другого");
     assert_eq!(sim.post_of("b"), None, "прежняя приписка снята");
     assert_eq!(sim.duty_of("b"), None, "и рацию он оставил тем же тиком");
     sim.tick_n(10);
@@ -80,7 +81,7 @@ fn one_node_holds_one_operator() {
 #[test]
 fn a_node_without_comms_calls_nobody() {
     let (mut sim, m) = sim_with_comms(0, 60);
-    sim.post_relay("b", 1, 2);
+    sim.post_relay("b", 2, 1);
     sim.launch(m, squad(&["a"]));
     sim.tick_n(20);
 
@@ -93,7 +94,7 @@ fn a_node_without_comms_calls_nobody() {
 #[test]
 fn a_new_job_does_not_pull_the_operator_off() {
     let (mut sim, m) = sim_with_comms(2, 200);
-    sim.post_relay("b", 1, 2);
+    sim.post_relay("b", 2, 1);
     sim.launch(m, squad(&["a"]));
     sim.tick_n(20);
     assert_eq!(sim.duty_of("b"), Some((1, 2)), "связист сел");
@@ -109,7 +110,7 @@ fn a_new_job_does_not_pull_the_operator_off() {
 #[test]
 fn duty_ends_with_the_raid() {
     let (mut sim, m) = sim_with_comms(2, 20);
-    sim.post_relay("b", 1, 2);
+    sim.post_relay("b", 2, 1);
     sim.launch(m, squad(&["a"]));
     sim.tick_n(10);
     assert_eq!(sim.duty_of("b"), Some((1, 2)), "пока отряд в поле — сидит");
@@ -117,7 +118,7 @@ fn duty_ends_with_the_raid() {
 
     assert_eq!(sim.raid_left(m), None, "вылазка закрыта");
     assert_eq!(sim.duty_of("b"), None, "и связист встал от рации");
-    assert_eq!(sim.post_of("b"), Some((1, 2)), "приписка при этом цела");
+    assert_eq!(sim.post_of("b"), Some((2, 1)), "приписка при этом цела");
 }
 
 // --- сколько это даёт -------------------------------------------------------
@@ -127,7 +128,7 @@ fn duty_ends_with_the_raid() {
 #[test]
 fn full_duty_adds_the_node_power() {
     let (mut sim, m) = sim_with_comms(2, 30);
-    sim.post_relay("b", 1, 2);
+    sim.post_relay("b", 2, 1);
     sim.launch(m, squad(&["a"]));
     sim.tick_n(15);
 
@@ -142,7 +143,7 @@ fn comms_bring_the_squad_home_sooner() {
     let back_at = |power: i32| {
         let (mut sim, m) = sim_with_comms(power, 60);
         if power > 0 {
-            sim.post_relay("b", 1, 2);
+            sim.post_relay("b", 2, 1);
         }
         sim.launch(m, squad(&["a"]));
         let mut t = 0;
@@ -169,7 +170,7 @@ fn comms_never_cut_the_work() {
         let (mut sim, m) = sim_with_comms(power, 60);
         sim.set_mission_work(m, 200);
         if power > 0 {
-            sim.post_relay("b", 1, 2);
+            sim.post_relay("b", 2, 1);
         }
         sim.launch(m, squad(&["a"]));
         sim.tick_n(150);
@@ -186,7 +187,7 @@ fn comms_never_cut_the_work() {
 #[test]
 fn a_broken_link_keeps_what_it_earned() {
     let (mut sim, m) = sim_with_comms(4, 40);
-    sim.post_relay("b", 1, 2);
+    sim.post_relay("b", 2, 1);
     sim.launch(m, squad(&["a"]));
     sim.tick_n(20);
     let mid = sim.covered_of(m).expect("вылазка идёт");
@@ -203,18 +204,21 @@ fn a_broken_link_keeps_what_it_earned() {
 
 // --- связь именная (§12.278) -------------------------------------------------
 
-/// Мир: шлюз в (1,2), две рации — отряд 1 на (3,2) силой `p1`, отряд 2 на
-/// (5,2) силой `p2` — и коты `a`, `b`, `c`, `d`. Вылазки на одного.
+/// Мир: два места брифинга со шлюзом — отряд 1 в (1,2), отряд 2 в (2,2) —
+/// и две рации: (5,2) силой `p1` и (3,2) силой `p2`; коты `a`, `b`, `c`, `d`.
+/// Радист садится за ближайшую свободную рацию (§12.285), поэтому `c` из (5,1)
+/// займёт первую, а `d` из (7,1) — оставшуюся. Вылазки на одного.
 fn sim_with_two_radios(p1: i32, p2: i32, ticks: i32) -> (Sim, usize, usize) {
     let mut sim = sim_from(&["#########", "#a.b.c.d#", "#.......#", "#########"]);
-    sim.set_exit(1, true);
+    sim.set_gate(1, true);
     sim.force_tile(1, 2, 1);
+    sim.force_tile(2, 2, 1);
     sim.set_relay(3, true);
     sim.set_comms(3, p1);
-    sim.force_tile(3, 2, 3);
+    sim.force_tile(5, 2, 3);
     sim.set_relay(4, true);
     sim.set_comms(4, p2);
-    sim.force_tile(5, 2, 4);
+    sim.force_tile(3, 2, 4);
     let first = sim.set_mission(1, ticks, &[(0, 5)]);
     let second = sim.set_mission(1, ticks, &[(0, 5)]);
     (sim, first, second)
@@ -225,11 +229,11 @@ fn sim_with_two_radios(p1: i32, p2: i32, ticks: i32) -> (Sim, usize, usize) {
 #[test]
 fn an_operator_leads_only_his_own_squad() {
     let (mut sim, first, second) = sim_with_two_radios(2, 2, 200);
-    sim.enlist("a", 3, 2);
-    sim.enlist("b", 5, 2);
-    sim.post_relay("c", 3, 2);
-    assert!(sim.launch_node(first, 3, 2, -1));
-    assert!(sim.launch_node(second, 5, 2, -1));
+    sim.enlist("a", 1, 2);
+    sim.enlist("b", 2, 2);
+    sim.post_relay("c", 1, 2);
+    assert!(sim.launch_node(first, 1, 2, -1));
+    assert!(sim.launch_node(second, 2, 2, -1));
     sim.tick_n(40);
 
     assert!(sim.covered_of(first).unwrap_or(0) > 0, "свой отряд ускорен");
@@ -241,12 +245,12 @@ fn an_operator_leads_only_his_own_squad() {
 #[test]
 fn a_stronger_operator_leads_faster() {
     let (mut sim, first, second) = sim_with_two_radios(1, 3, 200);
-    sim.enlist("a", 3, 2);
-    sim.enlist("b", 5, 2);
-    sim.post_relay("c", 3, 2);
-    sim.post_relay("d", 5, 2);
-    sim.launch_node(first, 3, 2, -1);
-    sim.launch_node(second, 5, 2, -1);
+    sim.enlist("a", 1, 2);
+    sim.enlist("b", 2, 2);
+    sim.post_relay("c", 1, 2);
+    sim.post_relay("d", 2, 2);
+    sim.launch_node(first, 1, 2, -1);
+    sim.launch_node(second, 2, 2, -1);
     sim.tick_n(60);
 
     let weak = sim.covered_of(first).expect("первая идёт");
@@ -263,16 +267,16 @@ fn a_stronger_operator_leads_faster() {
 fn a_squad_waits_for_its_operator() {
     let (mut sim, first, _) = sim_with_two_radios(2, 2, 200);
     sim.set_needs(100, 30, 1);
-    sim.enlist("a", 3, 2);
-    sim.post_relay("d", 3, 2);
-    sim.set_energy("d", 10); // радист вымотан и ляжет спать
+    sim.enlist("a", 1, 2);
+    sim.post_relay("d", 1, 2);
+    sim.set_energy("d", 0); // радист валится с ног и спит, где стоял
     sim.tick_n(2);
-    assert!(sim.launch_node(first, 3, 2, -1), "заявка принята");
+    assert!(sim.launch_node(first, 1, 2, -1), "заявка принята");
     sim.tick_n(20);
 
     assert!(!sim.is_away("a"), "без радиста отряд дома");
     assert!(
-        sim.unfit_of(3, 2).contains(&"d".to_string()),
+        sim.unfit_of(1, 2).contains(&"d".to_string()),
         "и держит сбор радист"
     );
 }
@@ -282,14 +286,14 @@ fn a_squad_waits_for_its_operator() {
 #[test]
 fn operator_and_soldier_exclude_each_other() {
     let (mut sim, ..) = sim_with_two_radios(2, 2, 200);
-    sim.enlist("a", 3, 2);
-    sim.post_relay("a", 5, 2);
+    sim.enlist("a", 1, 2);
+    sim.post_relay("a", 2, 2);
     assert_eq!(sim.enlisted_at("a"), None, "радист не в отряде");
-    assert_eq!(sim.post_of("a"), Some((5, 2)));
+    assert_eq!(sim.post_of("a"), Some((2, 2)));
 
-    sim.enlist("a", 3, 2);
+    sim.enlist("a", 1, 2);
     assert_eq!(sim.post_of("a"), None, "боец не у рации");
-    assert_eq!(sim.enlisted_at("a"), Some((3, 2)));
+    assert_eq!(sim.enlisted_at("a"), Some((1, 2)));
 }
 
 /// Пустой эфир — законное состояние: вылазка уходит без бонуса, как уходила до
@@ -297,8 +301,8 @@ fn operator_and_soldier_exclude_each_other() {
 #[test]
 fn an_empty_ether_costs_nothing_but_the_bonus() {
     let (mut sim, m, _) = sim_with_two_radios(2, 2, 200);
-    sim.enlist("a", 3, 2);
-    sim.launch_node(m, 3, 2, -1);
+    sim.enlist("a", 1, 2);
+    sim.launch_node(m, 1, 2, -1);
     sim.tick_n(40);
 
     assert_eq!(sim.covered_of(m), Some(0), "связи нет, а вылазка идёт");
@@ -310,8 +314,8 @@ fn an_empty_ether_costs_nothing_but_the_bonus() {
 #[test]
 fn the_player_picks_the_operator() {
     let (mut sim, m) = sim_with_comms(2, 60);
-    assert!(sim.post_relay("c", 1, 2), "приписка принята");
-    assert_eq!(sim.post_of("c"), Some((1, 2)));
+    assert!(sim.post_relay("c", 2, 1), "приписка принята");
+    assert_eq!(sim.post_of("c"), Some((2, 1)));
 
     sim.launch(m, squad(&["a"]));
     sim.tick_n(20);
@@ -325,7 +329,7 @@ fn the_player_picks_the_operator() {
 #[test]
 fn a_posting_outlives_the_task() {
     let (mut sim, m) = sim_with_comms(2, 200);
-    sim.post_relay("c", 1, 2);
+    sim.post_relay("c", 2, 1);
     sim.launch(m, squad(&["a"]));
     sim.tick_n(20);
     assert_eq!(sim.duty_of("c"), Some((1, 2)));
@@ -333,7 +337,7 @@ fn a_posting_outlives_the_task() {
     // Приказ снимает дежурство — но не приписку.
     sim.set_target("c", 5, 1);
     assert_eq!(sim.duty_of("c"), None, "приказ увёл от рации");
-    assert_eq!(sim.post_of("c"), Some((1, 2)), "но приписка цела");
+    assert_eq!(sim.post_of("c"), Some((2, 1)), "но приписка цела");
 
     sim.tick_n(30);
     assert_eq!(sim.duty_of("c"), Some((1, 2)), "и кот вернулся сам");
@@ -344,7 +348,7 @@ fn a_posting_outlives_the_task() {
 #[test]
 fn unposting_frees_the_operator_at_once() {
     let (mut sim, m) = sim_with_comms(2, 200);
-    sim.post_relay("c", 1, 2);
+    sim.post_relay("c", 2, 1);
     sim.launch(m, squad(&["a"]));
     sim.tick_n(20);
     assert_eq!(sim.duty_of("c"), Some((1, 2)));
@@ -555,19 +559,28 @@ fn dismissing_touches_config_only() {
 
 // --- боевой рулсет ----------------------------------------------------------
 
-/// В `core.yaml` **построенная** рация работает: за ней сидят и она прибавляет
-/// отряду силы. Ловит рулсет, где тайл завели, а `comms` забыли, — то есть весь
+/// В `core.yaml` **построенная** рация работает: за ней сидят и она ускоряет
+/// отряд. Ловит рулсет, где тайл завели, а `comms` забыли, — то есть весь
 /// §12.60 молча выключен.
 ///
-/// С §12.276 она стоит в стартовой застройке: на ней живёт первый отряд.
+/// Строить её приходится прямо здесь: в стартовой застройке рации нет, отряд
+/// живёт за столом брифинга (§12.279), а радист приписан к отряду и садится за
+/// рацию, какую найдёт (§12.285).
 #[test]
 fn the_shipped_ruleset_puts_someone_on_the_radio() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
     sim.without_timeline();
     let relay = 11; // индекс `relay` в палитре тайлов
     assert!(sim.comms_of_tile(relay) > 0, "у рации есть сила связи");
-    // С §12.276 рация стоит в застройке: на ней живёт стартовый отряд.
-    let node = sim.node_cell().expect("рация на старте");
+    assert_eq!(sim.relay_count(), 0, "на старте её нет");
+
+    let radio = (8, 12);
+    sim.force_tile(radio.0, radio.1, relay);
+    let node = sim
+        .node_cells_of()
+        .first()
+        .copied()
+        .expect("стол на старте");
 
     // Сам по себе к рации никто не садится (§12.76) — связиста назначает игрок.
     assert!(sim.post_relay("sp3", node.0, node.1), "связист назначен");
@@ -577,7 +590,7 @@ fn the_shipped_ruleset_puts_someone_on_the_radio() {
     );
     sim.tick_n(60);
 
-    assert_eq!(sim.duty_of("sp3"), Some(node), "и дошёл до рации");
+    assert_eq!(sim.duty_of("sp3"), Some(radio), "и дошёл до рации");
 }
 
 /// Автовылазка в некомплекте не уходит (§12.70): кнопка ждать перестала, а
@@ -616,49 +629,35 @@ fn an_auto_raid_waits_for_the_whole_brigade() {
     assert!(sim.is_away("a") && sim.is_away("b"), "ушли полным составом");
 }
 
-/// Клик по рации приписывает связиста (§12.85) — то же правило, что у парты:
-/// клетка с ролью отвечает на приказ своей ролью. «Иди туда» на узле связи не
-/// значит ничего — кот постоит и уйдёт работать, а бонус связи не появится.
+/// Клик по рации — обычный приказ «иди туда» (§12.285): рация отрядом не
+/// владеет, и приписать по ней нельзя — неизвестно, к какому отряду. Радиста
+/// назначают в штабе, во вкладке своего отряда.
 #[test]
-fn an_order_onto_a_relay_node_posts_the_cat() {
-    let mut sim = sim_from(&["########", "#a....b#", "########"]);
-    sim.force_tile(3, 1, 1);
-    sim.set_relay(1, true);
-    sim.set_comms(1, 10);
-
-    assert!(sim.set_target("a", 3, 1), "приказ на рацию принят");
-    assert_eq!(sim.post_of("a"), Some((3, 1)), "и это приписка");
-}
-
-/// Клик по рации приписывает связиста **и** ведёт кота к ней сразу (§12.276):
-/// дома эфир пуст, и одна приписка не двигала кота вовсе — рация читалась
-/// непроходимой.
-#[test]
-fn ordering_onto_a_radio_posts_and_walks_there() {
+fn ordering_onto_a_radio_is_just_a_move() {
     let mut sim = sim_from(&["#######", "#a....#", "#######"]);
     sim.set_relay(1, true);
     sim.set_comms(1, 1);
     sim.force_tile(5, 1, 1);
 
     assert!(sim.set_target("a", 5, 1), "приказ принят");
-    assert_eq!(sim.post_of("a"), Some((5, 1)), "и связист приписан");
+    assert_eq!(sim.post_of("a"), None, "приписки по рации нет");
     sim.tick_n(30);
     assert_eq!(sim.pos_of("a"), (5, 1), "кот дошёл до рации");
 }
 
 /// Сел радист — отряд ушёл (§12.278): ждут ровно его посадки, не дольше, и
-/// уже на сборе радист сидит у рации своего отряда.
+/// уже на сборе радист сидит у рации.
 #[test]
 fn a_squad_leaves_once_its_operator_sits() {
     let (mut sim, first, _) = sim_with_two_radios(2, 2, 200);
-    sim.enlist("a", 3, 2);
-    sim.post_relay("d", 3, 2);
-    assert!(sim.launch_node(first, 3, 2, -1));
+    sim.enlist("a", 1, 2);
+    sim.post_relay("d", 1, 2);
+    assert!(sim.launch_node(first, 1, 2, -1));
     let mut t = 0;
     while !sim.is_away("a") {
         sim.tick_n(1);
         t += 1;
         assert!(t < 100, "отряд так и не ушёл");
     }
-    assert_eq!(sim.duty_of("d"), Some((3, 2)), "радист у своей рации");
+    assert_eq!(sim.duty_of("d"), Some((5, 2)), "радист у ближайшей рации");
 }

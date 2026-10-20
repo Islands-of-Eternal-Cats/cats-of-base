@@ -41,6 +41,10 @@ pub(crate) struct Plan {
     /// поставить поверх себя постройку — та заменила бы его на той же клетке, и
     /// постройка встала бы на пустоту.
     built: Vec<i16>,
+    /// Свободные слоты стоящих объектов (§12.283): `Some(тайл)` — клетку держит
+    /// объект, и тайл этот — чьё зонирование слот несёт (стол брифинга). Строить
+    /// на слоте нельзя, а соседям он шумит, как сам объект.
+    slots: Vec<Option<i16>>,
 }
 
 impl Plan {
@@ -67,10 +71,27 @@ impl Plan {
             height: map.height,
             cells,
             built: map.cells.clone(),
+            slots: vec![None; map.cells.len()],
         }
     }
 
-    fn tile_at(&self, x: i32, y: i32) -> i16 {
+    /// Отметить свободный слот объекта (§12.283): `zone` — тайл, чьё
+    /// зонирование он несёт.
+    pub(crate) fn reserve(&mut self, x: i32, y: i32, zone: i16) {
+        if x >= 0 && y >= 0 && x < self.width && y < self.height {
+            self.slots[(y * self.width + x) as usize] = Some(zone);
+        }
+    }
+
+    /// Чей слот эта клетка: тайл зонирования держащего объекта или `None`.
+    pub(crate) fn slot_at(&self, x: i32, y: i32) -> Option<i16> {
+        if x < 0 || y < 0 || x >= self.width || y >= self.height {
+            return None;
+        }
+        self.slots[(y * self.width + x) as usize]
+    }
+
+    pub(crate) fn tile_at(&self, x: i32, y: i32) -> i16 {
         if x < 0 || y < 0 || x >= self.width || y >= self.height {
             return -1;
         }
@@ -176,18 +197,32 @@ fn clash(rules: &TileRules, a: i16, b: i16) -> bool {
 ///
 /// Сноса это не касается по общему правилу нулей: у пустоты (`tile < 0`) все
 /// четыре свойства `false`.
+///
+/// Свободный слот объекта (§12.283) шумит соседям тем же, что сам объект: за
+/// столом брифинга сидят на слотах, и лежанка вплотную к ним — та же ошибка,
+/// что вплотную к столу.
 pub(crate) fn zoning_ok(plan: &Plan, rules: &TileRules, at: (i32, i32), tile: i16) -> bool {
-    RING.iter()
-        .all(|&(dx, dy)| !clash(rules, tile, plan.tile_at(at.0 + dx, at.1 + dy)))
+    RING.iter().all(|&(dx, dy)| {
+        let (x, y) = (at.0 + dx, at.1 + dy);
+        !clash(rules, tile, plan.tile_at(x, y))
+            && !plan
+                .slot_at(x, y)
+                .is_some_and(|zone| clash(rules, tile, zone))
+    })
 }
 
-/// Все ворота разметки разом: слой (§12.237), подход к полке (§12.111) и
-/// зонирование (§12.157).
+/// Все ворота разметки разом: свободный слот (§12.283), слой (§12.237),
+/// подход к полке (§12.111) и зонирование (§12.157).
 ///
 /// Одно выражение на всех потребителей — маску превью, `add_blueprint` и штамп.
 /// Разойдись они, маска покажет зелёной клетку, которую фасад отклонит.
+///
+/// На свободном слоте объекта не строится ничего (§12.283): он держит место
+/// работы. Сноса это не касается — снять пол под слотом законно, просто
+/// места за столом станет меньше.
 pub(crate) fn may_build(plan: &Plan, rules: &TileRules, at: (i32, i32), tile: i16) -> bool {
-    rules.rests_on(plan.built_at(at.0, at.1), tile)
+    (tile < 0 || plan.slot_at(at.0, at.1).is_none())
+        && rules.rests_on(plan.built_at(at.0, at.1), tile)
         && access_ok(plan, rules, at, tile)
         && zoning_ok(plan, rules, at, tile)
 }

@@ -954,24 +954,22 @@ fn the_shipped_ruleset_sends_a_squad_out_and_back() {
 /// выключена молча. Ровно этим сторож и полезен: правку `rect` в `build:`
 /// сделать легко, а увидеть её последствие — нет.
 ///
-/// С §12.276 рация в застройке **обязательна**: слот вылазки и состав живут на
-/// ней, и без неё база не выйдет в поле ни разу. Шлюз — одна клетка и
-/// неснимаемая: в палитре его нет, ластик его не берёт.
+/// Рации нет **намеренно**: слота она больше не держит, значит первая вылазка
+/// без неё уходит, — и разница «с рацией / без» стала тем, что игрок открывает
+/// сам. Вернуть её в `build:` легко и по привычке, поэтому и стережём.
 #[test]
 fn the_shipped_ruleset_starts_with_one_relay_node() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
     let relay = 11; // индекс `relay` в палитре тайлов
-    let garage = 3; // индекс `garage` (шлюза) в палитре тайлов
+    let garage = 3; // индекс `garage` в палитре тайлов
 
-    assert_eq!(sim.gate_count(), 1, "отряд один — рация одна клетка");
-    assert_eq!(sim.relay_count(), 1, "рация стоит с нулевого тика");
+    assert_eq!(sim.gate_count(), 1, "гараж — одна клетка, а не зал");
+    assert_eq!(sim.relay_count(), 0, "а рации на старте нет вовсе");
     assert_eq!(sim.tile_tech(relay), None, "рация технологией не закрыта");
-    assert_eq!(sim.tile_tech(garage), None, "и шлюз тоже");
-    let gate = sim.gate_cell().expect("шлюз в застройке");
-    assert!(!sim.plan_demolish(gate.0, gate.1), "шлюз не сносится");
+    assert_eq!(sim.tile_tech(garage), None, "и гараж тоже");
     assert!(
         sim.launch(0, squad(&["excellent", "sp2"])),
-        "первая вылазка доступна с первого тика",
+        "первая вылазка доступна с первого тика и без связи",
     );
 }
 
@@ -983,7 +981,7 @@ fn the_shipped_ruleset_starts_with_one_relay_node() {
 #[test]
 fn the_shipped_ruleset_starts_with_a_crew_in_the_garage() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
-    let node = sim.node_cell().expect("рация в застройке");
+    let node = *sim.node_cells_of().first().expect("гараж в застройке");
 
     assert_eq!(
         sim.roster_at(node.0, node.1).len(),
@@ -1656,34 +1654,4 @@ fn a_sleeping_squad_still_shows_its_full_strength() {
         "и панель называет его поимённо — тем же списком, каким гаснет кнопка",
     );
     assert_eq!(sim.raid_count(), 0, "правило ждёт");
-}
-
-/// Две рации — два отряда, а дверь одна (§12.276): оба собираются на
-/// единственном шлюзе и уходят разом, а слот вылазки держит каждая своя рация.
-#[test]
-fn two_radios_send_two_squads_through_one_gate() {
-    let mut sim = sim_from(&["#######", "#a.b.c#", "#.....#", "#######"]);
-    sim.set_exit(1, true);
-    sim.set_relay(2, true);
-    sim.force_tile(1, 2, 1); // шлюз
-    sim.force_tile(3, 2, 2); // первая рация
-    sim.force_tile(5, 2, 2); // вторая
-    let first = sim.set_mission(1, 40, &[(0, 5)]);
-    let second = sim.set_mission(1, 40, &[(0, 5)]);
-    sim.enlist("a", 3, 2);
-    sim.enlist("c", 5, 2);
-
-    assert_eq!(sim.gate_count(), 2, "отрядов столько, сколько раций");
-    assert!(sim.launch_node(first, 3, 2, -1));
-    assert!(sim.launch_node(second, 5, 2, -1));
-    assert!(!sim.launch_node(first, 1, 2, -1), "шлюз отряда не держит");
-    sim.tick_n(20);
-
-    assert!(
-        sim.is_away("a") && sim.is_away("c"),
-        "оба ушли через одну дверь"
-    );
-    assert_eq!(sim.mission_node(first), Some((3, 2)));
-    assert_eq!(sim.mission_node(second), Some((5, 2)));
-    assert_eq!(sim.mission_gate(), Some((1, 2)), "дверь у всех одна");
 }

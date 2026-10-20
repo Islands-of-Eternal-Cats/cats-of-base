@@ -32,14 +32,22 @@ pub(crate) struct Owners {
     width: i32,
     height: i32,
     cells: Vec<i32>,
+    /// Недостроен ли объект: хоть одна клетка штампа ещё не та, что в сетке
+    /// (§12.282). По номеру объекта, как `cells`.
+    unfinished: Vec<bool>,
+    /// Свободные слоты объекта (§12.283), по номеру объекта. Клеток карты они
+    /// объекту не отдают: пол под ними ничей, объект его только держит.
+    slots: Vec<Vec<(i32, i32)>>,
+    /// Порядок постановки объекта (§12.284), по номеру объекта.
+    serials: Vec<u32>,
 }
 
 /// Клетка ничьих объектов — сама себе слот.
 const NONE: i32 = -1;
 
 impl Owners {
-    /// Разметить карту по объектам. `list` — `(def, anchor, rot)` каждого
-    /// объекта в мире; номер объекта = его место в этом списке.
+    /// Разметить карту по объектам. `list` — `(def, anchor, rot, serial)`
+    /// каждого объекта в мире; номер объекта = его место в этом списке.
     ///
     /// Список приходит параметром, а не из мира: зовут это и системы (у них
     /// `Query`), и фасад (у него `World`), а второй способ узнать, где стоят
@@ -47,22 +55,32 @@ impl Owners {
     pub(crate) fn of(
         map: &BaseMap,
         rules: &StructureRules,
-        list: impl Iterator<Item = (usize, (i32, i32), u8)>,
+        list: impl Iterator<Item = (usize, (i32, i32), u8, u32)>,
     ) -> Self {
         let mut owners = Owners {
             width: map.width,
             height: map.height,
             cells: vec![NONE; (map.width * map.height) as usize],
+            unfinished: Vec::new(),
+            slots: Vec::new(),
+            serials: Vec::new(),
         };
-        for (n, (def, anchor, rot)) in list.enumerate() {
+        for (n, (def, anchor, rot, serial)) in list.enumerate() {
+            owners.serials.push(serial);
             let Some(rule) = rules.0.get(def) else {
+                owners.unfinished.push(false);
+                owners.slots.push(Vec::new());
                 continue;
             };
-            for ((x, y), _) in rule.stamp(anchor, rot) {
+            owners.slots.push(rule.slots_at(anchor, rot));
+            let mut unfinished = false;
+            for ((x, y), tile) in rule.stamp(anchor, rot) {
                 if let Some(i) = owners.index(x, y) {
                     owners.cells[i] = n as i32;
                 }
+                unfinished |= map.tile_at(x, y) != tile;
             }
+            owners.unfinished.push(unfinished);
         }
         owners
     }
@@ -74,6 +92,13 @@ impl Owners {
 
     fn at(&self, x: i32, y: i32) -> i32 {
         self.index(x, y).map_or(NONE, |i| self.cells[i])
+    }
+
+    /// Порядок постановки объекта, которому принадлежит клетка (§12.284);
+    /// `None` — клетка ничья.
+    pub(crate) fn serial_at(&self, x: i32, y: i32) -> Option<u32> {
+        let n = self.at(x, y);
+        (n != NONE).then(|| self.serials[n as usize])
     }
 
     /// Клетки объекта `n` в порядке обхода карты.
@@ -96,6 +121,9 @@ impl Owners {
 ///
 /// Клетка вне объекта даёт одно место — себя: она и есть объект из одной
 /// клетки, и лаборатория, выложенная рамкой, ведёт себя ровно как до §12.160.
+///
+/// У объекта со свободными слотами (§12.283) места — его слоты, на которых
+/// можно стоять: клетки роли там глухие (стол), а сидят вокруг.
 pub(crate) fn seats_at(
     map: &BaseMap,
     tiles: &TileRules,
@@ -111,6 +139,19 @@ pub(crate) fn seats_at(
     if owner == NONE {
         return if standable(at) { vec![at] } else { Vec::new() };
     }
+    // У объекта со свободными слотами места — **слоты** (§12.283): роль несёт
+    // сам объект (стол брифинга), а сидят вокруг него на полу.
+    let slots = &owners.slots[owner as usize];
+    if !slots.is_empty() {
+        return slots
+            .iter()
+            .copied()
+            .filter(|&(x, y)| {
+                let t = map.tile_at(x, y);
+                t >= 0 && !tiles.is_solid(t)
+            })
+            .collect();
+    }
     owners
         .cells_of(owner)
         .into_iter()
@@ -119,6 +160,9 @@ pub(crate) fn seats_at(
 }
 
 /// Клетки роли в порядке обхода карты, схлопнутые по объектам (§12.161).
+///
+/// Недостроенный объект слота не даёт вовсе (§12.282): пока хоть одна клетка
+/// штампа не та, что в сетке, его роли на карте ещё нет.
 ///
 /// От объекта в список попадает **первая** его клетка роли по тому же обходу,
 /// остальные не попадают вовсе. Порядок фиксирован, значит и номер отряда, и
@@ -144,6 +188,14 @@ pub(crate) fn slot_cells(
             if owner != NONE && !seen.insert(owner) {
                 continue; // этот объект уже дал свой слот
             }
+            // **Слот — достроенный объект** (§12.282). Клетки штампа строятся
+            // порознь, и дешёвые встают раньше дорогих: стулья места брифинга
+            // бесплатны, а стол ждёт деталь, — и недостроенный стол уже звал
+            // набирать отряд. То же у большой лаборатории: места без столов —
+            // не лаборатория.
+            if owner != NONE && owners.unfinished[owner as usize] {
+                continue;
+            }
             out.push((x, y));
         }
     }
@@ -157,5 +209,9 @@ pub(crate) fn owners_of(
     rules: &StructureRules,
     placed: &Query<&Structure>,
 ) -> Owners {
-    Owners::of(map, rules, placed.iter().map(|s| (s.def, s.anchor, s.rot)))
+    Owners::of(
+        map,
+        rules,
+        placed.iter().map(|s| (s.def, s.anchor, s.rot, s.serial)),
+    )
 }

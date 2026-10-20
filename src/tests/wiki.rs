@@ -380,7 +380,13 @@ fn open_at_start(rs: &Ruleset, key: &str) -> bool {
         "structure" => rs.structures.iter().any(|s| {
             s.id == id
                 && s.tech.is_empty()
-                && s.cells.iter().flatten().flatten().all(|c| tile_free(c))
+                && s.cells
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    // Свободный слот (§12.283) — не тайл: штамп его не строит.
+                    .filter(|c| c.as_str() != crate::ruleset::SLOT)
+                    .all(|c| tile_free(c))
         }),
         // Предмет открывается находкой: с нулевого тика видно стартовый запас и
         // то, что надето на стартовых котах. Непонятый — только короткой версией,

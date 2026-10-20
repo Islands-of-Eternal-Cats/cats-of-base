@@ -151,30 +151,29 @@ pub(crate) fn assign_relay(
         ),
     >,
 ) {
-    // Кому помогать (§12.278): связь именная, поэтому рация нужна, только
-    // пока у **её** отряда есть вылазка (`Mission::node`, §12.276) — и уже на
-    // сборе: отряд ждёт своего радиста у рации и без него не уходит.
+    // Кому помогать (§12.278, §12.285): связь именная — радист приписан к
+    // **столу** отряда и нужен, только пока у этого отряда есть вылазка, уже
+    // на сборе: отряд ждёт своего радиста и без него не уходит.
     let away_nodes: Vec<(i32, i32)> = missions.iter().map(|(_, m)| m.node).collect();
 
     // Рации, на которых дежурство **что-то даёт**. Нулевой `comms` значит
     // «дежурить незачем», и кота сюда не зовут: гонять его к рации, от которой
     // нет пользы, — это отнятое котовремя без отдачи. Тем же нулём механика
     // выключена в синтетических схемах, как выключены навыки, рынок и цели.
-    let wanted: Vec<(i32, i32)> = relay_cells(&map, &tiles)
-        .filter(|&(x, y)| tiles.comms_of(map.tile_at(x, y)) > 0 && away_nodes.contains(&(x, y)))
+    // Рация отрядом не владеет (§12.285): радист садится за любую свободную.
+    let radios: Vec<(i32, i32)> = relay_cells(&map, &tiles)
+        .filter(|&(x, y)| tiles.comms_of(map.tile_at(x, y)) > 0)
         .collect();
 
-    // Кто сидит зря: в поле не осталось ни одной вылазки, узел снесли или
-    // приписку сняли (в том числе перенесли на другой узел — тогда кот встаёт
-    // здесь и идёт туда).
-    // Снимаем сразу — это и есть конец задачи, второго места для него заводить
-    // не надо. С §12.76 `Posted` — единственная причина сидеть у рации, поэтому
-    // она же и единственный признак «сидит по делу».
+    // Кто сидит зря: вылазки его отряда больше нет, рацию снесли или приписку
+    // сняли. Снимаем сразу — это и есть конец задачи, второго места для него
+    // заводить не надо. С §12.76 `Posted` — единственная причина сидеть у
+    // рации, поэтому она же и единственный признак «сидит по делу».
     let mut evicted: Vec<Entity> = Vec::new();
     for (cat_e, duty, post) in &posted {
-        let gone = !tiles.is_relay_node(map.tile_at(duty.spot.0, duty.spot.1));
-        let mine = post.is_some_and(|p| p.spot == duty.spot);
-        if !wanted.contains(&duty.spot) || gone || !mine {
+        let gone = !radios.contains(&duty.spot);
+        let needed = post.is_some_and(|p| away_nodes.contains(&p.spot));
+        if gone || !needed {
             commands.entity(cat_e).remove::<OnDuty>();
             evicted.push(cat_e);
         }
@@ -182,39 +181,38 @@ pub(crate) fn assign_relay(
 
     let taken: Vec<(i32, i32)> = posted
         .iter()
-        .filter(|(e, d, _)| wanted.contains(&d.spot) && !evicted.contains(e))
+        .filter(|(e, ..)| !evicted.contains(e))
         .map(|(_, d, _)| d.spot)
         .collect();
-    let mut open: Vec<(i32, i32)> = wanted
+    let mut open: Vec<(i32, i32)> = radios
         .iter()
         .copied()
         .filter(|spot| !taken.contains(spot))
         .collect();
-    open.sort_unstable_by_key(|&(x, y)| (y, x));
     if open.is_empty() {
         return;
     }
 
-    // Приписанные, по `id`: порядок значим только при двух приписках к одному
-    // узлу — сама команда такого не оставляет (`post_relay` снимает прежнюю
-    // приписку к этой рации), но снимок из чужой партии мог бы.
+    // Приписанные, по `id` (инвариант 9): первым выбирает рацию тот, кто
+    // раньше по `id`, а ближайшую — по дороге (§12.14).
     let mut idle: Vec<(&str, Entity, (i32, i32), (i32, i32))> = free_cats
         .iter()
+        .filter(|(.., post)| away_nodes.contains(&post.spot))
         .map(|(e, id, p, post)| (id.0.as_str(), e, (p.x, p.y), post.spot))
         .collect();
     idle.sort_unstable_by_key(|&(id, ..)| id);
 
-    for (_, cat_e, at, spot) in idle {
+    for (_, cat_e, at, _) in idle {
         if open.is_empty() {
             return;
         }
         let reach = Reach::all(&map, &tiles, at);
-        // Приписанный идёт только на свой узел: сажать его к чужой рации значило
-        // бы отменить решение игрока молча.
         let picked = open
             .iter()
-            .position(|&s| s == spot && reach.dist_at(s.0, s.1).is_some());
-        let Some(i) = picked else { continue };
+            .enumerate()
+            .filter_map(|(i, s)| reach.dist_at(s.0, s.1).map(|d| (d, s.1, s.0, i)))
+            .min();
+        let Some((.., i)) = picked else { continue };
         let spot = open.remove(i);
         let path = reach.path_to(spot.0, spot.1).unwrap_or_default();
         commands

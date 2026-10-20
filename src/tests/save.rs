@@ -111,7 +111,7 @@ fn state_of(sim: &Sim) -> String {
             ));
         }
         if let Some(m) = e.get::<Mission>() {
-            p.push(format!("mission={},{:?},{}", m.def, m.gate, m.left));
+            p.push(format!("mission={},{:?},{}", m.def, m.node, m.left));
         }
         // Вид задачи, но не её адресат: «строит» переживает загрузку, а номер
         // чертежа — нет и не должен.

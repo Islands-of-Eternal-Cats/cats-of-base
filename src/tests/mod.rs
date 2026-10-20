@@ -22,6 +22,7 @@ mod items;
 mod jobs;
 mod layers;
 mod missions;
+mod muster;
 mod needs;
 mod news;
 mod orders;
@@ -215,7 +216,8 @@ fn sim_from(rows: &[&str]) -> Sim {
             wake: 0,
             heal: 0,
             gate: false,
-            fixed: false,
+            muster: false,
+            brief: 0,
             teaches: String::new(),
             lab: false,
             shop: false,
@@ -600,9 +602,32 @@ impl Sim {
         let mut rules = self.world.resource_mut::<StructureRules>();
         rules.0.push(StructureRule {
             cells,
+            slots: Vec::new(),
             tech: String::new(),
         });
         rules.0.len() - 1
+    }
+
+    /// Поставить штамп **готовым**, мимо стройки: тайлы сразу на карте, объект
+    /// сразу в мире. Тот же путь, каким рулсет ставит стартовый стол (§12.279).
+    fn force_structure(&mut self, def: usize, x: i32, y: i32) {
+        let cells = self.world.resource::<StructureRules>().0[def].stamp((x, y), 0);
+        for ((cx, cy), tile) in cells {
+            self.force_tile(cx, cy, tile);
+        }
+        let serial = self.next_serial();
+        self.world.spawn(Structure {
+            def,
+            anchor: (x, y),
+            rot: 0,
+            serial,
+        });
+    }
+
+    /// Дать штампу свободные слоты (§12.283): `(col, row)` клеток сетки, которые
+    /// он не строит, а держит свободными. В `set_structure` их нет.
+    fn set_structure_slots(&mut self, def: usize, slots: &[(i32, i32)]) {
+        self.world.resource_mut::<StructureRules>().0[def].slots = slots.to_vec();
     }
 
     /// Закрыть штамп технологией (§12.160). Ворота свои, сверх ворот тайлов.
@@ -630,9 +655,9 @@ impl Sim {
     /// счётность с пустой разметкой значило бы проверять не то, что в игре.
     fn owners_now(&mut self) -> crate::slots::Owners {
         let mut q = self.world.query::<&Structure>();
-        let list: Vec<(usize, (i32, i32), u8)> = q
+        let list: Vec<(usize, (i32, i32), u8, u32)> = q
             .iter(&self.world)
-            .map(|s| (s.def, s.anchor, s.rot))
+            .map(|s| (s.def, s.anchor, s.rot, s.serial))
             .collect();
         crate::slots::Owners::of(
             self.world.resource::<BaseMap>(),
@@ -1875,20 +1900,32 @@ impl Sim {
         }
     }
 
-    /// Сделать тайл шлюзом **и рацией разом**: отсюда отряд уходит на миссию,
-    /// сюда возвращается, и здесь же он приписан (§12.276).
+    /// Сделать тайл шлюзом: отсюда отряд уходит на миссию и сюда возвращается.
     ///
-    /// С §12.276 дверь и отряд — разные клетки (шлюз один, отрядов столько,
-    /// сколько раций), но тестам вылазок различие — шум: схема с одной такой
-    /// клеткой ведёт себя ровно как до §12.276. Развести их — `set_exit`.
+    /// С §12.279 отряд держит место брифинга, а шлюз — только дверь. Тайл здесь
+    /// становится **и тем и другим**: место брифинга из одной клетки, которое само
+    /// же и дверь, — то есть ровно гараж до §12.279, и тесты вылазок не знают о
+    /// рассадке. Раздельные стол и шлюз ставит `set_muster`.
     fn set_gate(&mut self, tile: i16, on: bool) {
         self.tile_rule(tile, |r| {
             r.gate = on;
-            r.relay = on;
+            r.muster = on;
         });
     }
 
-    /// Сделать тайл только шлюзом — дверью без отряда (§12.276).
+    /// Сделать тайл местом сбора без двери (§12.279): здесь отряд садится, а
+    /// уходит через ближайший шлюз (`set_exit`).
+    fn set_muster(&mut self, tile: i16, on: bool) {
+        self.tile_rule(tile, |r| r.muster = on);
+    }
+
+    /// Сколько тиков отряд сидит за столом этого тайла, прежде чем встать
+    /// (§12.280). В схеме ноль — встают сразу.
+    fn set_brief(&mut self, tile: i16, ticks: i32) {
+        self.tile_rule(tile, |r| r.brief = ticks);
+    }
+
+    /// Сделать тайл шлюзом без места брифинга (§12.279): дверь, но не отряд.
     fn set_exit(&mut self, tile: i16, on: bool) {
         self.tile_rule(tile, |r| r.gate = on);
     }
@@ -2287,23 +2324,6 @@ impl Sim {
             self.world.resource::<Blights>(),
             site,
         )
-    }
-
-    /// Первый гараж по обходу карты — тот же, что берёт `launch` без узла.
-    /// Первая рация по обходу — клетка первого отряда (§12.276).
-    fn node_cell(&mut self) -> Option<(i32, i32)> {
-        self.node_cells_of().first().copied()
-    }
-
-    fn gate_cell(&mut self) -> Option<(i32, i32)> {
-        let owners = self.owners();
-        crate::missions::gate_cells(
-            self.world.resource::<BaseMap>(),
-            self.world.resource::<TileRules>(),
-            &owners,
-        )
-        .first()
-        .copied()
     }
 
     /// Кто на базе, по `id` и по алфавиту — порядок обхода ECS недетерминирован.
@@ -2963,10 +2983,17 @@ impl Sim {
         Some(crate::missions::phase(travel, span, left).tag())
     }
 
-    /// Гараж миссии; `None` — миссии нет.
+    /// Место брифинга миссии; `None` — миссии нет.
     fn mission_gate(&mut self) -> Option<(i32, i32)> {
         let mut q = self.world.query::<&Mission>();
-        q.iter(&self.world).next().map(|m| m.gate)
+        q.iter(&self.world).next().map(|m| m.node)
+    }
+
+    /// Шлюз, выбранный отрядом (§12.279); `None` — миссии нет или отряд ещё
+    /// рассаживается.
+    fn mission_exit(&mut self) -> Option<(i32, i32)> {
+        let mut q = self.world.query::<&Mission>();
+        q.iter(&self.world).next().and_then(|m| m.exit)
     }
 
     /// Рация, которая держит слот вылазки по этому заказу (§12.276).
