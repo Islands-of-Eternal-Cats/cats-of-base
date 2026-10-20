@@ -994,9 +994,9 @@ impl Sim {
     /// «как будет» по чертежам, этот — «чьё это» по штампам.
     pub(crate) fn owners(&mut self) -> Owners {
         let mut q = self.world.query::<&Structure>();
-        let list: Vec<(usize, (i32, i32), u8)> = q
+        let list: Vec<(usize, (i32, i32), u8, u32)> = q
             .iter(&self.world)
-            .map(|s| (s.def, s.anchor, s.rot))
+            .map(|s| (s.def, s.anchor, s.rot, s.serial))
             .collect();
         Owners::of(
             self.world.resource::<BaseMap>(),
@@ -1678,7 +1678,7 @@ impl Sim {
         // Стартовые объекты-штампы (§12.279) — после правил штампов, потому
         // что сетку берут у них, и поверх прямоугольников застройки. Ставятся
         // готовыми, как и вся стартовая застройка: это уже стоящая база.
-        for b in rs.build.iter().filter(|b| !b.structure.is_empty()) {
+        for (serial, b) in (1..).zip(rs.build.iter().filter(|b| !b.structure.is_empty())) {
             let Some(def) = rs.structures.iter().position(|d| d.id == b.structure) else {
                 continue;
             };
@@ -1692,6 +1692,7 @@ impl Sim {
                 def,
                 anchor,
                 rot: 0,
+                serial,
             });
         }
         world.insert_resource(ResearchRules(
@@ -2753,12 +2754,22 @@ impl Sim {
                 delivered: Vec::new(),
             });
         }
+        let serial = self.next_serial();
         self.world.spawn(Structure {
             def: d,
             anchor: (x, y),
             rot,
+            serial,
         });
         true
+    }
+
+    /// Следующий порядковый номер постановки (§12.284): после наибольшего из
+    /// стоящих объектов. Счётчика-ресурса нет — номер едет в снимке у самого
+    /// объекта, и второй источник «сколько поставлено» разошёлся бы с миром.
+    pub(crate) fn next_serial(&mut self) -> u32 {
+        let mut q = self.world.query::<&Structure>();
+        q.iter(&self.world).map(|s| s.serial).max().unwrap_or(0) + 1
     }
 
     /// Штамп, которому принадлежит клетка: `(сущность, его клетки)`.
@@ -4104,10 +4115,19 @@ impl Sim {
     /// строки. Это та же оговорка, из-за которой §12.65 пришлось убирать заказ
     /// снятого порога: у быстрого выхода обязана быть уборка.
     fn run_auto_raids(&mut self) {
-        let rules = self.world.resource::<AutoRaids>().0.clone();
+        let mut rules = self.world.resource::<AutoRaids>().0.clone();
         if rules.is_empty() {
             return;
         }
+        // Очередь — в порядке отрядов (§12.284): два отряда на одном заказе
+        // уходят по номерам, а не по тому, кто выше на карте.
+        let order = self.node_cells_of();
+        rules.sort_by_key(|&(x, y, ..)| {
+            order
+                .iter()
+                .position(|&c| c == (x, y))
+                .unwrap_or(usize::MAX)
+        });
         for (x, y, def, on) in rules {
             if !self.is_node_at(x, y) {
                 self.world.resource_mut::<AutoRaids>().clear(x, y);

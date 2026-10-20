@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 45;
+pub(crate) const FORMAT: u32 = 46;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -574,6 +574,9 @@ pub(crate) struct StructureDto {
     pub(crate) def: usize,
     pub(crate) anchor: (i32, i32),
     pub(crate) rot: u8,
+    /// Порядок постановки (§12.284): по нему номера отрядов.
+    #[serde(default)]
+    pub(crate) serial: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -808,6 +811,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                     def: s.def,
                     anchor: s.anchor,
                     rot: s.rot,
+                    serial: s.serial,
                 }),
                 stack: e.get::<Stack>().map(|s| (s.item, s.count)),
                 to_store: e.contains::<ToStore>(),
@@ -1310,6 +1314,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
                 def: s.def,
                 anchor: s.anchor,
                 rot: s.rot,
+                serial: s.serial,
             });
         }
         if let Some((item, count)) = dto.stack {

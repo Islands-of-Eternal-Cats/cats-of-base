@@ -38,14 +38,16 @@ pub(crate) struct Owners {
     /// Свободные слоты объекта (§12.283), по номеру объекта. Клеток карты они
     /// объекту не отдают: пол под ними ничей, объект его только держит.
     slots: Vec<Vec<(i32, i32)>>,
+    /// Порядок постановки объекта (§12.284), по номеру объекта.
+    serials: Vec<u32>,
 }
 
 /// Клетка ничьих объектов — сама себе слот.
 const NONE: i32 = -1;
 
 impl Owners {
-    /// Разметить карту по объектам. `list` — `(def, anchor, rot)` каждого
-    /// объекта в мире; номер объекта = его место в этом списке.
+    /// Разметить карту по объектам. `list` — `(def, anchor, rot, serial)`
+    /// каждого объекта в мире; номер объекта = его место в этом списке.
     ///
     /// Список приходит параметром, а не из мира: зовут это и системы (у них
     /// `Query`), и фасад (у него `World`), а второй способ узнать, где стоят
@@ -53,7 +55,7 @@ impl Owners {
     pub(crate) fn of(
         map: &BaseMap,
         rules: &StructureRules,
-        list: impl Iterator<Item = (usize, (i32, i32), u8)>,
+        list: impl Iterator<Item = (usize, (i32, i32), u8, u32)>,
     ) -> Self {
         let mut owners = Owners {
             width: map.width,
@@ -61,8 +63,10 @@ impl Owners {
             cells: vec![NONE; (map.width * map.height) as usize],
             unfinished: Vec::new(),
             slots: Vec::new(),
+            serials: Vec::new(),
         };
-        for (n, (def, anchor, rot)) in list.enumerate() {
+        for (n, (def, anchor, rot, serial)) in list.enumerate() {
+            owners.serials.push(serial);
             let Some(rule) = rules.0.get(def) else {
                 owners.unfinished.push(false);
                 owners.slots.push(Vec::new());
@@ -88,6 +92,13 @@ impl Owners {
 
     fn at(&self, x: i32, y: i32) -> i32 {
         self.index(x, y).map_or(NONE, |i| self.cells[i])
+    }
+
+    /// Порядок постановки объекта, которому принадлежит клетка (§12.284);
+    /// `None` — клетка ничья.
+    pub(crate) fn serial_at(&self, x: i32, y: i32) -> Option<u32> {
+        let n = self.at(x, y);
+        (n != NONE).then(|| self.serials[n as usize])
     }
 
     /// Клетки объекта `n` в порядке обхода карты.
@@ -198,5 +209,9 @@ pub(crate) fn owners_of(
     rules: &StructureRules,
     placed: &Query<&Structure>,
 ) -> Owners {
-    Owners::of(map, rules, placed.iter().map(|s| (s.def, s.anchor, s.rot)))
+    Owners::of(
+        map,
+        rules,
+        placed.iter().map(|s| (s.def, s.anchor, s.rot, s.serial)),
+    )
 }

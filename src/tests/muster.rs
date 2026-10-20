@@ -347,3 +347,24 @@ fn tearing_down_the_table_frees_its_slots() {
     sim.tick_n(1); // `prune_structures` снимает объект
     assert!(sim.add_blueprint(3, 1, i32::from(OTHER)));
 }
+
+/// Номер отряда держится за отрядом, а не за местом на карте (§12.284): стол,
+/// поставленный выше стартового, становится вторым, а не первым, — и порядок
+/// переживает сохранение, потому что едет у самого объекта.
+#[test]
+fn a_new_table_takes_the_next_number_wherever_it_stands() {
+    let yaml = include_str!("../../assets/rulesets/core.yaml");
+    let mut sim = Sim::new(yaml).expect("рулсет");
+    let start = *sim.node_cells_of().first().expect("стартовый стол");
+    let def = sim.structure_index("muster").expect("место брифинга");
+    // Северная комната — выше стартовой: по обходу карты он встал бы первым.
+    sim.force_structure(def, 4, 2);
+    let order = sim.node_cells_of();
+    assert_eq!(order.len(), 2);
+    assert_eq!(order[0], start, "стартовый отряд остался первым");
+    assert!(order[1].1 < start.1, "второй стоит выше, а номер у него второй");
+
+    let saved = sim.save().expect("снимок");
+    let mut loaded = Sim::load(yaml, &saved).expect("загрузка");
+    assert_eq!(loaded.node_cells_of(), order, "порядок пережил сохранение");
+}

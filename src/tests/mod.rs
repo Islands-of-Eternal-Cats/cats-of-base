@@ -615,10 +615,12 @@ impl Sim {
         for ((cx, cy), tile) in cells {
             self.force_tile(cx, cy, tile);
         }
+        let serial = self.next_serial();
         self.world.spawn(Structure {
             def,
             anchor: (x, y),
             rot: 0,
+            serial,
         });
     }
 
@@ -653,9 +655,9 @@ impl Sim {
     /// счётность с пустой разметкой значило бы проверять не то, что в игре.
     fn owners_now(&mut self) -> crate::slots::Owners {
         let mut q = self.world.query::<&Structure>();
-        let list: Vec<(usize, (i32, i32), u8)> = q
+        let list: Vec<(usize, (i32, i32), u8, u32)> = q
             .iter(&self.world)
-            .map(|s| (s.def, s.anchor, s.rot))
+            .map(|s| (s.def, s.anchor, s.rot, s.serial))
             .collect();
         crate::slots::Owners::of(
             self.world.resource::<BaseMap>(),
