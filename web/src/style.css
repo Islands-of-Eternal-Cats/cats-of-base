@@ -210,7 +210,11 @@ main#stage::before {
   inset: 0;
   pointer-events: none;
   z-index: 1;
-  background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+  background: radial-gradient(
+    ellipse at 50% 45%,
+    transparent 55%,
+    rgba(0, 0, 0, 0.55) 100%
+  );
 }
 main#stage canvas {
   display: block;
@@ -2859,6 +2863,19 @@ main#stage.mode-cursor #mode-banner {
   border-left: 2px solid var(--accent);
   color: var(--muted);
   font-style: italic;
+}
+/* «Отряд N» в панели стола брифинга — ссылка в штаб, не кнопка-плашка. */
+.squad-open {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+.squad-open:hover {
+  text-decoration: underline;
 }
 /* Ссылка внутри текста — не кнопка-плашка: она стоит в строке и не должна
    рвать абзац на куски. */
