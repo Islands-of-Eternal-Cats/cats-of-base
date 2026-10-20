@@ -6,14 +6,15 @@
 //! исход, а всё остальное на базе одинаково выполнимо любым котом (§12.16).
 //!
 //! Систем две:
-//!   * `gather_squad` — держит выбранный отряд идущим к шлюзу, переживая
-//!     изменения карты. Состав не трогает: заменить выбывшего некем.
+//!   * `gather_squad` — рассаживает выбранный отряд за столом места сбора,
+//!     а собравшийся ведёт к ближайшему шлюзу (§12.279), переживая изменения
+//!     карты. Состав не трогает: заменить выбывшего некем.
 //!   * `run_missions` — отправляет собравшийся отряд, крутит таймер, считает
 //!     исход и возвращает котов с добычей.
 //!
 //! Отдельного состояния «фаза миссии» нет, как его нет у `Haul` и `Rest`: где
-//! отряд, видно по компонентам. `Squad` с маршрутом — кот идёт к шлюзу,
-//! `Squad` без маршрута на шлюзе — ждёт остальных, `Away` — ушёл.
+//! отряд, видно по компонентам и по `Mission::exit`. Двери нет — отряд
+//! рассаживается за столом; дверь выбрана — идёт к ней; `Away` — ушёл.
 //!
 //! **Добыча ложится кучей на шлюз**, а не в лапы котам: кот везёт один тип за
 //! ходку (§12.21), а добыча бывает набором. Дальше её разносит обычная уборка
@@ -34,15 +35,53 @@ use crate::path::find_path;
 use crate::relay::{duty_gain, relay_force};
 use crate::sites::stage_danger;
 use crate::skills::{SKILL_RAID, SKILL_RELAY, level_of};
-use crate::slots::{Owners, slot_cells};
+use crate::slots::{Owners, owners_of, seats_at, slot_cells};
 
-/// Все клетки-шлюзы карты, в порядке обхода: он фиксирован, значит и номер
-/// отряда, и очередь заявок детерминированы (§11).
+/// Места сбора, схлопнутые по объектам, в порядке обхода карты: он
+/// фиксирован, значит и номер отряда, и очередь заявок детерминированы (§11).
 ///
-/// С §12.152 это же список **отрядов**: гараж держит состав и слот вылазки, —
-/// поэтому список нужен и фасаду, а не только счёту внутри модуля.
-pub(crate) fn gate_cells(map: &BaseMap, rules: &TileRules, owners: &Owners) -> Vec<(i32, i32)> {
-    slot_cells(map, rules, owners, TileRules::is_gate)
+/// С §12.279 это список **отрядов**: стол держит состав и слот вылазки, а
+/// шлюз остаётся дверью. До неё ту же роль нёс гараж (§12.152), и дверь,
+/// слот и состав жили на одной клетке.
+pub(crate) fn node_cells(map: &BaseMap, rules: &TileRules, owners: &Owners) -> Vec<(i32, i32)> {
+    slot_cells(map, rules, owners, TileRules::is_muster)
+}
+
+/// Все шлюзы карты поклеточно, в порядке обхода (§12.279). Слотом шлюз больше
+/// не считается — это дверь, и сколько их, столько и выходов, — поэтому
+/// объекты здесь не схлопываются.
+pub(crate) fn exit_cells(map: &BaseMap, rules: &TileRules) -> Vec<(i32, i32)> {
+    (0..map.height)
+        .flat_map(|y| (0..map.width).map(move |x| (x, y)))
+        .filter(|&(x, y)| rules.is_gate(map.tile_at(x, y)))
+        .collect()
+}
+
+/// Ближайший достижимый шлюз от клетки (§12.279): по длине маршрута, при
+/// равенстве — первый по обходу карты (§11).
+///
+/// Это возвращение `pick_gate`, удалённого §12.152, — но довод против него
+/// больше не работает. Тогда отряд был приписан к двери, и подменить её значило
+/// отменить решение игрока молча; с §12.279 он приписан к столу, а дверь —
+/// просто проход, выбор которого игроку не принадлежит.
+pub(crate) fn nearest_exit(
+    map: &BaseMap,
+    rules: &TileRules,
+    from: (i32, i32),
+) -> Option<(i32, i32)> {
+    exit_cells(map, rules)
+        .into_iter()
+        .filter_map(|cell| find_path(map, rules, from, cell).map(|p| (p.len(), cell)))
+        .min_by_key(|&(len, (x, y))| (len, y, x))
+        .map(|(_, cell)| cell)
+}
+
+/// Чьё место за столом (§12.279): `rank` — номер кота в отряде по `id`, места
+/// — проходимые клетки роли объекта (`seats_at`). Котов больше, чем мест, —
+/// лишние садятся по кругу на уже занятые: отказывать в сборе из-за стульев
+/// значило бы завести второй предел состава рядом с вилкой заказа (§12.70).
+pub(crate) fn seat_of(seats: &[(i32, i32)], rank: usize) -> Option<(i32, i32)> {
+    (!seats.is_empty()).then(|| seats[rank % seats.len()])
 }
 
 /// Чем кончится вылазка. Считается и на конце работы (§12.244), и каждый кадр для панели:
@@ -502,20 +541,38 @@ pub(crate) fn outcome(danger: i32, strength: i32) -> Outcome {
     }
 }
 
-/// Держит выбранный игроком отряд идущим к шлюзу.
+/// Держит выбранный игроком отряд идущим к месту сбора, а собравшийся — к шлюзу.
 ///
 /// Состав здесь не трогается: его назначил `Sim::launch` в момент заявки, и
 /// заменить выбывшего некем — это выбор игрока, а не раздача работы (§12.23).
 /// Система нужна ровно для того, чтобы маршрут переживал изменения карты:
 /// шлюз снесли, кота выбросило из ямы, боец проснулся после истощения.
 /// Тот же случай, что `retry_orders` у приказа игрока.
+///
+/// **Сбор идёт в два шага** (§12.279). Сначала каждый садится на своё место
+/// за столом (`seat_of`); когда сели **все** — спящий и раненый держат сбор,
+/// как держали его у гаража (§12.191), — выбирается ближайший к столу шлюз, и
+/// отряд идёт к нему. Уходит он, когда все стоят на шлюзе (`run_missions`).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn gather_squad(
     map: Res<BaseMap>,
     tiles: Res<TileRules>,
+    structures: Res<StructureRules>,
+    placed: Query<&Structure>,
     mut commands: Commands,
-    missions: Query<(Entity, &Mission)>,
+    mut missions: Query<(Entity, &mut Mission)>,
+    // Весь состав, спящие и раненые включительно: по нему считается место за
+    // столом (номер по `id`) и то, сели ли **все**.
+    members: Query<(&Squad, &UnitId)>,
     crew: Query<
-        (Entity, &Squad, &Position, Option<&Path>, Option<&Away>),
+        (
+            Entity,
+            &Squad,
+            &UnitId,
+            &Position,
+            Option<&Path>,
+            Option<&Away>,
+        ),
         // Спящего не трогаем: маршрут разбудил бы его, а истощение — не повод
         // гнать кота дальше. Проснётся — эта же система его и подберёт. Идущего
         // за снаряжением — тем более: одетым он уйдёт сильнее (§12.29, §12.34).
@@ -528,38 +585,42 @@ pub(crate) fn gather_squad(
         return;
     }
     let map = &*map;
+    let owners = owners_of(map, &structures, &placed);
 
-    for (mission_e, mission) in &missions {
+    for (mission_e, mut mission) in &mut missions {
+        // Номера за столом — по `id` всего состава, а не тех, кто сейчас на
+        // ногах: иначе заснувший пересаживал бы соседей.
+        let mut ids: Vec<&str> = members
+            .iter()
+            .filter(|(s, _)| s.0 == mission_e)
+            .map(|(_, id)| id.0.as_str())
+            .collect();
+        ids.sort_unstable();
         // Кто в отряде и где он. Пустой маршрут считается пройденным:
         // `move_units` снимет его только следующим тиком.
         let mut left_base = false;
-        let squad: Vec<(Entity, (i32, i32), bool)> = crew
+        let squad: Vec<(Entity, usize, (i32, i32), bool)> = crew
             .iter()
             .filter(|(_, s, ..)| s.0 == mission_e)
             .inspect(|(.., away)| left_base |= away.is_some())
-            .map(|(e, _, p, path, _)| {
+            .map(|(e, _, id, p, path, _)| {
                 let walking = path.is_some_and(|p| !p.steps.is_empty());
-                (e, (p.x, p.y), walking)
+                let rank = ids.iter().position(|&i| i == id.0).unwrap_or(0);
+                (e, rank, (p.x, p.y), walking)
             })
             .collect();
-        // Отряд ушёл — шлюз больше не пересматривается: вернутся коты туда,
-        // откуда ушли, даже если гараж успели снести.
+        // Отряд ушёл — дверь больше не пересматривается: вернутся коты туда,
+        // откуда ушли, даже если шлюз успели снести.
         if left_base {
             continue;
         }
 
-        // **Снесённый гараж распускает собирающийся отряд** (§12.152). Правило
-        // то же, по которому снесённый станок уносит свой заказ (§12.96), а
-        // снесённая рация — правило автовылазки (§12.67): вылазка живёт в
-        // клетке, а клетки больше нет. До §12.152 здесь выбирался новый шлюз
-        // (`pick_gate` по ближайшему ко всем), и это было единственным, ради
-        // чего он пересматривался каждый тик; теперь дверь называет игрок, и
-        // подставлять ему другую — значит отменять его решение молча.
-        //
-        // Ушедшего отряда это не касается: он отсеян `left_base` выше и
-        // вернётся туда, откуда ушёл, даже если гараж успели снести (§12.22).
-        let gate = mission.gate;
-        if !tiles.is_gate(map.tile_at(gate.0, gate.1)) {
+        // **Снесённое место сбора распускает собирающийся отряд** (§12.152,
+        // §12.279). Правило то же, по которому снесённый станок уносит свой
+        // заказ (§12.96): вылазка живёт в объекте, а объекта больше нет.
+        let node = mission.node;
+        let seats = seats_at(map, &tiles, &owners, node, TileRules::is_muster);
+        if !tiles.is_muster(map.tile_at(node.0, node.1)) || seats.is_empty() {
             for &(cat_e, ..) in &squad {
                 commands.entity(cat_e).remove::<(Squad, Path, Stride)>();
             }
@@ -567,24 +628,40 @@ pub(crate) fn gather_squad(
             continue;
         }
 
-        for &(cat_e, at, walking) in &squad {
-            if walking || at == gate {
+        // Шлюз снесли по дороге — дверь не приписана к отряду, значит берётся
+        // следующая ближайшая; нет ни одной — отряд возвращается за стол.
+        if let Some(exit) = mission.exit
+            && !tiles.is_gate(map.tile_at(exit.0, exit.1))
+        {
+            mission.exit = nearest_exit(map, &tiles, node);
+        }
+
+        // Все сели — пора к двери. «Все» — это весь состав: спящий в `squad`
+        // не попал, и пока он спит, `ids` длиннее.
+        if mission.exit.is_none() {
+            let seated = squad
+                .iter()
+                .filter(|&&(_, rank, at, walking)| !walking && seat_of(&seats, rank) == Some(at))
+                .count();
+            if seated == ids.len() && seated > 0 {
+                mission.exit = nearest_exit(map, &tiles, node);
+            }
+        }
+
+        for &(cat_e, rank, at, walking) in &squad {
+            let Some(goal) = mission.exit.or_else(|| seat_of(&seats, rank)) else {
+                continue;
+            };
+            if walking || at == goal {
                 continue;
             }
-            if let Some(steps) = find_path(map, &tiles, at, gate) {
+            if let Some(steps) = find_path(map, &tiles, at, goal) {
                 commands.entity(cat_e).insert(Path { steps });
             }
         }
     }
 }
 
-/// Сколько на базе шлюзов — и, с §12.152, **потолок одновременных вылазок**:
-/// гараж это дверь, отряд и лицензия разом. До §12.152 потолок держала рация
-/// (§12.59), а шлюз подбирался автоматом; счётность при этом никуда не делась,
-/// только переехала на ту клетку, которую игрок и нажимает.
-///
-/// Наружу едет числом (§12.53): снесённый гараж делает вылазку невозможной, и
-/// молчащая кнопка «Отправить» читается как поломка.
 /// Знакома ли база с фракцией (§12.214): взяла ли она хоть раз доведённый до
 /// конца заказ, где эта сторона названа заказчиком или пострадавшим.
 ///
@@ -605,8 +682,15 @@ pub(crate) fn faction_is_met(rules: &MissionRules, done: &Raids, faction: usize)
     })
 }
 
-pub(crate) fn gate_count(map: &BaseMap, tiles: &TileRules, owners: &Owners) -> usize {
-    gate_cells(map, tiles, owners).len()
+/// Сколько на базе мест сбора — **потолок одновременных вылазок** (§12.279).
+/// До §12.279 его держал гараж (§12.152), а ещё раньше рация (§12.59);
+/// счётность при этом никуда не делась, только переехала на стол, за которым
+/// отряд и живёт.
+///
+/// Наружу едет числом (§12.53): снесённое место сбора делает вылазку невозможной, и
+/// молчащая кнопка «Отправить» читается как поломка.
+pub(crate) fn node_count(map: &BaseMap, tiles: &TileRules, owners: &Owners) -> usize {
+    node_cells(map, tiles, owners).len()
 }
 
 /// Есть ли на базе силы прийти за пленным — считается **до** того, как его
@@ -733,7 +817,10 @@ pub(crate) fn run_missions(
         let Some(rule) = rules.0.get(mission.def) else {
             continue;
         };
-        let gate = mission.gate;
+        // Дверь, через которую ушли и куда вернутся (§12.279). Пока отряд
+        // рассаживается, её нет, и уходить ему некуда.
+        let exit = mission.exit;
+        let gate = exit.unwrap_or(mission.node);
 
         let squad: Vec<(Entity, (i32, i32), bool, bool, i32, i32)> = crew
             .iter()
@@ -1062,7 +1149,8 @@ pub(crate) fn run_missions(
         // Минимум вилки здесь больше не спрашивается (§12.113): недокомплект
         // разрешён и уже оплачен — долей добычи и сроком. Ждать некого, если
         // все, кого взяли, дошли.
-        let ready = !squad.is_empty()
+        let ready = exit.is_some()
+            && !squad.is_empty()
             && squad
                 .iter()
                 .all(|&(_, at, walking, ..)| at == gate && !walking);

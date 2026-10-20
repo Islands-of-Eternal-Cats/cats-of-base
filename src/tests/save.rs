@@ -111,7 +111,7 @@ fn state_of(sim: &Sim) -> String {
             ));
         }
         if let Some(m) = e.get::<Mission>() {
-            p.push(format!("mission={},{:?},{}", m.def, m.gate, m.left));
+            p.push(format!("mission={},{:?},{}", m.def, m.node, m.left));
         }
         // Вид задачи, но не её адресат: «строит» переживает загрузку, а номер
         // чертежа — нет и не должен.
@@ -295,7 +295,7 @@ fn a_saved_game_continues_identically() {
 fn a_crew_survives_a_save() {
     let mut live = Sim::new(CORE).expect("рулсет");
     let node = *live
-        .gate_cells_of()
+        .node_cells_of()
         .first()
         .expect("гараж в стартовой застройке");
     // Стартовый отряд собран контентом (§12.207), поэтому проверяем изменение
@@ -672,7 +672,7 @@ fn an_auto_raid_rule_survives_a_save() {
     let mut live = Sim::new(CORE).expect("рулсет");
     live.without_timeline();
     let node = live
-        .gate_cells_of()
+        .node_cells_of()
         .first()
         .copied()
         .expect("гараж в застройке");

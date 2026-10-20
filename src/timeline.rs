@@ -24,8 +24,7 @@ use bevy_ecs::prelude::*;
 use crate::components::*;
 use crate::hauling::spill;
 use crate::map::BaseMap;
-use crate::missions::gate_cells;
-use crate::slots::owners_of;
+use crate::missions::exit_cells;
 
 /// Проступили ли детали события к этому тику («туман предзнания», §4.6).
 ///
@@ -58,10 +57,7 @@ pub(crate) fn run_timeline(
     mut commands: Commands,
     mut cats: Query<&mut Energy, (With<UnitId>, Without<Away>)>,
     mut stacks: Query<(Entity, &Position, &mut Stack)>,
-    structs: Res<StructureRules>,
-    placed: Query<&Structure>,
 ) {
-    let owners = owners_of(&map, &structs, &placed);
     for (def, rule) in rules.0.iter().enumerate() {
         if time.tick < rule.at || chronicle.happened(def).is_some() {
             continue;
@@ -94,11 +90,11 @@ pub(crate) fn run_timeline(
         }
         // Груз ложится кучей на шлюз — оттуда его разнесёт обычная уборка
         // (§12.16), ровно как добычу с вылазки.
-        // Первый гараж по обходу карты — детерминированно (§11), и этого
+        // Первый шлюз по обходу карты — детерминированно (§11), и этого
         // довольно: мир кладёт груз у любой двери, а не выбирает ближайшую к
         // кому-то. До §12.152 тут звался `pick_gate` с пустым списком котов, то
         // есть ровно то же самое, только через выражение про отряд.
-        let Some(&gate) = gate_cells(&map, &tiles, &owners).first() else {
+        let Some(&gate) = exit_cells(&map, &tiles).first() else {
             continue; // шлюза нет — миру не через что дотянуться до базы
         };
         for &(item, count) in &rule.gift {

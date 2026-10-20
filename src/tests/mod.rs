@@ -22,6 +22,7 @@ mod items;
 mod jobs;
 mod layers;
 mod missions;
+mod muster;
 mod needs;
 mod news;
 mod orders;
@@ -215,6 +216,7 @@ fn sim_from(rows: &[&str]) -> Sim {
             wake: 0,
             heal: 0,
             gate: false,
+            muster: false,
             teaches: String::new(),
             lab: false,
             shop: false,
@@ -602,6 +604,20 @@ impl Sim {
             tech: String::new(),
         });
         rules.0.len() - 1
+    }
+
+    /// Поставить штамп **готовым**, мимо стройки: тайлы сразу на карте, объект
+    /// сразу в мире. Тот же путь, каким рулсет ставит стартовый стол (§12.279).
+    fn force_structure(&mut self, def: usize, x: i32, y: i32) {
+        let cells = self.world.resource::<StructureRules>().0[def].stamp((x, y), 0);
+        for ((cx, cy), tile) in cells {
+            self.force_tile(cx, cy, tile);
+        }
+        self.world.spawn(Structure {
+            def,
+            anchor: (x, y),
+            rot: 0,
+        });
     }
 
     /// Закрыть штамп технологией (§12.160). Ворота свои, сверх ворот тайлов.
@@ -1875,7 +1891,26 @@ impl Sim {
     }
 
     /// Сделать тайл шлюзом: отсюда отряд уходит на миссию и сюда возвращается.
+    ///
+    /// С §12.279 отряд держит место сбора, а шлюз — только дверь. Тайл здесь
+    /// становится **и тем и другим**: место сбора из одной клетки, которое само
+    /// же и дверь, — то есть ровно гараж до §12.279, и тесты вылазок не знают о
+    /// рассадке. Раздельные стол и шлюз ставит `set_muster`.
     fn set_gate(&mut self, tile: i16, on: bool) {
+        self.tile_rule(tile, |r| {
+            r.gate = on;
+            r.muster = on;
+        });
+    }
+
+    /// Сделать тайл местом сбора без двери (§12.279): здесь отряд садится, а
+    /// уходит через ближайший шлюз (`set_exit`).
+    fn set_muster(&mut self, tile: i16, on: bool) {
+        self.tile_rule(tile, |r| r.muster = on);
+    }
+
+    /// Сделать тайл шлюзом без места сбора (§12.279): дверь, но не отряд.
+    fn set_exit(&mut self, tile: i16, on: bool) {
         self.tile_rule(tile, |r| r.gate = on);
     }
 
@@ -1974,7 +2009,7 @@ impl Sim {
     /// служит виду причиной словом (§12.53): снесли все гаражи — уйти некуда.
     fn gate_count(&mut self) -> usize {
         let owners = self.owners_now();
-        crate::missions::gate_count(
+        crate::missions::node_count(
             self.world.resource::<BaseMap>(),
             self.world.resource::<TileRules>(),
             &owners,
@@ -2277,10 +2312,10 @@ impl Sim {
         )
     }
 
-    /// Первый гараж по обходу карты — тот же, что берёт `launch` без узла.
+    /// Первое место сбора по обходу карты — то же, что берёт `launch` без узла.
     fn gate_cell(&mut self) -> Option<(i32, i32)> {
         let owners = self.owners();
-        crate::missions::gate_cells(
+        crate::missions::node_cells(
             self.world.resource::<BaseMap>(),
             self.world.resource::<TileRules>(),
             &owners,
@@ -2946,17 +2981,24 @@ impl Sim {
         Some(crate::missions::phase(travel, span, left).tag())
     }
 
-    /// Гараж миссии; `None` — миссии нет.
+    /// Место сбора миссии; `None` — миссии нет.
     fn mission_gate(&mut self) -> Option<(i32, i32)> {
         let mut q = self.world.query::<&Mission>();
-        q.iter(&self.world).next().map(|m| m.gate)
+        q.iter(&self.world).next().map(|m| m.node)
+    }
+
+    /// Шлюз, выбранный отрядом (§12.279); `None` — миссии нет или отряд ещё
+    /// рассаживается.
+    fn mission_exit(&mut self) -> Option<(i32, i32)> {
+        let mut q = self.world.query::<&Mission>();
+        q.iter(&self.world).next().and_then(|m| m.exit)
     }
 
     /// Гараж, который держит слот вылазки по этому заказу (§12.61, §12.152).
     /// Адресуется по заказу, а не по номеру: порядок обхода ECS недетерминирован.
     fn mission_node(&mut self, def: usize) -> Option<(i32, i32)> {
         let mut q = self.world.query::<&Mission>();
-        q.iter(&self.world).find(|m| m.def == def).map(|m| m.gate)
+        q.iter(&self.world).find(|m| m.def == def).map(|m| m.node)
     }
 
     /// Завести цель партии; вернёт её индекс (§12.58).

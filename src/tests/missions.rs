@@ -981,7 +981,7 @@ fn the_shipped_ruleset_starts_with_one_relay_node() {
 #[test]
 fn the_shipped_ruleset_starts_with_a_crew_in_the_garage() {
     let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
-    let node = *sim.gate_cells_of().first().expect("гараж в застройке");
+    let node = *sim.node_cells_of().first().expect("гараж в застройке");
 
     assert_eq!(
         sim.roster_at(node.0, node.1).len(),
