@@ -45,7 +45,7 @@ use crate::path::{Reach, find_path};
 use crate::relay::relay_force;
 use crate::ruleset::{
     AbilityDef, BlightDef, EventDef, FactionDef, GoalDef, ItemDef, MissionDef, PerkDef, RecipeDef,
-    RecruitDef, ResearchDef, Ruleset, SiteDef, SkillDef, StatDef, TileDef,
+    RecruitDef, ResearchDef, Ruleset, SLOT, SiteDef, SkillDef, StatDef, TileDef,
 };
 use crate::save::{FORMAT, SaveFile, capture, fingerprint, note, restore};
 use crate::schedule::build_schedule;
@@ -965,11 +965,29 @@ impl Sim {
             .iter(&self.world)
             .map(|bp| (bp.x, bp.y, bp.tile))
             .collect();
-        Plan::of(
+        let mut plan = Plan::of(
             self.world.resource::<BaseMap>(),
             self.world.resource::<TileRules>(),
             planned.into_iter(),
-        )
+        );
+        // Свободные слоты стоящих объектов (§12.283): на них не строят, а
+        // соседям они шумят тем же, что сам объект.
+        let mut q = self.world.query::<&Structure>();
+        let placed: Vec<(usize, (i32, i32), u8)> = q
+            .iter(&self.world)
+            .map(|s| (s.def, s.anchor, s.rot))
+            .collect();
+        let rules = self.world.resource::<StructureRules>();
+        for (def, anchor, rot) in placed {
+            let Some(rule) = rules.0.get(def) else {
+                continue;
+            };
+            let zone = rule.slot_zone();
+            for (x, y) in rule.slots_at(anchor, rot) {
+                plan.reserve(x, y, zone);
+            }
+        }
+        plan
     }
 
     /// Разметка карты по объектам (§12.161). Близнец `plan()`: тот собирает
@@ -1641,6 +1659,18 @@ impl Sim {
                                 .collect()
                         })
                         .collect(),
+                    // Свободные слоты (§12.283): ячейка `slot` в сетке. Это не
+                    // тайл, поэтому в `cells` она `None` — штамп её не строит.
+                    slots: d
+                        .cells
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(row, line)| {
+                            line.iter().enumerate().filter_map(move |(col, c)| {
+                                (c.as_deref() == Some(SLOT)).then_some((col as i32, row as i32))
+                            })
+                        })
+                        .collect(),
                     tech: d.tech.clone(),
                 })
                 .collect(),
@@ -2212,18 +2242,39 @@ impl Sim {
                 .enumerate()
                 .map(|(i, d)| {
                     let rule = &rules.0[i];
+                    // Якорь — левый верхний угол занятого прямоугольника,
+                    // поэтому силуэт нормализуется к нулю: у повёрнутой сетки
+                    // смещения бывают отрицательными. Свободные слоты (§12.283)
+                    // входят в прямоугольник наравне с клетками: стол стоит
+                    // посередине, и без них угол съехал бы на сам стол.
+                    let corner = |rot: u8| {
+                        let cells = rule.stamp((0, 0), rot);
+                        let slots = rule.slots_at((0, 0), rot);
+                        let xs = cells
+                            .iter()
+                            .map(|&((x, _), _)| x)
+                            .chain(slots.iter().map(|s| s.0));
+                        let ys = cells
+                            .iter()
+                            .map(|&((_, y), _)| y)
+                            .chain(slots.iter().map(|s| s.1));
+                        (xs.min().unwrap_or(0), ys.min().unwrap_or(0))
+                    };
                     let shapes = (0..4)
                         .map(|rot| {
-                            let cells = rule.stamp((0, 0), rot);
-                            // Якорь — левый верхний угол занятого
-                            // прямоугольника, поэтому силуэт нормализуется
-                            // к нулю: у повёрнутой сетки смещения бывают
-                            // отрицательными.
-                            let minx = cells.iter().map(|&((x, _), _)| x).min().unwrap_or(0);
-                            let miny = cells.iter().map(|&((_, y), _)| y).min().unwrap_or(0);
-                            cells
+                            let (minx, miny) = corner(rot);
+                            rule.stamp((0, 0), rot)
                                 .into_iter()
                                 .map(|((x, y), t)| (x - minx, y - miny, t))
+                                .collect()
+                        })
+                        .collect();
+                    let slots = (0..4)
+                        .map(|rot| {
+                            let (minx, miny) = corner(rot);
+                            rule.slots_at((0, 0), rot)
+                                .into_iter()
+                                .map(|(x, y)| (x - minx, y - miny))
                                 .collect()
                         })
                         .collect();
@@ -2243,6 +2294,7 @@ impl Sim {
                         tech: d.tech.clone(),
                         cost,
                         shapes,
+                        slots,
                     }
                 })
                 .collect()
@@ -2544,16 +2596,50 @@ impl Sim {
     /// ряд лаборатории отнимал бы подход сам у себя, пока ряд мест под ним ещё
     /// не размечен, — и штамп отклонялся бы в зависимости от того, с какого
     /// угла его собирать.
-    fn stamp_fits(&mut self, def: usize, cells: &[((i32, i32), i16)]) -> bool {
+    ///
+    /// **Свободные слоты** (§12.283) требуют свободного пола: в карте, без
+    /// постройки поверх (`solid` или нет — неважно, слот это место работы, а
+    /// не проход) и не под чужим слотом. Отмечаются они в плане **до** проверки
+    /// клеток: построенная клетка штампа на собственный слот не встанет, а
+    /// лежанка рядом со слотом получит отказ зонирования, как рядом со столом.
+    fn stamp_fits(
+        &mut self,
+        def: usize,
+        anchor: (i32, i32),
+        rot: u8,
+        cells: &[((i32, i32), i16)],
+    ) -> bool {
         if cells.is_empty() {
             return false;
         }
         if !self.structure_is_open(def) {
             return false;
         }
+        let Some(rule) = self.world.resource::<StructureRules>().0.get(def).cloned() else {
+            return false;
+        };
+        let slots = rule.slots_at(anchor, rot);
+        let zone = rule.slot_zone();
         let mut plan = self.plan();
+        let floor = self.world.resource::<TileRules>().base();
+        for &(sx, sy) in &slots {
+            if !self.in_bounds(sx, sy) || plan.slot_at(sx, sy).is_some() {
+                return false;
+            }
+            let t = plan.tile_at(sx, sy);
+            let free = match floor {
+                Some(f) => t == f,
+                None => t >= 0 && !self.world.resource::<TileRules>().is_solid(t),
+            };
+            if !free {
+                return false;
+            }
+        }
         for &((cx, cy), t) in cells {
             plan.set(cx, cy, t);
+        }
+        for &(sx, sy) in &slots {
+            plan.reserve(sx, sy, zone);
         }
         let (map, rules) = (
             self.world.resource::<BaseMap>(),
@@ -2562,9 +2648,16 @@ impl Sim {
         // Клетка, где этот тайл уже стоит, штамп не держит: `place_structure`
         // её пропускает, а спросить её воротами значило бы спросить «можно ли
         // лабораторию на лабораторию» — и получить отказ слоя (§12.237).
+        //
+        // Свободные слоты спрашиваются зонированием тайла, чей шум они несут:
+        // поставить стол брифинга так, что слот ляжет вплотную к лежанке,
+        // нельзя по тому же доводу, что и наоборот.
         cells
             .iter()
             .all(|&((cx, cy), t)| map.tile_at(cx, cy) == t || may_build(&plan, rules, (cx, cy), t))
+            && slots
+                .iter()
+                .all(|&at| crate::jobs::zoning_ok(&plan, rules, at, zone))
     }
 
     /// Открыт ли объект-штамп (§12.160, §12.258): одно выражение на постановку и
@@ -2610,7 +2703,7 @@ impl Sim {
         for (cx, cy) in rect_cells(rx, ry, rw, rh) {
             let ok = self
                 .stamp_cells(def, cx, cy, rot)
-                .is_some_and(|cells| self.stamp_fits(def, &cells));
+                .is_some_and(|cells| self.stamp_fits(def, (cx, cy), rot, &cells));
             if let Some(i) = self.cell_index(cx, cy) {
                 out[i] = u8::from(ok);
             }
@@ -2636,7 +2729,7 @@ impl Sim {
         let Some(cells) = self.stamp_cells(d, x, y, rot) else {
             return false;
         };
-        if !self.stamp_fits(d, &cells) {
+        if !self.stamp_fits(d, (x, y), rot, &cells) {
             return false;
         }
         for &((cx, cy), t) in &cells {

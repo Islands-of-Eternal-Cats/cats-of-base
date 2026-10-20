@@ -3,13 +3,38 @@
 //!
 //! Остальные тесты вылазок ставят тайл, который одновременно и стол, и дверь
 //! (`set_gate`), — то есть гараж до §12.279. Здесь они разведены: стол — штамп
-//! 3×3 со столешницей посередине, а шлюзов два, на разном расстоянии от него.
+//! 3×3, где строится только столешница посередине, а восемь клеток вокруг —
+//! свободные слоты (§12.283); шлюзов два, на разном расстоянии от стола.
 
 use super::*;
 
-const SEAT: i16 = 1;
 const TABLE: i16 = 2;
 const EXIT: i16 = 3;
+/// Любая постройка, которую пробуют поставить на слот.
+const OTHER: i16 = 4;
+
+/// Восемь клеток вокруг середины сетки 3×3 — свободные слоты стола.
+const RING8: [(i32, i32); 8] = [
+    (0, 0),
+    (1, 0),
+    (2, 0),
+    (0, 1),
+    (2, 1),
+    (0, 2),
+    (1, 2),
+    (2, 2),
+];
+
+/// Штамп «стол со слотами вокруг» — дословно `muster` боевого рулсета.
+fn table_with_slots(sim: &mut Sim) -> usize {
+    let def = sim.set_structure(vec![
+        vec![None, None, None],
+        vec![None, Some(TABLE), None],
+        vec![None, None, None],
+    ]);
+    sim.set_structure_slots(def, &RING8);
+    def
+}
 
 /// Ближний к столу шлюз — `(1, 4)`, дальний — `(9, 1)`.
 const NEAR: (i32, i32) = (1, 4);
@@ -30,14 +55,10 @@ fn hall() -> Sim {
         "#......a.b#",
         "###########",
     ]);
-    sim.set_muster(SEAT, true);
+    sim.set_muster(TABLE, true);
     sim.set_solid(TABLE, true);
     sim.set_exit(EXIT, true);
-    let def = sim.set_structure(vec![
-        vec![Some(SEAT), Some(SEAT), Some(SEAT)],
-        vec![Some(SEAT), Some(TABLE), Some(SEAT)],
-        vec![Some(SEAT), Some(SEAT), Some(SEAT)],
-    ]);
+    let def = table_with_slots(&mut sim);
     sim.force_structure(def, 2, 1);
     sim.force_tile(NEAR.0, NEAR.1, EXIT);
     sim.force_tile(FAR.0, FAR.1, EXIT);
@@ -171,18 +192,7 @@ fn a_torn_down_table_disbands_the_gathering_squad() {
     assert!(sim.launch(def, squad(&["a", "b"])));
     sim.tick_n(1);
 
-    for (x, y) in [
-        (2, 1),
-        (3, 1),
-        (4, 1),
-        (2, 2),
-        (4, 2),
-        (2, 3),
-        (3, 3),
-        (4, 3),
-    ] {
-        sim.force_tile(x, y, 0);
-    }
+    sim.force_tile(3, 2, 0); // стол снесли
     sim.tick_n(1);
     assert_eq!(sim.raid_count(), 0);
     assert!(!sim.in_squad("a") && !sim.in_squad("b"));
@@ -194,7 +204,7 @@ fn a_torn_down_table_disbands_the_gathering_squad() {
 #[test]
 fn a_seated_squad_sits_through_the_briefing() {
     let mut sim = hall();
-    sim.set_brief(SEAT, 20);
+    sim.set_brief(TABLE, 20);
     let def = sim.set_mission(2, 30, &[]);
     assert!(sim.launch(def, squad(&["a", "b"])));
 
@@ -264,11 +274,76 @@ fn the_shipped_ruleset_keeps_beds_away_from_the_muster_table() {
 #[test]
 fn an_unfinished_table_is_not_a_squad_yet() {
     let mut sim = hall();
-    sim.force_tile(3, 2, 0); // стол ещё не построен, стулья стоят
-    assert_eq!(sim.gate_count(), 0, "стулья без стола — не отряд");
+    sim.force_tile(3, 2, 0); // стол ещё не построен, слоты на месте
+    assert_eq!(sim.gate_count(), 0, "слоты без стола — не отряд");
     let def = sim.set_mission(2, 30, &[]);
     assert!(!sim.launch(def, squad(&["a", "b"])), "уйти не за кем");
 
     sim.force_tile(3, 2, TABLE);
     assert_eq!(sim.gate_count(), 1, "достроили — отряд появился");
+}
+
+// --- свободные слоты (§12.283) ----------------------------------------------
+
+/// Строится только стол: слоты — это пол, который никто не перестраивает.
+#[test]
+fn placing_the_table_builds_only_the_table() {
+    let mut sim = sim_from(&["#######", "#.....#", "#.....#", "#.....#", "#######"]);
+    sim.set_muster(TABLE, true);
+    sim.set_solid(TABLE, true);
+    let def = table_with_slots(&mut sim);
+    assert!(sim.place_structure(def as i32, 1, 1, 0));
+
+    assert_eq!(sim.planned_tile(2, 2), Some(TABLE), "чертёж стола");
+    for (dx, dy) in RING8 {
+        assert_eq!(
+            sim.planned_tile(1 + dx, 1 + dy),
+            None,
+            "на слоте чертежа нет"
+        );
+    }
+}
+
+/// На слоте стоящего стола не строится ничего, а рядом — можно.
+#[test]
+fn nothing_is_built_on_a_slot() {
+    let mut sim = hall();
+    assert!(
+        !sim.add_blueprint(3, 1, i32::from(OTHER)),
+        "слот держит место"
+    );
+    assert!(
+        sim.add_blueprint(6, 1, i32::from(OTHER)),
+        "за слотами — свободно"
+    );
+}
+
+/// Слоту нужен свободный пол: стол, чей слот лёг бы на постройку или в
+/// пустоту, не ставится вовсе — у объекта отказ один на весь штамп.
+#[test]
+fn a_slot_needs_free_floor() {
+    let mut sim = hall();
+    // Слои (§12.237): без основания в палитре «свободный пол» — это любая
+    // проходимая клетка, и постройка от пола не отличается.
+    sim.set_base(0, true);
+    let def = table_with_slots(&mut sim);
+    sim.force_tile(7, 1, OTHER);
+    assert!(
+        !sim.place_structure(def as i32, 6, 1, 0),
+        "слот на постройке"
+    );
+    assert!(!sim.place_structure(def as i32, 0, 1, 0), "слот в пустоте");
+    assert!(
+        !sim.place_structure(def as i32, 4, 1, 0),
+        "слот на чужом слоте"
+    );
+}
+
+/// Снесли стол — слоты свободны: объекта нет, держать место некому.
+#[test]
+fn tearing_down_the_table_frees_its_slots() {
+    let mut sim = hall();
+    sim.force_tile(3, 2, 0);
+    sim.tick_n(1); // `prune_structures` снимает объект
+    assert!(sim.add_blueprint(3, 1, i32::from(OTHER)));
 }

@@ -35,6 +35,9 @@ pub(crate) struct Owners {
     /// Недостроен ли объект: хоть одна клетка штампа ещё не та, что в сетке
     /// (§12.282). По номеру объекта, как `cells`.
     unfinished: Vec<bool>,
+    /// Свободные слоты объекта (§12.283), по номеру объекта. Клеток карты они
+    /// объекту не отдают: пол под ними ничей, объект его только держит.
+    slots: Vec<Vec<(i32, i32)>>,
 }
 
 /// Клетка ничьих объектов — сама себе слот.
@@ -57,12 +60,15 @@ impl Owners {
             height: map.height,
             cells: vec![NONE; (map.width * map.height) as usize],
             unfinished: Vec::new(),
+            slots: Vec::new(),
         };
         for (n, (def, anchor, rot)) in list.enumerate() {
             let Some(rule) = rules.0.get(def) else {
                 owners.unfinished.push(false);
+                owners.slots.push(Vec::new());
                 continue;
             };
+            owners.slots.push(rule.slots_at(anchor, rot));
             let mut unfinished = false;
             for ((x, y), tile) in rule.stamp(anchor, rot) {
                 if let Some(i) = owners.index(x, y) {
@@ -104,6 +110,9 @@ impl Owners {
 ///
 /// Клетка вне объекта даёт одно место — себя: она и есть объект из одной
 /// клетки, и лаборатория, выложенная рамкой, ведёт себя ровно как до §12.160.
+///
+/// У объекта со свободными слотами (§12.283) места — его слоты, на которых
+/// можно стоять: клетки роли там глухие (стол), а сидят вокруг.
 pub(crate) fn seats_at(
     map: &BaseMap,
     tiles: &TileRules,
@@ -118,6 +127,19 @@ pub(crate) fn seats_at(
     let owner = owners.at(at.0, at.1);
     if owner == NONE {
         return if standable(at) { vec![at] } else { Vec::new() };
+    }
+    // У объекта со свободными слотами места — **слоты** (§12.283): роль несёт
+    // сам объект (стол брифинга), а сидят вокруг него на полу.
+    let slots = &owners.slots[owner as usize];
+    if !slots.is_empty() {
+        return slots
+            .iter()
+            .copied()
+            .filter(|&(x, y)| {
+                let t = map.tile_at(x, y);
+                t >= 0 && !tiles.is_solid(t)
+            })
+            .collect();
     }
     owners
         .cells_of(owner)

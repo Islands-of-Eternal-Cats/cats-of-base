@@ -602,6 +602,7 @@ impl Sim {
         let mut rules = self.world.resource_mut::<StructureRules>();
         rules.0.push(StructureRule {
             cells,
+            slots: Vec::new(),
             tech: String::new(),
         });
         rules.0.len() - 1
@@ -619,6 +620,12 @@ impl Sim {
             anchor: (x, y),
             rot: 0,
         });
+    }
+
+    /// Дать штампу свободные слоты (§12.283): `(col, row)` клеток сетки, которые
+    /// он не строит, а держит свободными. В `set_structure` их нет.
+    fn set_structure_slots(&mut self, def: usize, slots: &[(i32, i32)]) {
+        self.world.resource_mut::<StructureRules>().0[def].slots = slots.to_vec();
     }
 
     /// Закрыть штамп технологией (§12.160). Ворота свои, сверх ворот тайлов.

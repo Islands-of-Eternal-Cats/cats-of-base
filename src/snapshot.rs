@@ -114,6 +114,9 @@ pub(crate) struct StructureSnap {
     /// Силуэт по четвертям оборота: `shapes[rot]` — список `(dx, dy, тайл)`
     /// от левого верхнего угла занятого прямоугольника.
     pub(crate) shapes: Vec<Vec<(i32, i32, i16)>>,
+    /// Свободные слоты по тем же четвертям (§12.283): `slots[rot]` — `(dx, dy)`
+    /// от того же угла, что и `shapes`. Пусто — слотов у объекта нет.
+    pub(crate) slots: Vec<Vec<(i32, i32)>>,
 }
 
 #[derive(Serialize)]

@@ -1569,6 +1569,10 @@ pub(crate) struct StructureRules(pub(crate) Vec<StructureRule>);
 pub(crate) struct StructureRule {
     /// `cells[row][col]`; `None` — клетку штамп не трогает.
     pub(crate) cells: Vec<Vec<Option<i16>>>,
+    /// Свободные слоты (§12.283): `(col, row)` клеток сетки, которые штамп не
+    /// строит, но **держит свободными** — на них работают и сидят. Пол под
+    /// ними остаётся полом; строить на них нельзя, пока объект стоит.
+    pub(crate) slots: Vec<(i32, i32)>,
     /// Технология, открывающая объект; пусто — доступен сразу (§12.27).
     ///
     /// Ворота **свои**, сверх ворот каждого тайла штампа: объект бывает закрыт,
@@ -1597,23 +1601,48 @@ impl StructureRule {
     /// Поворот по часовой стрелке; пустые ячейки сетки просто не попадают в
     /// список, поэтому Г-образный штамп не требует отдельного понятия.
     pub(crate) fn stamp(&self, anchor: (i32, i32), rot: u8) -> Vec<((i32, i32), i16)> {
-        let (w, h) = (self.width(), self.height());
         let mut out = Vec::new();
         for (row, line) in self.cells.iter().enumerate() {
             for (col, cell) in line.iter().enumerate() {
                 let Some(tile) = *cell else { continue };
-                let (col, row) = (col as i32, row as i32);
-                // Поворот на месте: (col, row) в системе повёрнутой сетки.
-                let (dx, dy) = match rot % 4 {
-                    1 => (h - 1 - row, col),
-                    2 => (w - 1 - col, h - 1 - row),
-                    3 => (row, w - 1 - col),
-                    _ => (col, row),
-                };
-                out.push(((anchor.0 + dx, anchor.1 + dy), tile));
+                out.push((self.turn(anchor, col as i32, row as i32, rot), tile));
             }
         }
         out
+    }
+
+    /// Свободные слоты штампа, поставленного якорем в `anchor` (§12.283). Та же
+    /// арифметика поворота, что у `stamp`: слоты — клетки той же сетки.
+    pub(crate) fn slots_at(&self, anchor: (i32, i32), rot: u8) -> Vec<(i32, i32)> {
+        self.slots
+            .iter()
+            .map(|&(col, row)| self.turn(anchor, col, row, rot))
+            .collect()
+    }
+
+    /// Тайл, чьё зонирование несут слоты (§12.283): первый построенный тайл
+    /// штампа. За столом брифинга шумят и сорят на стульях, а не на столе, —
+    /// и лежанка вплотную к слоту такая же ошибка, как вплотную к столу.
+    pub(crate) fn slot_zone(&self) -> i16 {
+        self.cells
+            .iter()
+            .flatten()
+            .flatten()
+            .copied()
+            .next()
+            .unwrap_or(-1)
+    }
+
+    /// Клетка `(col, row)` сетки после поворота по часовой стрелке, от якоря.
+    fn turn(&self, anchor: (i32, i32), col: i32, row: i32, rot: u8) -> (i32, i32) {
+        let (w, h) = (self.width(), self.height());
+        let (dx, dy) = match rot % 4 {
+            1 => (h - 1 - row, col),
+            2 => (w - 1 - col, h - 1 - row),
+            3 => (row, w - 1 - col),
+            _ => (col, row),
+        };
+        (anchor.0 + dx, anchor.1 + dy)
     }
 }
 

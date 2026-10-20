@@ -1326,10 +1326,9 @@ function drawFurniture(g, id, x, y, tint, n) {
       g.rect(px + T * 0.32, py + T * 0.3, T * 0.36, T * 0.4).fill(0xe6e1d2);
       break;
     }
-    // Место брифинга (§12.279): рисуется **один стол**, а места вокруг — только
-    // заливкой объекта. Восемь табуретов были восемью одинаковыми кружками
-    // рядом с котами и читались россыпью мебели; сколько мест, видно по
-    // заливке 3×3, а кто сел — по самим котам.
+    // Место брифинга (§12.279): строится и рисуется **один стол**, а сидят
+    // вокруг на свободных слотах (§12.283) — это обычный пол. Где слоты,
+    // показывает превью постройки пунктиром; кто сел — сами коты.
     case "muster_table": {
       // Круглый стол с картой похода посередине.
       shadowUnder(T * 0.06, T * 0.06, T * 0.88, T * 0.88);
@@ -1488,17 +1487,6 @@ function drawMap(map) {
     x < 0 || y < 0 || x >= W || y >= H ? -1 : mapCells[y * W + x];
   const g = new Graphics();
   const T = TILE;
-  // Какой плитой клетка выглядит. Места за столом брифинга (§12.279) — полом:
-  // штамп 3×3 тонированной комнатой стоял громадой среди построек 1×1, а
-  // стулья отдельной мебели не имеют. Видно один стол, а где лежанку не
-  // поставить, подсвечивает маска стройки (§12.157). Подменяется только
-  // картинка: тайл в ядре и в панели клетки — по-прежнему место брифинга.
-  const floorIdx = (meta.palette ?? []).findIndex((t) => t?.base);
-  const surface = (v) => {
-    const d = (meta.palette ?? [])[v];
-    return d?.muster && !d.solid && floorIdx >= 0 ? floorIdx : v;
-  };
-
   // 1. Скала: сплошной тёмный камень с крапом. Сетки на пустоте нет — там
   // строить пока нечего, и клетки читались как «незаполненная таблица».
   g.rect(0, 0, W * T, H * T).fill(COLORS.rock);
@@ -1541,7 +1529,7 @@ function drawMap(map) {
     for (let x = 0; x < W; x++) {
       const v = at(x, y);
       if (v < 0) continue;
-      const tint = paletteColors[surface(v)] ?? COLORS.floor;
+      const tint = paletteColors[v] ?? COLORS.floor;
       const n = cellNoise(x, y, 1);
       const base = shade(mixColor(COLORS.floor, tint, 0.38), (n - 0.5) * 0.12);
       g.rect(x * T, y * T, T, T).fill(base);
@@ -1643,15 +1631,11 @@ function drawMap(map) {
       }
       // Внутренние перегородки между комнатами разного типа — тонкая линия:
       // это не стена, а граница зоны, через неё ходят.
-      // Сравниваются плиты (`surface`), а не тайлы: иначе стулья, нарисованные
-      // полом, обвело бы рамкой 3×3 — той самой громадой.
-      const v = surface(at(x, y));
-      const east = at(x + 1, y);
-      const south = at(x, y + 1);
-      if (east >= 0 && surface(east) !== v) {
+      const v = at(x, y);
+      if (at(x + 1, y) >= 0 && at(x + 1, y) !== v) {
         g.rect(px + T - 1.5, py, 1.5, T).fill({ color: 0x000000, alpha: 0.45 });
       }
-      if (south >= 0 && surface(south) !== v) {
+      if (at(x, y + 1) >= 0 && at(x, y + 1) !== v) {
         g.rect(px, py + T - 1.5, T, 1.5).fill({ color: 0x000000, alpha: 0.45 });
       }
     }
@@ -6921,11 +6905,21 @@ function structShape() {
   return meta?.structures?.[buildStruct]?.shapes[buildRot % 4] ?? null;
 }
 
+// Свободные слоты объекта в руке (§12.283), уже повёрнутые: `[[dx, dy], ...]`
+// от того же угла, что и силуэт. Считает ядро — по той же причине.
+function structSlots() {
+  if (mode !== "build" || buildStruct < 0) return [];
+  return meta?.structures?.[buildStruct]?.slots?.[buildRot % 4] ?? [];
+}
+
 // Прямоугольник, который объект займёт, поставленный якорем в клетку.
+//
+// Слоты (§12.283) входят в прямоугольник: стол стоит посередине своих мест, и
+// рамка без них была бы рамкой одного стола.
 function structRect(shape, tx, ty) {
   let w = 0;
   let h = 0;
-  for (const [dx, dy] of shape) {
+  for (const [dx, dy] of [...shape, ...structSlots()]) {
     if (dx + 1 > w) w = dx + 1;
     if (dy + 1 > h) h = dy + 1;
   }
@@ -6988,6 +6982,27 @@ function updateHover(global) {
         .rect(px, py, TILE, TILE)
         .fill({ color: paletteColors[tile] ?? col, alpha: 0.32 })
         .stroke({ color: col, width: 2, alpha: 0.85 });
+    }
+    // Свободные слоты (§12.283) — пунктиром и без заливки: штамп их не
+    // строит, а держит. Видно до клика, какое место объект займёт собой.
+    for (const [dx, dy] of structSlots()) {
+      const px = (r.x + dx) * TILE;
+      const py = (r.y + dy) * TILE;
+      const seg = TILE / 4;
+      for (let i = 0; i < 4; i += 2) {
+        const a = i * seg + 3;
+        const b = a + seg;
+        hoverRect
+          .moveTo(px + a, py + 3)
+          .lineTo(px + b, py + 3)
+          .moveTo(px + a, py + TILE - 3)
+          .lineTo(px + b, py + TILE - 3)
+          .moveTo(px + 3, py + a)
+          .lineTo(px + 3, py + b)
+          .moveTo(px + TILE - 3, py + a)
+          .lineTo(px + TILE - 3, py + b);
+      }
+      hoverRect.stroke({ color: col, width: 1.5, alpha: 0.7 });
     }
     if (!ok) {
       // Крест один на весь объект, а не по клетке: отказ у него один.
