@@ -222,9 +222,9 @@ fn the_shipped_ruleset_erases_a_bed_to_its_floor() {
     sim.without_timeline();
     let floor = sim.tile_index("floor").expect("пол");
     let bed = sim.tile_index("bed").expect("лежанка");
-    assert_eq!(sim.tile(3, 13), bed, "лежанка в стартовой застройке");
+    assert_eq!(sim.tile(3, 14), bed, "лежанка в стартовой застройке");
 
-    assert!(sim.plan_demolish(3, 13));
+    assert!(sim.plan_demolish(3, 14));
     sim.tick_n(600);
-    assert_eq!(sim.tile(3, 13), floor, "под лежанкой остался пол");
+    assert_eq!(sim.tile(3, 14), floor, "под лежанкой остался пол");
 }

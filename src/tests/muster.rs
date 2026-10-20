@@ -245,3 +245,16 @@ fn seats_fill_the_sides_before_the_corners() {
         ],
     );
 }
+
+/// Стол сбора шумный и грязный (§12.281): лежанку вплотную к нему, даже
+/// наискосок, не поставить — а через клетку пола можно. Боевой рулсет:
+/// стартовая комната для того и удлинена на ряд.
+#[test]
+fn the_shipped_ruleset_keeps_beds_away_from_the_muster_table() {
+    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let bed = i32::from(sim.tile_index("bed").expect("лежанка"));
+    // Стол сбора — якорем в (4, 10), нижний ряд стульев на y = 12.
+    assert!(!sim.add_blueprint(6, 13, bed), "вплотную под стулом");
+    assert!(!sim.add_blueprint(7, 13, bed), "наискосок от угла");
+    assert!(sim.add_blueprint(8, 13, bed), "через клетку — можно");
+}
