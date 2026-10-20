@@ -258,3 +258,17 @@ fn the_shipped_ruleset_keeps_beds_away_from_the_muster_table() {
     assert!(!sim.add_blueprint(7, 13, bed), "наискосок от угла");
     assert!(sim.add_blueprint(8, 13, bed), "через клетку — можно");
 }
+
+/// Недостроенный стол — ещё не отряд (§12.282): стулья бесплатны и встают
+/// раньше стола, и до §12.282 такой объект уже звал набирать состав.
+#[test]
+fn an_unfinished_table_is_not_a_squad_yet() {
+    let mut sim = hall();
+    sim.force_tile(3, 2, 0); // стол ещё не построен, стулья стоят
+    assert_eq!(sim.gate_count(), 0, "стулья без стола — не отряд");
+    let def = sim.set_mission(2, 30, &[]);
+    assert!(!sim.launch(def, squad(&["a", "b"])), "уйти не за кем");
+
+    sim.force_tile(3, 2, TABLE);
+    assert_eq!(sim.gate_count(), 1, "достроили — отряд появился");
+}

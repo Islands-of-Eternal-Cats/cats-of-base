@@ -1239,10 +1239,11 @@ impl Sim {
 
     /// Место сбора ли в этой клетке — то есть можно ли адресовать по ней отряд
     /// (§12.279). Отряд называют клеткой из `node_cells`, первой у объекта.
+    ///
+    /// Спрашивается список `node_cells`, а не тайл в клетке (§12.282): у
+    /// недостроенного стола стулья уже стоят, но отряда за ним ещё нет.
     fn is_node_at(&mut self, x: i32, y: i32) -> bool {
-        let map = self.world.resource::<BaseMap>();
-        let rules = self.world.resource::<TileRules>();
-        rules.is_muster(map.tile_at(x, y))
+        self.node_cells_of().contains(&(x, y))
     }
 
     /// Рация ли в этой клетке.

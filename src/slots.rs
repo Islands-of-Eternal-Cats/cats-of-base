@@ -32,6 +32,9 @@ pub(crate) struct Owners {
     width: i32,
     height: i32,
     cells: Vec<i32>,
+    /// Недостроен ли объект: хоть одна клетка штампа ещё не та, что в сетке
+    /// (§12.282). По номеру объекта, как `cells`.
+    unfinished: Vec<bool>,
 }
 
 /// Клетка ничьих объектов — сама себе слот.
@@ -53,16 +56,21 @@ impl Owners {
             width: map.width,
             height: map.height,
             cells: vec![NONE; (map.width * map.height) as usize],
+            unfinished: Vec::new(),
         };
         for (n, (def, anchor, rot)) in list.enumerate() {
             let Some(rule) = rules.0.get(def) else {
+                owners.unfinished.push(false);
                 continue;
             };
-            for ((x, y), _) in rule.stamp(anchor, rot) {
+            let mut unfinished = false;
+            for ((x, y), tile) in rule.stamp(anchor, rot) {
                 if let Some(i) = owners.index(x, y) {
                     owners.cells[i] = n as i32;
                 }
+                unfinished |= map.tile_at(x, y) != tile;
             }
+            owners.unfinished.push(unfinished);
         }
         owners
     }
@@ -120,6 +128,9 @@ pub(crate) fn seats_at(
 
 /// Клетки роли в порядке обхода карты, схлопнутые по объектам (§12.161).
 ///
+/// Недостроенный объект слота не даёт вовсе (§12.282): пока хоть одна клетка
+/// штампа не та, что в сетке, его роли на карте ещё нет.
+///
 /// От объекта в список попадает **первая** его клетка роли по тому же обходу,
 /// остальные не попадают вовсе. Порядок фиксирован, значит и номер отряда, и
 /// очередь ячеек остаются детерминированными (§11).
@@ -143,6 +154,14 @@ pub(crate) fn slot_cells(
             let owner = owners.at(x, y);
             if owner != NONE && !seen.insert(owner) {
                 continue; // этот объект уже дал свой слот
+            }
+            // **Слот — достроенный объект** (§12.282). Клетки штампа строятся
+            // порознь, и дешёвые встают раньше дорогих: стулья места сбора
+            // бесплатны, а стол ждёт деталь, — и недостроенный стол уже звал
+            // набирать отряд. То же у большой лаборатории: места без столов —
+            // не лаборатория.
+            if owner != NONE && owners.unfinished[owner as usize] {
+                continue;
             }
             out.push((x, y));
         }
