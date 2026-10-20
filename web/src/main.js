@@ -1331,11 +1331,55 @@ function drawFurniture(g, id, x, y, tint, n) {
         color: dark,
         width: 1,
       });
-      g.rect(px + T * 0.3, py + T * 0.32, T * 0.4, T * 0.36).fill(0xd9cfae);
-      g.moveTo(px + T * 0.36, py + T * 0.6)
-        .lineTo(px + T * 0.48, py + T * 0.42)
-        .lineTo(px + T * 0.62, py + T * 0.52)
-        .stroke({ color: 0xb04a3a, width: 1.5 });
+      // Карта развёрнута поверх столешницы: лист со сгибом посередине, река,
+      // роща, пунктир маршрута от базы и крестик цели. Клетка всего 28 px,
+      // поэтому каждая деталь — один-два штриха, а не рисунок.
+      const mx = px + T * 0.2;
+      const my = py + T * 0.24;
+      const mw = T * 0.6;
+      const mh = T * 0.52;
+      g.rect(mx + 1, my + 1, mw, mh).fill({ color: 0x000000, alpha: 0.25 });
+      g.rect(mx, my, mw, mh).fill(0xe2d6b0);
+      g.rect(mx + mw / 2, my, mw / 2, mh).fill({
+        color: 0x000000,
+        alpha: 0.06,
+      });
+      g.moveTo(mx + mw / 2, my)
+        .lineTo(mx + mw / 2, my + mh)
+        .stroke({ color: 0xb8a97e, width: 0.6 });
+      // Река наискосок.
+      g.moveTo(mx + mw * 0.62, my)
+        .quadraticCurveTo(mx + mw * 0.5, my + mh * 0.5, mx + mw * 0.9, my + mh)
+        .stroke({ color: 0x5a86b0, width: 1.2 });
+      // Роща — пара пятен.
+      g.circle(mx + mw * 0.22, my + mh * 0.28, mw * 0.08).fill(0x6f8f4a);
+      g.circle(mx + mw * 0.34, my + mh * 0.22, mw * 0.06).fill(0x6f8f4a);
+      // База — квадратик, маршрут — пунктир до цели.
+      g.rect(mx + mw * 0.1, my + mh * 0.7, mw * 0.12, mh * 0.14).fill(0x4a4438);
+      const route = [
+        [0.22, 0.74],
+        [0.38, 0.62],
+        [0.5, 0.66],
+        [0.62, 0.48],
+        [0.76, 0.36],
+      ];
+      for (let i = 0; i < route.length - 1; i++) {
+        const [ax, ay] = route[i];
+        const [bx, by] = route[i + 1];
+        g.moveTo(mx + mw * ax, my + mh * ay)
+          .lineTo(
+            mx + mw * (ax + (bx - ax) * 0.6),
+            my + mh * (ay + (by - ay) * 0.6),
+          )
+          .stroke({ color: 0xb04a3a, width: 1 });
+      }
+      const [cx, cy] = [mx + mw * 0.82, my + mh * 0.3];
+      const k = mw * 0.07;
+      g.moveTo(cx - k, cy - k)
+        .lineTo(cx + k, cy + k)
+        .moveTo(cx + k, cy - k)
+        .lineTo(cx - k, cy + k)
+        .stroke({ color: 0xb04a3a, width: 1.3 });
       break;
     }
     case "lectern": {
