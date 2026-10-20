@@ -13565,7 +13565,7 @@ function renderEmptyRaidWindow() {
       '<div class="raidwin-title">Вылазки</div>' +
       '<button class="tool raidwin-close" data-key="close">Закрыть</button>' +
       "</div>" +
-      `<div class="raidwin-body"><div class="cat-sub warn">${esc(
+      `<div class="raidwin-body"><div class="win-warn">${esc(
         gateHint() ?? "",
       )}</div></div></div>`,
   );
