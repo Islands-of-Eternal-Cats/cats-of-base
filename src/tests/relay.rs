@@ -671,3 +671,28 @@ fn a_squad_leaves_once_its_operator_sits() {
         "радист у ближайшей к столу рации"
     );
 }
+
+/// Радист на стройке отряд не держит (§12.286): заявка снимает его с дела,
+/// как бойца. До этого брифинг «ждал, пока освободится», а стройка шла
+/// сплошняком — и отряд стоял за столом бесконечно.
+#[test]
+fn a_busy_operator_is_pulled_off_work_by_the_launch() {
+    let (mut sim, first, _) = sim_with_two_radios(2, 2, 200);
+    sim.enlist("a", 1, 2);
+    sim.post_relay("d", 1, 2);
+    sim.add_blueprint_rect(1, 1, 7, 1, 2);
+    let mut t = 0;
+    while !sim.has_assignment("d") {
+        sim.tick_n(1);
+        t += 1;
+        assert!(t < 50, "радист так и не взялся за стройку");
+    }
+    assert!(sim.launch_node(first, 1, 2, -1));
+    assert!(!sim.has_assignment("d"), "заявка сняла радиста со стройки");
+    let mut t = 0;
+    while !sim.is_away("a") {
+        sim.tick_n(1);
+        t += 1;
+        assert!(t < 100, "отряд так и не ушёл");
+    }
+}

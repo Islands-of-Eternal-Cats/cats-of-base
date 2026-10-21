@@ -3577,6 +3577,29 @@ impl Sim {
                 self.world.entity_mut(cat_e).remove::<Carrying>();
             }
         }
+        // **Радиста отряда заявка снимает с дела так же, как бойца** (§12.286).
+        // «Брифинг его ждёт» не работало: стройка и подвоз шли сплошняком, и
+        // свободного тика, в который `gather_squad` успел бы его посадить, у
+        // радиста не случалось — отряд стоял за столом бесконечно. Неготового
+        // (спит, ранен) не трогаем по тем же доводам, что бойца; севшего —
+        // тоже: его стул уже держит `OnDuty`.
+        let ops: Vec<String> = {
+            let mut q = self
+                .world
+                .query_filtered::<(&Posted, &UnitId), (Without<OnDuty>, Without<Away>)>();
+            q.iter(&self.world)
+                .filter(|(p, _)| p.spot == node)
+                .map(|(_, id)| id.0.clone())
+                .collect()
+        };
+        for (cat_e, from) in self.ready_crew(&ops) {
+            self.release_task(cat_e);
+            if let Some(load) = self.world.get::<Carrying>(cat_e) {
+                let (item, count) = (load.item, load.count);
+                self.drop_stack(from.0, from.1, item, count);
+                self.world.entity_mut(cat_e).remove::<Carrying>();
+            }
+        }
         // Маршрут к месту за столом прокладывает та же система, что держит
         // сбор дальше (§12.279): место зависит от номера кота во **всём**
         // составе, и второй экземпляр этого правила здесь разошёлся бы с ней.

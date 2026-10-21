@@ -629,8 +629,9 @@ pub(crate) fn gather_squad(
     operators: Query<(&Posted, &UnitId), Without<Away>>,
     // Уже сидящие (или идущие) на своём стуле — их стул держит `OnDuty`.
     seated_ops: Query<(Entity, &Posted, &UnitId, &Position, &OnDuty, Option<&Path>)>,
-    // Свободные — те же фильтры, что у `assign_relay`: радиста не срывают с
-    // начатого дела, брифинг его просто ждёт.
+    // Свободные — те же фильтры, что у `assign_relay`. С дела радиста снимает
+    // сама заявка (`launch_at`), как бойца: ждать, пока он освободится сам,
+    // значило ждать вечно — стройка и подвоз идут сплошняком.
     free_ops: Query<
         (Entity, &Posted, &UnitId, &Position),
         (
