@@ -3885,10 +3885,18 @@ function renderCellPanel(snap) {
     // обещать нечего
   } else if (cellIsArmed() && !alreadyHere(def, x, y)) {
     const who = selectedUnits.map(esc).join(" · ");
+    // Кто сядет за парты, а кто просто пойдёт (§12.287): у большой парты мест
+    // три, и лишним выбранным клик остаётся приказом.
+    const pupils = deskWelcomes(def, x, y);
+    const walkers = selectedUnits.filter((id) => !pupils.includes(id));
     parts.push(
       `<div class="cell-armed">ещё клик сюда — ${
-        deskWelcomes(def, x, y)
-          ? `сядут учиться «${esc(skillLabel(def.teaches))}»: ${who}`
+        pupils.length
+          ? `сядут учиться «${esc(skillLabel(def.teaches))}»: ${pupils
+              .map(esc)
+              .join(" · ")}${
+              walkers.length ? `; пойдут: ${walkers.map(esc).join(" · ")}` : ""
+            }`
           : def?.relay && selectedUnits.length === 1
             ? `${who} сядет на связь, когда отсюда уйдёт отряд`
             : `пойдут: ${who}`
@@ -4039,6 +4047,9 @@ function renderCellPanel(snap) {
   // кнопка раздела «Обучение», то есть колонка, которая про клетку не знает.
   if (def?.teaches) parts.push(...deskCell(snap, x, y, def));
 
+  // Место учителя — кто учит и во что ему встаёт класс (§12.287).
+  if (def?.lectern) parts.push(...lecternCell(snap, x, y));
+
   // Тема в ячейке лаборатории — карточкой дословно парты (§12.233): кто
   // изучает, докуда дошёл и «Отменить» — цена написана над кнопкой (§12.80).
   if (def?.lab) parts.push(...labCell(snap, x, y));
@@ -4071,6 +4082,10 @@ function renderCellPanel(snap) {
   }
   if (def?.shop) {
     const u = (snap.crafting ?? []).find((v) => v.x === x && v.y === y)?.unit;
+    if (u) said.add(u);
+  }
+  if (def?.lectern) {
+    const u = classAt(snap, x, y)?.teacher;
     if (u) said.add(u);
   }
   const here = unitsAt(x, y).filter((id) => !said.has(id));
@@ -5437,6 +5452,32 @@ function deskCell(snap, x, y, def) {
   ];
 }
 
+/// Класс у места учителя (§12.287) — из снимка, по клетке места учителя.
+function classAt(snap, x, y) {
+  return (snap?.classes ?? []).find((c) => c.x === x && c.y === y) ?? null;
+}
+
+/// Место учителя: кто учит, сколько учеников и во что это встаёт учителю
+/// (§12.287). Множитель приходит из ядра (`load`, тем же `class_load`, каким
+/// считает `tire`): своей арифметики усталости у вида нет. Пустое место
+/// говорит, что учитель сядет сам, — молчащая клетка читалась бы поломкой
+/// (§12.53).
+function lecternCell(snap, x, y) {
+  const c = classAt(snap, x, y);
+  if (!c) return [];
+  if (!c.teacher)
+    return [
+      '<div class="cat-sub">учителя нет: сядет сам, когда за партой ученик</div>',
+    ];
+  const tired =
+    c.load > 100
+      ? ` · устаёт ×${(c.load / 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`
+      : "";
+  return [
+    `<div class="cat-sub">учит ${esc(c.teacher)} · учеников ${c.pupils}${tired}</div>`,
+  ];
+}
+
 /// Набор ящика (§12.195): что игрок велел здесь держать.
 ///
 /// В карточке — **только имена выбранного словами** и дверь в окно. Выбранного
@@ -6554,17 +6595,40 @@ function alreadyHere(def, x, y) {
   return cat.study === i;
 }
 
+/// Кто из выбранных котов сядет за парту по клику в эту клетку — в порядке
+/// выбора, ровно так, как ядро разберёт приказы (§12.85, §12.287).
+///
+/// Мест — парты того же объекта (`ClassSnap.seats` из ядра), кликнутая
+/// первой: занята она — `teach_at` сажает за соседнюю. Кому парта ничего не
+/// даст, за неё не сядет, и места не займёт.
 function deskWelcomes(def, x, y) {
-  if (!def?.teaches || selectedUnits.length !== 1) return false;
+  if (!def?.teaches || !selectedUnits.length) return [];
   const i = (meta.skills ?? []).findIndex((s) => s.id === def.teaches);
-  const cat = (lastSnap?.entities ?? []).find((e) => e.id === selectedUnits[0]);
-  const skill = cat?.skills?.[i];
-  if (!skill || skill.xp >= skill.desk) return false;
+  const ents = lastSnap?.entities ?? [];
+  const seats = (lastSnap?.classes ?? []).find((c) =>
+    c.seats.some(([sx, sy]) => sx === x && sy === y),
+  )?.seats ?? [[x, y]];
   // Занятую парту ядро отклонит, и клик останется приказом: обещать за неё
   // учёбу — это соврать ровно там, где игрок и так удивится (§12.20).
-  return !(lastSnap?.entities ?? []).some(
-    (e) => e.id !== cat.id && atStudy(e) && e.x === x && e.y === y,
-  );
+  let free = seats.filter(
+    ([sx, sy]) =>
+      !ents.some(
+        (e) =>
+          !selectedUnits.includes(e.id) &&
+          atStudy(e) &&
+          e.x === sx &&
+          e.y === sy,
+      ),
+  ).length;
+  const out = [];
+  for (const id of selectedUnits) {
+    if (free <= 0) break;
+    const skill = ents.find((e) => e.id === id)?.skills?.[i];
+    if (!skill || skill.xp >= skill.desk) continue;
+    out.push(id);
+    free -= 1;
+  }
+  return out;
 }
 
 function skillLabel(id) {
@@ -10242,7 +10306,16 @@ function opensOf(topic, known = []) {
   const names = (xs, pick) =>
     (xs ?? []).filter(pick).map((x) => x.label || x.id);
   const groups = [
-    ["постройки", names(meta.palette, (t) => t.tech === id)],
+    // Объект со своей технологией (большая лаборатория, большая парта,
+    // §12.287) в палитре клеткой не стоит, и без второго списка его тема
+    // не обещала бы ничего.
+    [
+      "постройки",
+      [
+        ...names(meta.palette, (t) => t.tech === id),
+        ...names(meta.structures, (d) => d.tech === id),
+      ],
+    ],
     // Заказ за технологией (§12.260): «Полевая методика» обещает вылазку
     // «Калибровка анализатора». Ворота у заказа одни — `tech`, — так что обещание
     // исполняется ровно по названной причине.
@@ -11913,11 +11986,14 @@ function wikiOwnerOf(key) {
         .forEach((p) => opens.push(`tile:${p.id}`));
       (meta?.structures ?? [])
         .filter(
+          // Объект со своей технологией открывает она, а не его клетки
+          // (§12.287): у большой парты клетки те же, что у парты.
           (d) =>
             d.tech === id ||
-            (d.shapes?.[0] ?? []).some(
-              ([, , ti]) => pal[ti]?.internal && pal[ti]?.tech === id,
-            ),
+            (!d.tech &&
+              (d.shapes?.[0] ?? []).some(
+                ([, , ti]) => pal[ti]?.internal && pal[ti]?.tech === id,
+              )),
         )
         .forEach((d) => opens.push(`structure:${d.id}`));
       (meta?.missions ?? [])

@@ -41,6 +41,7 @@ use crate::missions::{
 };
 use crate::movement::note_clutter;
 use crate::movement::{Busy, is_stuck};
+use crate::needs::class_load;
 use crate::path::{Reach, find_path};
 use crate::relay::relay_force;
 use crate::ruleset::{
@@ -52,15 +53,15 @@ use crate::schedule::build_schedule;
 use crate::seen::note_seen;
 use crate::sites::{Step, aim_danger, aim_of, next_step, site_is_clear, stage_danger, targets_of};
 use crate::skills::{
-    Desk, SKILL_RAID, SKILL_SCIENCE, desk_cap, desk_gate, lectern_of, level_cap_of, level_of,
-    tutor_cap, xp_ceiling,
+    Desk, SKILL_RAID, SKILL_SCIENCE, class_sizes, desk_cap, desk_gate, lectern_of, level_cap_of,
+    level_of, tutor_cap, xp_ceiling,
 };
 use crate::slots::{Owners, seats_at, slot_cells};
 use crate::snapshot::{
-    AimSnap, AutoGateName, BaseMapDto, BinSnap, BlueprintSnap, CraftSnap, DealSnap, EntitySnap,
-    GoalSnap, MapMeta, MissionSnap, NeedSnap, NewsSnap, NodeSnap, NoteSnap, PriceSnap, RaidGates,
-    RaidSnap, RecipeSnap, RecruitSnap, ResearchSnap, SaleSnap, SiteSnap, SkillSnap, Snapshot,
-    StackSnap, StockSnap, StructureSnap, TallySnap, TickerSnap, TopicSnap,
+    AimSnap, AutoGateName, BaseMapDto, BinSnap, BlueprintSnap, ClassSnap, CraftSnap, DealSnap,
+    EntitySnap, GoalSnap, MapMeta, MissionSnap, NeedSnap, NewsSnap, NodeSnap, NoteSnap, PriceSnap,
+    RaidGates, RaidSnap, RecipeSnap, RecruitSnap, ResearchSnap, SaleSnap, SiteSnap, SkillSnap,
+    Snapshot, StackSnap, StockSnap, StructureSnap, TallySnap, TickerSnap, TopicSnap,
 };
 use crate::timeline::{ready_for, revealed};
 
@@ -2152,6 +2153,7 @@ impl Sim {
             critical: rs.energy.critical,
             floor: rs.energy.floor,
             floor_wake: rs.energy.floor_wake,
+            class: rs.energy.class,
         });
         world.insert_resource(FoodRules {
             max: rs.food.max,
@@ -4989,8 +4991,12 @@ impl Sim {
     ///
     /// Парта **именно эта**, а не ближайшая свободная, как у `teach`: игрок
     /// ткнул в клетку, и посадить его за другую значило бы ответить не на тот
-    /// жест. Занятую парту это отклоняет — тогда «иди туда» остаётся приказом,
-    /// и кот просто дойдёт: два кота за одной партой не сидят (§12.20).
+    /// жест. Два кота за одной партой не сидят (§12.20).
+    ///
+    /// **Занята — садится за свободную парту того же объекта** (§12.287): у
+    /// большой парты мест три, и выбранных котов игрок посылает одним кликом
+    /// в одну клетку, — второму и третьему жест значит «за эту парту», а не
+    /// «за эту клетку». Свободной в объекте нет — «иди туда» остаётся приказом.
     fn teach_at(&mut self, unit_id: &str, x: i32, y: i32) -> bool {
         let skill = {
             let map = self.world.resource::<BaseMap>();
@@ -5000,11 +5006,36 @@ impl Sim {
                 None => return false,
             }
         };
-        if self.taken_desks().contains(&(x, y)) {
-            return false;
-        }
         let Some(cat_e) = self.unit_on_base(unit_id) else {
             return false;
+        };
+        // Клик по своей же парте — как и раньше, просто приказ. А при поиске
+        // соседней своя не в счёт, иначе кот пересел бы с неё на другую.
+        let own = self.world.get::<Study>(cat_e).map(|s| s.spot);
+        if own == Some((x, y)) {
+            return false;
+        }
+        let taken: Vec<(i32, i32)> = self
+            .taken_desks()
+            .into_iter()
+            .filter(|&c| Some(c) != own)
+            .collect();
+        let (x, y) = if taken.contains(&(x, y)) {
+            let owners = self.owners();
+            let map = self.world.resource::<BaseMap>();
+            let tiles = self.world.resource::<TileRules>();
+            let free = seats_at(map, tiles, &owners, (x, y), TileRules::is_desk)
+                .into_iter()
+                .find(|&(sx, sy)| {
+                    !taken.contains(&(sx, sy))
+                        && tiles.teaches_of(map.tile_at(sx, sy)) == Some(skill)
+                });
+            match free {
+                Some(spot) => spot,
+                None => return false,
+            }
+        } else {
+            (x, y)
         };
         // Доучившемуся парта не поможет: приказ остаётся приказом, кот дойдёт и
         // займётся своими делами. Молчаливой записи, которая ничего не даёт,
@@ -6308,6 +6339,61 @@ impl Sim {
                 accepts: items.clone(),
             })
             .collect();
+        // Классы у мест учителя (§12.287): парты того же объекта, кто учит,
+        // сколько сидит и во что это встаёт учителю. Тем же `class_sizes` и
+        // `class_load`, какими считает `tire`, — иначе «устаёт ×2» в панели
+        // разошлось бы с тем, что учитель тратит на деле.
+        let classes: Vec<ClassSnap> = {
+            let owners = self.owners();
+            let mut q = self
+                .world
+                .query::<(&UnitId, &Position, &Study, Option<&Path>)>();
+            let studies: Vec<(String, (i32, i32), bool, bool)> = q
+                .iter(&self.world)
+                .map(|(id, p, s, path)| {
+                    let here = path.is_none() && (p.x, p.y) == s.spot;
+                    (id.0.clone(), s.spot, s.teacher, here)
+                })
+                .collect();
+            let seated: Vec<(i32, i32)> = studies
+                .iter()
+                .filter(|(_, _, teacher, here)| !teacher && *here)
+                .map(|(_, spot, ..)| *spot)
+                .collect();
+            let map = self.world.resource::<BaseMap>();
+            let tiles = self.world.resource::<TileRules>();
+            let needs = self.world.resource::<NeedRules>();
+            let sizes = class_sizes(map, tiles, &owners, &seated);
+            let mut out = Vec::new();
+            for y in 0..map.height {
+                for x in 0..map.width {
+                    if !tiles.is_lectern(map.tile_at(x, y)) {
+                        continue;
+                    }
+                    let pupils = sizes
+                        .iter()
+                        .find(|(at, _)| *at == (x, y))
+                        .map_or(0, |&(_, n)| n);
+                    let teacher = studies
+                        .iter()
+                        .find(|(_, spot, teacher, here)| *teacher && *here && *spot == (x, y))
+                        .map(|(id, ..)| id.clone());
+                    out.push(ClassSnap {
+                        x,
+                        y,
+                        seats: seats_at(map, tiles, &owners, (x, y), TileRules::is_desk),
+                        load: if teacher.is_some() {
+                            class_load(needs, pupils)
+                        } else {
+                            100
+                        },
+                        teacher,
+                        pupils,
+                    });
+                }
+            }
+            out
+        };
         // Курсы считаются тем же `quote`, которым посчитается заказ, — двух
         // арифметик цены быть не должно (§12.44).
         let prices: Vec<PriceSnap> = {
@@ -6935,6 +7021,7 @@ impl Sim {
             abilities_on,
             deals,
             bins,
+            classes,
             prices,
             sales,
             favorites,

@@ -362,7 +362,10 @@ fn a_new_table_takes_the_next_number_wherever_it_stands() {
     let order = sim.node_cells_of();
     assert_eq!(order.len(), 2);
     assert_eq!(order[0], start, "стартовый отряд остался первым");
-    assert!(order[1].1 < start.1, "второй стоит выше, а номер у него второй");
+    assert!(
+        order[1].1 < start.1,
+        "второй стоит выше, а номер у него второй"
+    );
 
     let saved = sim.save().expect("снимок");
     let mut loaded = Sim::load(yaml, &saved).expect("загрузка");

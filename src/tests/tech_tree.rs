@@ -681,3 +681,46 @@ fn the_shipped_ruleset_opens_exactly_one_topic_without_tech() {
         free.len(),
     );
 }
+
+/// Большая лаборатория стоит за «Наставничеством», а большая парта — за ней
+/// (§12.287). Три места лаборатории пустуют, пока учёный на базе один, значит
+/// она обязана приходить, когда учёных уже можно учить; парта отвечает на
+/// спрос, который создаёт лаборатория. «Стеллаж» из предков выпилен: связь
+/// была только в том, что обе темы перестраивают работающую базу.
+#[test]
+fn the_shipped_ruleset_opens_the_big_desk_after_big_labs_and_tutoring() {
+    let rs = shipped();
+    let topic = |id: &str| {
+        rs.research
+            .iter()
+            .find(|t| t.id == id)
+            .unwrap_or_else(|| panic!("тема {id}"))
+    };
+    let big_labs = topic("big_labs");
+    assert!(big_labs.requires.iter().any(|r| r == "tutoring"));
+    assert!(!big_labs.requires.iter().any(|r| r == "racks"));
+    assert!(topic("big_desks").requires.iter().any(|r| r == "big_labs"));
+    let desk = rs
+        .structures
+        .iter()
+        .find(|s| s.id == "big_desk")
+        .expect("штамп «Большая парта»");
+    assert_eq!(desk.tech, "big_desks");
+    let cells: Vec<&str> = desk
+        .cells
+        .iter()
+        .flatten()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        cells.iter().filter(|c| **c == "desk").count(),
+        3,
+        "три места ученика"
+    );
+    assert_eq!(
+        cells.iter().filter(|c| **c == "lectern").count(),
+        1,
+        "одно место учителя"
+    );
+}

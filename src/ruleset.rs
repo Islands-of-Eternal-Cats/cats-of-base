@@ -171,6 +171,10 @@ pub(crate) struct EnergyDef {
     /// можно лишь в кровати, и зона отдыха становится обязательной.
     #[serde(default)]
     pub(crate) floor_wake: i32,
+    /// Сколько процентов расхода учителю добавляет каждый ученик сверх первого
+    /// (§12.287). Ноль — множителя нет.
+    #[serde(default)]
+    pub(crate) class: i32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
