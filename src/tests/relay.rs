@@ -696,3 +696,26 @@ fn a_busy_operator_is_pulled_off_work_by_the_launch() {
         assert!(t < 100, "отряд так и не ушёл");
     }
 }
+
+/// Радиста, приписанного уже во время сбора, сбор тоже снимает с дела
+/// (§12.286): заявка его не застала, и снимать его некому, кроме самого сбора.
+#[test]
+fn an_operator_posted_mid_gathering_is_pulled_off_work() {
+    let (mut sim, first, _) = sim_with_two_radios(2, 2, 200);
+    sim.enlist("a", 1, 2);
+    sim.add_blueprint_rect(1, 1, 7, 1, 2);
+    let mut t = 0;
+    while !sim.has_assignment("d") {
+        sim.tick_n(1);
+        t += 1;
+        assert!(t < 50, "кот так и не взялся за стройку");
+    }
+    assert!(sim.launch_node(first, 1, 2, -1));
+    sim.post_relay("d", 1, 2);
+    let mut t = 0;
+    while !sim.is_away("a") {
+        sim.tick_n(1);
+        t += 1;
+        assert!(t < 100, "отряд так и не ушёл");
+    }
+}

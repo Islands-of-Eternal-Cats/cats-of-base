@@ -3577,29 +3577,7 @@ impl Sim {
                 self.world.entity_mut(cat_e).remove::<Carrying>();
             }
         }
-        // **Радиста отряда заявка снимает с дела так же, как бойца** (§12.286).
-        // «Брифинг его ждёт» не работало: стройка и подвоз шли сплошняком, и
-        // свободного тика, в который `gather_squad` успел бы его посадить, у
-        // радиста не случалось — отряд стоял за столом бесконечно. Неготового
-        // (спит, ранен) не трогаем по тем же доводам, что бойца; севшего —
-        // тоже: его стул уже держит `OnDuty`.
-        let ops: Vec<String> = {
-            let mut q = self
-                .world
-                .query_filtered::<(&Posted, &UnitId), (Without<OnDuty>, Without<Away>)>();
-            q.iter(&self.world)
-                .filter(|(p, _)| p.spot == node)
-                .map(|(_, id)| id.0.clone())
-                .collect()
-        };
-        for (cat_e, from) in self.ready_crew(&ops) {
-            self.release_task(cat_e);
-            if let Some(load) = self.world.get::<Carrying>(cat_e) {
-                let (item, count) = (load.item, load.count);
-                self.drop_stack(from.0, from.1, item, count);
-                self.world.entity_mut(cat_e).remove::<Carrying>();
-            }
-        }
+        self.summon_operators(node);
         // Маршрут к месту за столом прокладывает та же система, что держит
         // сбор дальше (§12.279): место зависит от номера кота во **всём**
         // составе, и второй экземпляр этого правила здесь разошёлся бы с ней.
@@ -5569,10 +5547,58 @@ impl Sim {
         // открыл бы неотменяемую сделку. Перед тиком, чтобы заявку застал
         // `assign_hauls` этого же тика — иначе носильщик теряет тик впустую.
         self.run_auto_sales();
+        // Радист собирающегося отряда бросает дело (§12.286) — до цепочки,
+        // чтобы его посадил `gather_squad` этого же тика, а не перехватил
+        // раздатчик подвоза.
+        let gathering: Vec<(i32, i32)> = {
+            let mut q = self.world.query::<&Mission>();
+            q.iter(&self.world)
+                .filter(|m| m.left == 0)
+                .map(|m| m.node)
+                .collect()
+        };
+        for node in gathering {
+            self.summon_operators(node);
+        }
         self.schedule.run(&mut self.world);
         // Лента новостей — **после** цепочки (§12.120): новость читает
         // сложившийся тик и мир не меняет, дословно `check_goals`.
         self.note_news();
+    }
+
+    /// Снять с дела радистов, приписанных к собирающемуся отряду (§12.286).
+    ///
+    /// Брифинг ждал, пока радист освободится сам, но стройка и подвоз идут
+    /// сплошняком, и свободного тика, в который `gather_squad` успел бы его
+    /// посадить, не случалось — отряд стоял за столом бесконечно. Зовут его и
+    /// заявка, и каждый тик сбора: радиста могли приписать уже после заявки,
+    /// и сбор мог приехать из снимка. Неготового (спит, ранен) не трогаем по
+    /// тем же доводам, что бойца; севшего — тоже: его стул держит `OnDuty`.
+    fn summon_operators(&mut self, node: (i32, i32)) {
+        let ops: Vec<String> = {
+            let mut q = self
+                .world
+                .query_filtered::<(&Posted, &UnitId), (Without<OnDuty>, Without<Away>)>();
+            q.iter(&self.world)
+                .filter(|(p, _)| p.spot == node)
+                .map(|(_, id)| id.0.clone())
+                .collect()
+        };
+        let ready = self.ready_crew(&ops);
+        for &(cat_e, from) in &ready {
+            self.release_task(cat_e);
+            if let Some(load) = self.world.get::<Carrying>(cat_e) {
+                let (item, count) = (load.item, load.count);
+                self.drop_stack(from.0, from.1, item, count);
+                self.world.entity_mut(cat_e).remove::<Carrying>();
+            }
+        }
+        // Когда отряд уже выбрал дверь, к рации радиста ведёт `assign_relay`,
+        // а он стоит в цепочке после подвоза и стройки — те перехватили бы
+        // снятого тем же тиком. Прогоняем его сразу, как заявка `gather_squad`.
+        if !ready.is_empty() {
+            let _ = self.world.run_system_once(crate::relay::assign_relay);
+        }
     }
 
     /// Рендерабельные сущности + чертежи (для PixiJS).
