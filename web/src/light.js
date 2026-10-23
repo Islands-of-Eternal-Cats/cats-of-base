@@ -113,7 +113,9 @@ const ROLE_LIGHT = {
   lectern: { color: 0xffe6b0, radius: 2.0, alpha: 0.65 },
   muster_table: { color: 0xffc070, radius: 2.4, alpha: 0.75 },
 };
-/// Потолочная лампа над полом: раз в `CEIL_STEP` клеток по обеим осям.
+/// Потолочная лампа над полом: не ближе `CEIL_STEP` шагов по полу к соседней
+/// (`ceilingSpots`). По общей сетке их ставить нельзя: узкий коридор, не
+/// попавший на её узлы, оставался вовсе без света.
 const CEIL = { color: 0xdde6ff, radius: 2.8, alpha: 0.6 };
 const CEIL_STEP = 3;
 /// Свет у кота — тёплое пятнышко, чтобы кот в тени не терялся.
@@ -171,6 +173,86 @@ function gradientTexture() {
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, size, size);
   return Texture.from(cv);
+}
+
+const RING8 = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
+];
+
+function floorCells(cells, W, H) {
+  const out = [];
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) if (cells[y * W + x] >= 0) out.push([x, y]);
+  return out;
+}
+
+/// Где висят потолочные лампы. Сперва глубина комнат — клетки дальше всего от
+/// скалы, — потом края и коридоры; лампа встаёт, если до ближайшей уже
+/// поставленной не меньше `CEIL_STEP` шагов **по полу** (8-связно). Шаги по
+/// полу, а не по прямой: лампа за стеной соседней комнаты сюда не светит и
+/// клетку не покрывает. Порядок полностью задан картой — между пересборками
+/// лампы не скачут.
+function ceilingSpots(cells, W, H) {
+  const floor = (x, y) =>
+    x >= 0 && y >= 0 && x < W && y < H && cells[y * W + x] >= 0;
+  // Глубина: шаги до ближайшей скалы (край карты — тоже скала).
+  const depth = new Int32Array(W * H).fill(-1);
+  const queue = [];
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      if (!floor(x, y)) continue;
+      if (RING8.some(([dx, dy]) => !floor(x + dx, y + dy))) {
+        depth[y * W + x] = 1;
+        queue.push(y * W + x);
+      }
+    }
+  for (let i = 0; i < queue.length; i++) {
+    const at = queue[i];
+    const x = at % W;
+    const y = (at - x) / W;
+    for (const [dx, dy] of RING8) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!floor(nx, ny) || depth[ny * W + nx] >= 0) continue;
+      depth[ny * W + nx] = depth[at] + 1;
+      queue.push(ny * W + nx);
+    }
+  }
+  const order = floorCells(cells, W, H).sort(
+    ([ax, ay], [bx, by]) =>
+      depth[by * W + bx] - depth[ay * W + ax] || ay - by || ax - bx,
+  );
+  // Сколько шагов по полу до ближайшей лампы; растёт заливкой от каждой новой.
+  const near = new Int32Array(W * H).fill(CEIL_STEP);
+  const out = [];
+  for (const [x, y] of order) {
+    if (near[y * W + x] < CEIL_STEP) continue;
+    out.push([x, y]);
+    near[y * W + x] = 0;
+    const wave = [y * W + x];
+    for (let i = 0; i < wave.length; i++) {
+      const at = wave[i];
+      const cx = at % W;
+      const cy = (at - cx) / W;
+      const d = near[at] + 1;
+      if (d >= CEIL_STEP) continue;
+      for (const [dx, dy] of RING8) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (!floor(nx, ny) || near[ny * W + nx] <= d) continue;
+        near[ny * W + nx] = d;
+        wave.push(ny * W + nx);
+      }
+    }
+  }
+  return out;
 }
 
 /// Многоугольник видимости лампы в пикселях мира: точка на луч, луч идёт
@@ -440,16 +522,13 @@ export function createLighting(app, tile) {
         spots.push([spec, x + 0.5, (at - x) / W + 0.5]);
       }
     }
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (cells[y * W + x] < 0) continue;
-        const ceil = x % CEIL_STEP === 1 && y % CEIL_STEP === 1;
-        if (!stress && !ceil) continue;
-        for (let k = 0; k < Math.max(1, stress); k++) {
-          const ox = stress > 1 ? ((k * 37) % 10) / 10 : 0.5;
-          const oy = stress > 1 ? ((k * 61) % 10) / 10 : 0.5;
-          spots.push([CEIL, x + ox, y + oy]);
-        }
+    for (const [x, y] of stress
+      ? floorCells(cells, W, H)
+      : ceilingSpots(cells, W, H)) {
+      for (let k = 0; k < Math.max(1, stress); k++) {
+        const ox = stress > 1 ? ((k * 37) % 10) / 10 : 0.5;
+        const oy = stress > 1 ? ((k * 61) % 10) / 10 : 0.5;
+        spots.push([CEIL, x + ox, y + oy]);
       }
     }
 
