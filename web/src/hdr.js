@@ -49,6 +49,7 @@ uniform float uGain;
 uniform float uExposure;
 uniform float uSat;
 uniform float uBloomK;
+uniform float uBloomT;
 
 // ACES (аппроксимация Нарковича): яркое сходится к белому плавно и
 // сохраняет оттенок дольше, чем простое обрезание.
@@ -67,7 +68,10 @@ void main(void)
     vec3 albedo = src.rgb / src.a; // вход премультиплицирован
     vec2 uv = (vGlobal - uLightRect.xy) / uLightRect.zw;
     vec3 light = uAmbient + texture(uLight, uv).rgb * uGain;
-    vec3 c = albedo * light + texture(uBloom, uv).rgb * uBloomK;
+    // Свечение — только от того, что ярче порога: иначе размытый свет всей
+    // комнаты ложится молочной дымкой, и большая комната уходит в засвет.
+    vec3 hot = max(texture(uBloom, uv).rgb * uGain - uBloomT, 0.0);
+    vec3 c = albedo * light + hot * uBloomK;
     c *= uExposure;
     float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
     c = max(mix(vec3(luma), c, uSat), 0.0);
@@ -93,6 +97,7 @@ export function createHdrFilter() {
     uExposure: { value: 1, type: "f32" },
     uSat: { value: 1, type: "f32" },
     uBloomK: { value: 0.3, type: "f32" },
+    uBloomT: { value: 0.6, type: "f32" },
   });
   const filter = new Filter({
     glProgram: GlProgram.from({ vertex, fragment, name: "hdr-light" }),
