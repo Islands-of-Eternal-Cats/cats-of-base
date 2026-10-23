@@ -222,6 +222,18 @@ export function createLighting(app, tile) {
   const lamps = new Container(); // живые (мерцающие) лампы: пересобираются в `rebuild`
   const cats = new Container(); // пул света котов: растёт, не убывает
   scene.addChild(ambient, bakedSprite, lamps, cats);
+  // Поле вокруг карты: стены у края рисуются чуть за её пределами, и свет,
+  // покрывающий ровно карту, оставлял их выступ незатемнённым, а HDR-фильтр
+  // его срезал. Текстуры света шире карты на клетку с каждой стороны, а всё,
+  // что стоит в координатах мира, сдвинуто внутрь на это поле.
+  const PAD = tile;
+  lamps.position.set(PAD, PAD);
+  cats.position.set(PAD, PAD);
+  // Запекание тоже со сдвигом: лампа кладётся в `bakeShift` на время рендера.
+  const bakeRoot = new Container();
+  const bakeShift = new Container();
+  bakeShift.position.set(PAD, PAD);
+  bakeRoot.addChild(bakeShift);
 
   let target = null;
   let glowTarget = null;
@@ -235,9 +247,11 @@ export function createLighting(app, tile) {
   let bakedCount = 0;
   const sprite = new Sprite();
   sprite.blendMode = "multiply";
+  sprite.position.set(-PAD, -PAD);
   sprite.eventMode = "none";
   const glowLayer = new Sprite();
   glowLayer.blendMode = "add";
+  glowLayer.position.set(-PAD, -PAD);
   glowLayer.eventMode = "none";
   // Наружу — двумя узлами на разные места в мире: высветление ложится **под**
   // котов (светит пол и мебель, а не пересвечивает кота до белого), тень —
@@ -363,8 +377,8 @@ export function createLighting(app, tile) {
     const W = meta.width;
     const H = meta.height;
     const map = { cells, W, H };
-    const pw = W * tile;
-    const ph = H * tile;
+    const pw = W * tile + 2 * PAD;
+    const ph = H * tile + 2 * PAD;
     if (!target || target.width !== pw || target.height !== ph) {
       target?.destroy(true);
       glowTarget?.destroy(true);
@@ -480,7 +494,9 @@ export function createLighting(app, tile) {
         lamps.addChild(node);
         continue;
       }
-      app.renderer.render({ container: node, target: baked, clear: first });
+      bakeShift.addChild(node);
+      app.renderer.render({ container: bakeRoot, target: baked, clear: first });
+      bakeShift.removeChild(node);
       first = false;
       node.destroy({ children: true });
       bakedCount++;
@@ -499,7 +515,7 @@ export function createLighting(app, tile) {
   function frame(units, deltaMS, speed) {
     if (!enabled || !target) return;
     if (lit && !lit.boundsArea)
-      lit.boundsArea = new Rectangle(0, 0, target.width, target.height);
+      lit.boundsArea = new Rectangle(-PAD, -PAD, target.width, target.height);
     const t0 = performance.now();
     clock += (deltaMS * Math.max(speed, 1)) / 1000;
     if (dirty && lastMap) {
@@ -540,7 +556,7 @@ export function createLighting(app, tile) {
       app.renderer.render({ container: scene, target, clear: true });
       ambient.visible = true;
       if (worldNode) {
-        const p = worldNode.toGlobal({ x: 0, y: 0 });
+        const p = worldNode.toGlobal({ x: -PAD, y: -PAD });
         const k = worldNode.scale.x;
         hdr.rect(p.x, p.y, target.width * k, target.height * k);
       }
