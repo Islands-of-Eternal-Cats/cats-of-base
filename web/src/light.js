@@ -90,7 +90,9 @@ const RIM = 0.2;
 /// не шёл зубцами (а остаток сгладит пониженное разрешение).
 const RAYS = 240;
 
-/// Свет роли клетки: цвет, радиус в клетках, яркость и характер.
+/// Свет роли клетки: цвет, радиус в клетках, яркость и характер; `cell` —
+/// во сколько раз приглушён свет её отдельных клеток (лежанка: на ней спит
+/// кот, и свет, сложенный с потолочным, выбеливал его до неузнаваемости).
 /// Чего нет в списке, само не светит — его освещают потолочные лампы.
 /// Палитра одна на всю базу: холодный белый — общий свет, тёплое — жильё и
 /// цех, цветное — то, у чего есть экран или прибор.
@@ -105,17 +107,17 @@ const ROLE_LIGHT = {
   storage: { color: 0xc4d6ff, radius: 2.6, alpha: 0.65 },
   rack: { color: 0xc4d6ff, radius: 2.6, alpha: 0.6 },
   bin: { color: 0xc4d6ff, radius: 2.0, alpha: 0.55 },
-  bed: { color: 0xffa860, radius: 2.0, alpha: 0.6 },
-  nest: { color: 0xffa860, radius: 2.0, alpha: 0.6 },
+  bed: { color: 0xffa860, radius: 2.0, alpha: 0.3, cell: 0.4 },
+  nest: { color: 0xffa860, radius: 2.0, alpha: 0.3, cell: 0.4 },
   desk: { color: 0xffe6b0, radius: 2.4, alpha: 0.8 },
   lectern: { color: 0xffe6b0, radius: 2.0, alpha: 0.65 },
   muster_table: { color: 0xffc070, radius: 2.4, alpha: 0.75 },
 };
 /// Потолочная лампа над полом: раз в `CEIL_STEP` клеток по обеим осям.
-const CEIL = { color: 0xdde6ff, radius: 3.2, alpha: 0.9 };
-const CEIL_STEP = 4;
+const CEIL = { color: 0xdde6ff, radius: 2.8, alpha: 0.6 };
+const CEIL_STEP = 3;
 /// Свет у кота — тёплое пятнышко, чтобы кот в тени не терялся.
-const CAT = { color: 0xffd9a8, radius: 1.3, alpha: 0.5 };
+const CAT = { color: 0xffd9a8, radius: 1.3, alpha: 0.3 };
 
 function rgbOf(c) {
   return [(c >> 16) & 255, (c >> 8) & 255, c & 255];
@@ -457,7 +459,9 @@ export function createLighting(app, tile) {
             spec = {
               color,
               radius: CELL.radius + CELL_BOOST.radius * k,
-              alpha: Math.min(1, CELL.alpha * glowK + CELL_BOOST.alpha * k),
+              alpha:
+                Math.min(1, CELL.alpha * glowK + CELL_BOOST.alpha * k) *
+                (ROLE_LIGHT[def.id]?.cell ?? 1),
             };
             cellSpec.set(t, spec);
           }
