@@ -584,7 +584,7 @@ const lighting = createLighting(app, TILE);
 lit.addChild(lighting.glow);
 lit.addChild(unitLayer);
 lit.addChild(lighting.shade);
-lighting.attach(lit, world);
+lighting.attach(lit, world, tileLayer);
 world.addChild(workLayer);
 world.addChild(overlay);
 app.stage.addChild(world);
@@ -7272,7 +7272,15 @@ function syncLightUi() {
     lightUi.stress,
     `<span class="sw sw-cursor"></span><span>Нагрузка: ${STRESS_LABEL[p.stress]}</span>`,
   );
-  for (const key of ["shade", "glow", "soft", "sat", "exposure", "bloom"]) {
+  for (const key of [
+    "shade",
+    "glow",
+    "soft",
+    "sat",
+    "exposure",
+    "bloom",
+    "bump",
+  ]) {
     const u = lightUi[key];
     if (u.range.value !== String(p[key])) u.range.value = String(p[key]);
     u.val.textContent = String(p[key]);
@@ -8007,6 +8015,13 @@ function buildToolbar() {
       100,
       "Ореол вокруг ярких ламп; в простом режиме не действует",
       (v) => lighting.setBloom(v),
+    ],
+    [
+      "bump",
+      "Рельеф (HDR)",
+      100,
+      "Объём плоских текстур: швы плит, крап скалы и зерно бетона ловят свет ламп; в простом режиме не действует",
+      (v) => lighting.setBump(v),
     ],
   ]) {
     const row = document.createElement("div");

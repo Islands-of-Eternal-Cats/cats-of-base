@@ -27,6 +27,7 @@ import {
   BlurFilter,
   Container,
   Graphics,
+  Matrix,
   Rectangle,
   RenderTexture,
   Sprite,
@@ -59,7 +60,12 @@ const DEFAULTS = {
   hdr: true,
   exposure: 100,
   bloom: 35,
+  // Рельеф плоских текстур (только HDR, `hdr.js`): сила, 0 — выключен.
+  bump: 45,
 };
+/// Сила рельефа на максимуме ползунка и доля зерна в высоте.
+const BUMP_MAX = 9;
+const GRAIN = 0.045;
 /// «Насыщенность» (0–100): на нуле все лампы спокойного тёплого белого
 /// (`CALM`), на `SAT_BASE` — цвета из `ROLE_LIGHT` как есть, выше — сочнее.
 /// Вместе с ней разгорается свет **каждой клетки** цветом её типа (`CELL`):
@@ -297,6 +303,9 @@ export function createLighting(app, tile) {
   /// по нему считается, где карта лежит на экране (`attach`).
   let lit = null;
   let worldNode = null;
+  /// Слой тайлов: его снимок — карта высот рельефа.
+  let tilesNode = null;
+  let heightTarget = null;
   const scene = new Container(); // рисуется только в текстуру, на сцене его нет
   const ambient = new Sprite(Texture.WHITE);
   const bakedSprite = new Sprite();
@@ -400,6 +409,28 @@ export function createLighting(app, tile) {
       sat: 1 + 0.8 * over(prefs.sat),
       bloom: prefs.bloom / 100,
     });
+    hdr.bump((prefs.bump / 100) * BUMP_MAX, GRAIN);
+  }
+
+  /// Снять слой тайлов в карту высот — на каждой пересборке карты: светлое
+  /// на ней выше тёмного (шов — канавка, блик стены — ребро).
+  function snapHeight(pw, ph) {
+    if (!hdr || !tilesNode) return;
+    if (
+      !heightTarget ||
+      heightTarget.width !== pw ||
+      heightTarget.height !== ph
+    ) {
+      heightTarget?.destroy(true);
+      heightTarget = RenderTexture.create({ width: pw, height: ph });
+    }
+    app.renderer.render({
+      container: tilesNode,
+      target: heightTarget,
+      clear: true,
+      transform: new Matrix().translate(PAD, PAD),
+    });
+    hdr.height(heightTarget, pw, ph, tile);
   }
 
   function applyShade() {
@@ -506,6 +537,7 @@ export function createLighting(app, tile) {
     }
     ambient.width = pw;
     ambient.height = ph;
+    snapHeight(pw, ph);
     for (const n of lamps.removeChildren()) n.destroy({ children: true });
 
     // Где стоят лампы: роль — один свет на комнату, в центре своей порции
@@ -703,9 +735,10 @@ export function createLighting(app, tile) {
   }
 
   /// Мировые слои под HDR-фильтр и сам мир (для координат света).
-  function attach(container, world) {
+  function attach(container, world, tiles) {
     lit = container;
     worldNode = world;
+    tilesNode = tiles;
     applyMode();
   }
 
@@ -718,6 +751,12 @@ export function createLighting(app, tile) {
   function setGlow(v) {
     prefs.glow = v;
     applyGlow();
+    applyHdr();
+    save();
+  }
+
+  function setBump(v) {
+    prefs.bump = v;
     applyHdr();
     save();
   }
@@ -769,6 +808,7 @@ export function createLighting(app, tile) {
     setHdr,
     setExposure,
     setBloom,
+    setBump,
     attach,
     /// Есть ли у браузера float-текстуры, без которых HDR не считается.
     canHdr,
