@@ -3,6 +3,7 @@
 
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { ITEM_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
+import { createLighting } from "./light.js";
 import {
   articleKeys,
   articleLinks,
@@ -561,17 +562,29 @@ const unitLayer = new Container();
 // кот от станка ушёл, — то есть когда работа как раз и не идёт.
 const workLayer = new Container();
 const overlay = new Container();
-world.addChild(tileLayer);
-world.addChild(scrapLayer);
-world.addChild(bpLayer);
-world.addChild(dealLayer);
+// Всё, что свет освещает, — под одним контейнером: на него вешается
+// HDR-фильтр (`hdr.js`). Метки работы и оверлей стоят вне его и читаются в
+// любой тьме.
+const lit = new Container();
+world.addChild(lit);
+lit.addChild(tileLayer);
+lit.addChild(scrapLayer);
+lit.addChild(bpLayer);
+lit.addChild(dealLayer);
 // Нижний на экране кот рисуется поверх верхнего (§12.271): коты не входят в
 // проходимость (инвариант 8) и на диагонали налезают друг на друга, а порядок
 // по `y` читает наложение глубиной, а не столкновением. Ключ — `zIndex`,
 // который пишет `stepUnits` вместе с позицией; Pixi пересортирует слой только
 // когда ключ изменился.
 unitLayer.sortableChildren = true;
-world.addChild(unitLayer);
+// Свет (прототип, `light.js`) — двумя слоями: высветление под котами (светит
+// пол и мебель, кота не пересвечивает), тень поверх котов, но под метками
+// работы и оверлеем — подсказки и выбор обязаны читаться и в тени.
+const lighting = createLighting(app, TILE);
+lit.addChild(lighting.glow);
+lit.addChild(unitLayer);
+lit.addChild(lighting.shade);
+lighting.attach(lit, world);
 world.addChild(workLayer);
 world.addChild(overlay);
 app.stage.addChild(world);
@@ -1777,6 +1790,7 @@ function drawMap(map) {
     node.alpha = 0.14;
     tileLayer.addChild(node);
   }
+  lighting.rebuild(meta, mapCells, tileRegions());
 }
 
 // Кучи лома на полу. Точное количество — в шапке; здесь только «сколько
@@ -3200,6 +3214,7 @@ function notePerf(now) {
   const fps = Math.round((perfFrames * 1000) / span);
   const tps = Math.round((perfTicks * 1000) / span);
   perfEl.textContent = `${fps} FPS · ${tps} TPS`;
+  syncLightStats();
   perfFrames = 0;
   perfTicks = 0;
   perfAt = now;
@@ -7232,6 +7247,51 @@ const KEEPS_CELL = new Set([
   "cancelResearch",
 ]);
 
+// --- свет (прототип, `light.js`) ---------------------------------------------
+let lightUi = null;
+const STRESS_LABEL = { 0: "обычная", 1: "лампа на клетку", 10: "10 на клетку" };
+
+/// Подписи раздела «Свет» — только на изменении (§12.84): зовут их клик,
+/// ползунок и клавиша L, а не кадр.
+function syncLightUi() {
+  if (!lightUi) return;
+  const p = lighting.prefs();
+  const text = (el, html) => {
+    if (el.innerHTML !== html) el.innerHTML = html;
+  };
+  text(
+    lightUi.on,
+    `<span class="sw sw-cursor"></span><span>Свет: ${p.on ? "вкл" : "выкл"}</span>`,
+  );
+  text(
+    lightUi.mode,
+    `<span class="sw sw-cursor"></span><span>Режим: ${p.hdr ? "HDR" : "простой"}</span>`,
+  );
+  lightUi.mode.classList.toggle("snd-off", !lighting.canHdr);
+  text(
+    lightUi.stress,
+    `<span class="sw sw-cursor"></span><span>Нагрузка: ${STRESS_LABEL[p.stress]}</span>`,
+  );
+  for (const key of ["shade", "glow", "soft", "sat", "exposure", "bloom"]) {
+    const u = lightUi[key];
+    if (u.range.value !== String(p[key])) u.range.value = String(p[key]);
+    u.val.textContent = String(p[key]);
+  }
+  lightUi.stats.classList.toggle("off", !p.on);
+}
+
+/// Цифры раздела — раз в секунду, вместе со счётчиком кадров в шапке.
+function syncLightStats() {
+  if (!lightUi) return;
+  const n = lighting.count();
+  const cost = lighting.takeCost().toFixed(2);
+  const bake = lighting.bakeCost().toFixed(1);
+  lightUi.stats.textContent =
+    n === "выкл"
+      ? "свет выключен"
+      : `источников ${n} · ${cost} мс на кадр · запекание ${bake} мс`;
+}
+
 // --- звук (§12.253) -----------------------------------------------------------
 let soundQuiet = true;
 let awaySeen = null;
@@ -7326,6 +7386,13 @@ window.addEventListener("keydown", (e) => {
   // этого повёрнутый объект появился бы, только когда игрок дёрнет мышь.
   if (e.code === "KeyM") {
     toggleSound();
+    return;
+  }
+  // Прототип света: L — вкл/выкл, Shift+L — стресс (лампа на каждой клетке).
+  if (e.code === "KeyL") {
+    if (e.shiftKey) lighting.toggleStress();
+    else lighting.toggle();
+    syncLightUi();
     return;
   }
   if (e.code === "KeyR" && buildStruct >= 0) {
@@ -7874,6 +7941,112 @@ function buildToolbar() {
     soundBusBtns.push(b);
   }
   syncSoundBtn();
+
+  // Свет (прототип, `light.js`) — свой раздел, как звук: вкл/выкл, три
+  // ползунка, нагрузка для замера и цифры, сколько свет стоит. Кнопки раздел
+  // не складывают: их жмут, чтобы увидеть разницу на карте.
+  const lit = mkSection(el, "Свет");
+  lightUi = {};
+  lightUi.on = mkTool("", () => {
+    lighting.toggle();
+    syncLightUi();
+  });
+  liveTitle(lightUi.on, "Включить или выключить освещение (клавиша L)");
+  lit.appendChild(lightUi.on);
+  lightUi.mode = mkTool("", () => {
+    if (!lighting.canHdr) return;
+    lighting.setHdr(!lighting.prefs().hdr);
+    syncLightUi();
+  });
+  liveTitle(
+    lightUi.mode,
+    lighting.canHdr
+      ? "HDR: свет считается без потолка в единицу и сводится тонмаппингом; простой — затемнение и высветление двумя слоями"
+      : "HDR недоступен: браузер не умеет рисовать во float-текстуру",
+  );
+  lit.appendChild(lightUi.mode);
+  for (const [key, label, max, tip, set] of [
+    [
+      "shade",
+      "Тень",
+      100,
+      "Насколько светло там, куда не достают лампы",
+      (v) => lighting.setShade(v),
+    ],
+    [
+      "glow",
+      "Лампы",
+      60,
+      "Насколько лампы высветляют пол под собой",
+      (v) => lighting.setGlow(v),
+    ],
+    [
+      "soft",
+      "Мягкость",
+      12,
+      "Размытие края тени от стен",
+      (v) => lighting.setSoft(v),
+    ],
+    [
+      "sat",
+      "Насыщенность",
+      100,
+      "Цвет света: слева спокойный белый, справа каждая клетка светится цветом своего типа",
+      (v) => lighting.setSat(v),
+    ],
+    [
+      "exposure",
+      "Экспозиция (HDR)",
+      200,
+      "Общая яркость кадра после сведения света; в простом режиме не действует",
+      (v) => lighting.setExposure(v),
+    ],
+    [
+      "bloom",
+      "Свечение (HDR)",
+      100,
+      "Ореол вокруг ярких ламп; в простом режиме не действует",
+      (v) => lighting.setBloom(v),
+    ],
+  ]) {
+    const row = document.createElement("div");
+    row.className = "light-label";
+    row.innerHTML = `<span>${label}</span><span class="light-val"></span>`;
+    const range = document.createElement("input");
+    range.type = "range";
+    range.min = "0";
+    range.max = String(max);
+    range.className = "sound-vol";
+    range.addEventListener("input", () => {
+      set(Number(range.value));
+      syncLightUi();
+    });
+    liveTitle(range, tip);
+    lit.appendChild(row);
+    lit.appendChild(range);
+    lightUi[key] = { range, val: row.querySelector(".light-val") };
+  }
+  lightUi.stress = mkTool("", () => {
+    lighting.toggleStress();
+    syncLightUi();
+  });
+  liveTitle(
+    lightUi.stress,
+    "Лишние лампы для замера скорости: обычный свет → лампа на каждой клетке пола → десять на клетку (Shift+L)",
+  );
+  lit.appendChild(lightUi.stress);
+  const resetLight = mkTool(
+    '<span class="sw sw-cursor"></span><span>Сбросить настройки</span>',
+    () => {
+      lighting.reset();
+      syncLightUi();
+    },
+  );
+  lit.appendChild(resetLight);
+  lightUi.stats = document.createElement("div");
+  lightUi.stats.className = "light-stats";
+  lit.appendChild(lightUi.stats);
+  syncLightUi();
 
   // Партия (§12.45). Автосохранение идёт само и молча, поэтому здесь только
   // то, что игрок решает сам: начать заново, унести партию файлом, принести
@@ -14741,6 +14914,8 @@ setSpeed(0);
 // строки модуль ещё раскладывает состояние, которое `stepUnits` читает
 // (`speed`), а первый кадр тикера придёт уже после.
 app.ticker.add(stepUnits);
+// Свет — после шага котов: пятно у кота едет за уже сдвинутым узлом.
+app.ticker.add((t) => lighting.frame(units, t.deltaMS, speed));
 
 // Любой модал ставит время на паузу, а закрытый возвращает тот темп, что был
 // до него (§12.254): окно читают и в нём решают, а мир за ним на ×10 уходит
