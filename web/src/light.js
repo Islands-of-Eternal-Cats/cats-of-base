@@ -27,10 +27,12 @@ import {
   BlurFilter,
   Container,
   Graphics,
+  Rectangle,
   RenderTexture,
   Sprite,
   Texture,
 } from "pixi.js";
+import { createHdrFilter, hdrSupported } from "./hdr.js";
 
 /// Во сколько раз текстура света мельче мира (в пикселях мира, до масштаба).
 const LIGHT_RES = 0.5;
@@ -46,7 +48,18 @@ const SHADE_LIGHT = [168, 176, 196];
 /// Настройки по умолчанию: тень (0–100), сила ламп (0–60, в процентах
 /// высветления) и мягкость теней (0–12, пикселей размытия). Живут в
 /// `localStorage` вида, а не в партии: это выбор игрока о своём экране, как звук.
-const DEFAULTS = { on: true, shade: 40, glow: 20, soft: 5, sat: 60 };
+const DEFAULTS = {
+  on: true,
+  shade: 40,
+  glow: 20,
+  soft: 5,
+  sat: 60,
+  // HDR-сведение (`hdr.js`) и две его ручки: экспозиция (в процентах) и
+  // свечение вокруг ярких ламп. Без float-текстур HDR не включается вовсе.
+  hdr: true,
+  exposure: 100,
+  bloom: 35,
+};
 /// «Насыщенность» (0–100): на нуле все лампы спокойного тёплого белого
 /// (`CALM`), на `SAT_BASE` — цвета из `ROLE_LIGHT` как есть, выше — сочнее.
 /// Вместе с ней разгорается свет **каждой клетки** цветом её типа (`CELL`):
@@ -187,6 +200,19 @@ function visibility(cells, W, H, cx, cy, radius, tile) {
 
 export function createLighting(app, tile) {
   const glow = gradientTexture();
+  const canHdr = hdrSupported(app);
+  // Свет копится во float, если можно: в простом режиме это ничего не
+  // меняет, а в HDR перекрытие ламп не обрезается единицей.
+  const lightFormat = canHdr ? "rgba16float" : "rgba8unorm";
+  const hdr = canHdr ? createHdrFilter() : null;
+  // Свечение: запечённый свет, размытый широко и в четверть разрешения света.
+  let bloomTarget = null;
+  const bloomSrc = new Sprite();
+  bloomSrc.filters = [new BlurFilter({ strength: 14, quality: 4 })];
+  /// Контейнер мировых слоёв, на который вешается HDR-фильтр, и сам мир —
+  /// по нему считается, где карта лежит на экране (`attach`).
+  let lit = null;
+  let worldNode = null;
   const scene = new Container(); // рисуется только в текстуру, на сцене его нет
   const ambient = new Sprite(Texture.WHITE);
   const bakedSprite = new Sprite();
@@ -225,9 +251,8 @@ export function createLighting(app, tile) {
     /* без хранилища — настройки по умолчанию */
   }
   let enabled = prefs.on;
-  sprite.visible = glowLayer.visible = enabled;
   applyShade();
-  applyGlow();
+  applyMode();
   blur.strength = prefs.soft;
   soften.filters = prefs.soft > 0 ? [blur] : [];
 
@@ -239,8 +264,44 @@ export function createLighting(app, tile) {
     }
   }
 
+  /// HDR сейчас и правда работает: включён свет, выбран режим, есть float.
+  function hdrOn() {
+    return enabled && prefs.hdr && !!hdr;
+  }
+
+  /// Подпорки простого режима (`CEIL_FADE`, `CELL_BOOST`, `GLOW_BOOST`)
+  /// существуют только потому, что `multiply` обрезает свет единицей. В HDR их
+  /// нет: насыщенность доводит шейдер.
+  function boost() {
+    return hdrOn() ? 0 : over(prefs.sat);
+  }
+
   function applyGlow() {
-    glowLayer.alpha = (prefs.glow / 100) * (1 + GLOW_BOOST * over(prefs.sat));
+    glowLayer.alpha = (prefs.glow / 100) * (1 + GLOW_BOOST * boost());
+  }
+
+  /// Кто рисует свет: фильтр на мировых слоях (HDR) или два спрайта.
+  function applyMode() {
+    sprite.visible = glowLayer.visible = enabled && !hdrOn();
+    if (lit) lit.filters = hdrOn() ? [hdr.filter] : null;
+    applyGlow();
+    applyHdr();
+  }
+
+  function applyHdr() {
+    if (!hdr) return;
+    const t = ambient.tint;
+    hdr.params({
+      ambient: [
+        ((t >> 16) & 255) / 255,
+        ((t >> 8) & 255) / 255,
+        (t & 255) / 255,
+      ],
+      gain: prefs.glow / 16,
+      exposure: prefs.exposure / 100,
+      sat: 1 + 0.8 * over(prefs.sat),
+      bloom: prefs.bloom / 100,
+    });
   }
 
   function applyShade() {
@@ -249,6 +310,7 @@ export function createLighting(app, tile) {
       Math.round(d + (SHADE_LIGHT[i] - d) * k),
     );
     ambient.tint = (r << 16) | (g << 8) | b;
+    applyHdr();
   }
   /// Стресс-режим: сколько ламп на клетку пола (0 — обычный свет) и по три на
   /// кота — проверить, где у света потолок, на карте, где ламп мало.
@@ -283,7 +345,7 @@ export function createLighting(app, tile) {
       .poly(visibility(map.cells, map.W, map.H, cx, cy, spec.radius, tile))
       .fill(0xffffff);
     const s = glowSprite(spec, cx * tile, cy * tile, tintOf(spec, prefs.sat));
-    if (spec === CEIL) s.alpha *= 1 - CEIL_FADE * over(prefs.sat);
+    if (spec === CEIL) s.alpha *= 1 - CEIL_FADE * boost();
     s.mask = mask;
     node.addChild(mask, s);
     node.spec = spec;
@@ -306,26 +368,39 @@ export function createLighting(app, tile) {
       glowTarget?.destroy(true);
       baked?.destroy(true);
       bakedSoft?.destroy(true);
+      bloomTarget?.destroy(true);
       target = RenderTexture.create({
         width: pw,
         height: ph,
         resolution: LIGHT_RES,
+        format: lightFormat,
       });
       glowTarget = RenderTexture.create({
         width: pw,
         height: ph,
         resolution: LIGHT_RES,
+        format: lightFormat,
       });
       baked = RenderTexture.create({
         width: pw,
         height: ph,
         resolution: LIGHT_RES,
+        format: lightFormat,
       });
       bakedSoft = RenderTexture.create({
         width: pw,
         height: ph,
         resolution: LIGHT_RES,
+        format: lightFormat,
       });
+      bloomTarget = RenderTexture.create({
+        width: pw,
+        height: ph,
+        resolution: LIGHT_RES / 4,
+        format: lightFormat,
+      });
+      bloomSrc.texture = bakedSoft;
+      hdr?.textures(target, bloomTarget);
       soften.texture = baked;
       sprite.texture = target;
       glowLayer.texture = glowTarget;
@@ -378,7 +453,7 @@ export function createLighting(app, tile) {
             const color =
               ROLE_LIGHT[def.id]?.color ??
               parseInt(String(def.color || "#ffffff").slice(1), 16);
-            const k = over(prefs.sat);
+            const k = boost();
             spec = {
               color,
               radius: CELL.radius + CELL_BOOST.radius * k,
@@ -419,6 +494,8 @@ export function createLighting(app, tile) {
   /// Кадр: двигаем свет котов, мерцаем, перерисовываем текстуру.
   function frame(units, deltaMS, speed) {
     if (!enabled || !target) return;
+    if (lit && !lit.boundsArea)
+      lit.boundsArea = new Rectangle(0, 0, target.width, target.height);
     const t0 = performance.now();
     clock += (deltaMS * Math.max(speed, 1)) / 1000;
     if (dirty && lastMap) {
@@ -452,6 +529,21 @@ export function createLighting(app, tile) {
     }
     for (let i = n; i < cats.children.length; i++)
       cats.children[i].visible = false;
+    if (hdrOn()) {
+      // В HDR фон — uniform шейдера, а в текстуре только лампы и коты:
+      // их сумма свободно выходит за единицу.
+      ambient.visible = false;
+      app.renderer.render({ container: scene, target, clear: true });
+      ambient.visible = true;
+      if (worldNode) {
+        const p = worldNode.toGlobal({ x: 0, y: 0 });
+        const k = worldNode.scale.x;
+        hdr.rect(p.x, p.y, target.width * k, target.height * k);
+      }
+      costSum += performance.now() - t0;
+      costFrames++;
+      return;
+    }
     app.renderer.render({ container: scene, target, clear: true });
     // Высветление — та же сцена без фона и без котов: кот светит, чтобы не
     // теряться в тени, а не чтобы бликовать.
@@ -476,14 +568,46 @@ export function createLighting(app, tile) {
   function resoften() {
     if (!bakedSoft) return;
     app.renderer.render({ container: soften, target: bakedSoft, clear: true });
+    app.renderer.render({
+      container: bloomSrc,
+      target: bloomTarget,
+      clear: true,
+    });
   }
 
   function toggle() {
     enabled = !enabled;
-    sprite.visible = glowLayer.visible = enabled;
     prefs.on = enabled;
+    applyMode();
+    dirty = true;
     save();
     return enabled;
+  }
+
+  function setHdr(on) {
+    prefs.hdr = on;
+    applyMode();
+    dirty = true; // подпорки простого режима запечены в лампы
+    save();
+  }
+
+  function setExposure(v) {
+    prefs.exposure = v;
+    applyHdr();
+    save();
+  }
+
+  function setBloom(v) {
+    prefs.bloom = v;
+    applyHdr();
+    save();
+  }
+
+  /// Мировые слои под HDR-фильтр и сам мир (для координат света).
+  function attach(container, world) {
+    lit = container;
+    worldNode = world;
+    applyMode();
   }
 
   function setShade(v) {
@@ -495,6 +619,7 @@ export function createLighting(app, tile) {
   function setGlow(v) {
     prefs.glow = v;
     applyGlow();
+    applyHdr();
     save();
   }
 
@@ -510,14 +635,15 @@ export function createLighting(app, tile) {
   function setSat(v) {
     prefs.sat = v;
     applyGlow();
+    applyHdr();
     dirty = true;
     save();
   }
 
   function reset() {
-    Object.assign(prefs, DEFAULTS, { on: enabled });
+    Object.assign(prefs, DEFAULTS, { on: enabled, hdr: prefs.hdr });
     applyShade();
-    applyGlow();
+    applyMode();
     setSoft(prefs.soft);
     dirty = true;
   }
@@ -541,9 +667,15 @@ export function createLighting(app, tile) {
     setGlow,
     setSoft,
     setSat,
+    setHdr,
+    setExposure,
+    setBloom,
+    attach,
+    /// Есть ли у браузера float-текстуры, без которых HDR не считается.
+    canHdr,
     reset,
     /// Текущие настройки (копия) и уровень стресса — для раздела «Свет».
-    prefs: () => ({ ...prefs, on: enabled, stress }),
+    prefs: () => ({ ...prefs, on: enabled, stress, hdr: !!hdr && prefs.hdr }),
     takeCost,
     /// Сколько стоила последняя пересборка света карты, мс.
     bakeCost: () => bakeMs,

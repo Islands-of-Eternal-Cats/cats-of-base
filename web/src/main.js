@@ -562,10 +562,15 @@ const unitLayer = new Container();
 // кот от станка ушёл, — то есть когда работа как раз и не идёт.
 const workLayer = new Container();
 const overlay = new Container();
-world.addChild(tileLayer);
-world.addChild(scrapLayer);
-world.addChild(bpLayer);
-world.addChild(dealLayer);
+// Всё, что свет освещает, — под одним контейнером: на него вешается
+// HDR-фильтр (`hdr.js`). Метки работы и оверлей стоят вне его и читаются в
+// любой тьме.
+const lit = new Container();
+world.addChild(lit);
+lit.addChild(tileLayer);
+lit.addChild(scrapLayer);
+lit.addChild(bpLayer);
+lit.addChild(dealLayer);
 // Нижний на экране кот рисуется поверх верхнего (§12.271): коты не входят в
 // проходимость (инвариант 8) и на диагонали налезают друг на друга, а порядок
 // по `y` читает наложение глубиной, а не столкновением. Ключ — `zIndex`,
@@ -576,9 +581,10 @@ unitLayer.sortableChildren = true;
 // пол и мебель, кота не пересвечивает), тень поверх котов, но под метками
 // работы и оверлеем — подсказки и выбор обязаны читаться и в тени.
 const lighting = createLighting(app, TILE);
-world.addChild(lighting.glow);
-world.addChild(unitLayer);
-world.addChild(lighting.shade);
+lit.addChild(lighting.glow);
+lit.addChild(unitLayer);
+lit.addChild(lighting.shade);
+lighting.attach(lit, world);
 world.addChild(workLayer);
 world.addChild(overlay);
 app.stage.addChild(world);
@@ -7194,10 +7200,15 @@ function syncLightUi() {
     `<span class="sw sw-cursor"></span><span>Свет: ${p.on ? "вкл" : "выкл"}</span>`,
   );
   text(
+    lightUi.mode,
+    `<span class="sw sw-cursor"></span><span>Режим: ${p.hdr ? "HDR" : "простой"}</span>`,
+  );
+  lightUi.mode.classList.toggle("snd-off", !lighting.canHdr);
+  text(
     lightUi.stress,
     `<span class="sw sw-cursor"></span><span>Нагрузка: ${STRESS_LABEL[p.stress]}</span>`,
   );
-  for (const key of ["shade", "glow", "soft", "sat"]) {
+  for (const key of ["shade", "glow", "soft", "sat", "exposure", "bloom"]) {
     const u = lightUi[key];
     if (u.range.value !== String(p[key])) u.range.value = String(p[key]);
     u.val.textContent = String(p[key]);
@@ -7878,6 +7889,18 @@ function buildToolbar() {
   });
   liveTitle(lightUi.on, "Включить или выключить освещение (клавиша L)");
   lit.appendChild(lightUi.on);
+  lightUi.mode = mkTool("", () => {
+    if (!lighting.canHdr) return;
+    lighting.setHdr(!lighting.prefs().hdr);
+    syncLightUi();
+  });
+  liveTitle(
+    lightUi.mode,
+    lighting.canHdr
+      ? "HDR: свет считается без потолка в единицу и сводится тонмаппингом; простой — затемнение и высветление двумя слоями"
+      : "HDR недоступен: браузер не умеет рисовать во float-текстуру",
+  );
+  lit.appendChild(lightUi.mode);
   for (const [key, label, max, tip, set] of [
     [
       "shade",
@@ -7906,6 +7929,20 @@ function buildToolbar() {
       100,
       "Цвет света: слева спокойный белый, справа каждая клетка светится цветом своего типа",
       (v) => lighting.setSat(v),
+    ],
+    [
+      "exposure",
+      "Экспозиция (HDR)",
+      200,
+      "Общая яркость кадра после сведения света; в простом режиме не действует",
+      (v) => lighting.setExposure(v),
+    ],
+    [
+      "bloom",
+      "Свечение (HDR)",
+      100,
+      "Ореол вокруг ярких ламп; в простом режиме не действует",
+      (v) => lighting.setBloom(v),
     ],
   ]) {
     const row = document.createElement("div");
