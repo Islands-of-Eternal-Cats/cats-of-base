@@ -210,7 +210,11 @@ main#stage::before {
   inset: 0;
   pointer-events: none;
   z-index: 1;
-  background: radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+  background: radial-gradient(
+    ellipse at 50% 45%,
+    transparent 55%,
+    rgba(0, 0, 0, 0.55) 100%
+  );
 }
 main#stage canvas {
   display: block;
@@ -2973,4 +2977,22 @@ main#stage.mode-cursor #mode-banner {
    `.news-label` вес задаёт `<b>`, а не сама ячейка. */
 .news-label:has(> .news-kind) {
   font-weight: 400;
+}
+
+/* Раздел «Свет» (прототип): подпись ползунка со значением справа. */
+.light-label {
+  display: flex;
+  justify-content: space-between;
+  margin: 4px 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.light-stats {
+  margin: 4px 8px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.light-stats.off {
+  opacity: 0.6;
 }
