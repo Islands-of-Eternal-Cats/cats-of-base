@@ -4,7 +4,7 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { ITEM_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
 import { createLighting } from "./light.js";
-import { drawOblique, wallRise } from "./oblique.js";
+import { COVERS_CELL, drawOblique, wallRise } from "./oblique.js";
 import {
   articleKeys,
   articleLinks,
@@ -1776,6 +1776,7 @@ function drawRoleGlyphs() {
   for (const r of tileRegions()) {
     const ctx = tileGlyphContext(r.tile);
     if (!ctx) continue;
+    if (view34 && COVERS_CELL.has(meta.palette?.[r.tile]?.id)) continue;
 
     // Размер — по **узкой** стороне области, а не по площади: глиф не должен
     // вылезать за комнату, а из коридора в одну клетку шириной вылезет любой,
