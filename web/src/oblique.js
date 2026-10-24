@@ -544,19 +544,34 @@ function prop(g, id, x, y, tint, n, d) {
       break;
     }
     case "rack": {
-      // Стеллаж во всю клетку, высокий: стойки и полки на передней грани.
-      const h = T * 0.62;
-      g.rect(px + 2, py + 2.5, T, T).fill({ color: 0, alpha: 0.4 });
-      g.rect(px, py - h, T, T).fill(0x5a606e); // верх
-      g.rect(px, py + T - h, T, h).fill(0x2c313b); // проём
-      for (let i = 0; i < 3; i++) {
-        const sy = py + T - h + (i + 1) * (h / 3) - 3;
-        g.rect(px + 2, sy, T - 4, 3).fill(0x8a8f9c);
-        g.rect(px + 2, sy + 3, T - 4, 2).fill({ color: 0, alpha: 0.4 });
+      // Стеллаж — низкий металлический стол с полкой под ним. Высокий шкаф
+      // закрывал своим верхом клетку позади (у северной стены — саму стену) и
+      // читался серой плитой, а кучи лежали на его передней грани. Здесь верх
+      // ниже середины клетки: куча, которую вид кладёт в центр клетки, ложится
+      // **на столешницу**. Соседние стеллажи сливаются в один ряд: стойки
+      // ставятся только на концах ряда.
+      const h = T * 0.3;
+      const frame = 0x4f6f86;
+      const dark = shade(frame, -0.45);
+      const isRack = (dx) => tileDefAt(x + dx, y)?.id === "rack";
+      const l = isRack(-1);
+      const r = isRack(1);
+      // Тень под столешницей и полка внизу, видная сквозь каркас.
+      g.rect(px, py + T - h, T, h).fill(0x1f262d);
+      g.rect(px, py + T - h * 0.42, T, h * 0.18).fill(shade(frame, -0.1));
+      g.rect(px, py + T - h * 0.24, T, h * 0.24).fill({ color: 0, alpha: 0.35 });
+      // Столешница: решётчатый настил с кромкой.
+      g.rect(px, py - h, T, T).fill(shade(frame, 0.12));
+      for (let i = 1; i < 4; i++) {
+        g.rect(px, py - h + (i * T) / 4, T, 1).fill({ color: 0, alpha: 0.18 });
       }
-      g.rect(px, py + T - h, 2.5, h).fill(0x6a707e);
-      g.rect(px + T - 2.5, py + T - h, 2.5, h).fill(0x6a707e);
-      g.rect(px, py - h, T, 1).fill({ color: 0xffffff, alpha: 0.2 });
+      g.rect(px, py - h, T, 1.5).fill({ color: 0xffffff, alpha: 0.25 });
+      g.rect(px, py + T - h - 3, T, 3).fill(frame);
+      g.rect(px, py + T - h, T, 1).fill(dark);
+      // Стойки — на концах ряда; между соседями шов, а не две стойки подряд.
+      if (!l) g.rect(px, py - h, 3, T + h).fill(frame);
+      if (!r) g.rect(px + T - 3, py - h, 3, T + h).fill(frame);
+      if (l) g.rect(px, py - h, 1, T).fill({ color: 0, alpha: 0.2 });
       break;
     }
     case "garage": {
