@@ -5,6 +5,15 @@ import { Application, Container, Graphics, Text } from "pixi.js";
 import { ITEM_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
 import { createLighting } from "./light.js";
 import {
+  COVERS_CELL,
+  drawGlass,
+  drawGrid,
+  drawOblique,
+  sconceCells,
+  surfaceRise,
+  wallRise,
+} from "./oblique.js";
+import {
   articleKeys,
   articleLinks,
   articleStage,
@@ -556,6 +565,8 @@ const scrapLayer = new Container(); // кучи лома на полу
 const bpLayer = new Container(); // чертежи (призраки будущих тайлов)
 const dealLayer = new Container(); // контейнеры сделок в ячейках постов (§12.68)
 const unitLayer = new Container();
+// Отладка вида (только dev): снимок мира крупным планом из консоли.
+if (import.meta.env.DEV) globalThis.__sp = { app, world };
 // Работа в ячейке (§12.30, §12.96, §12.132): что именно тут делают и докуда
 // дошли. Слой стоит **поверх котов** намеренно: мастер стоит ровно на той
 // клетке, о которой речь, и под ним значок был бы виден только тогда, когда
@@ -569,6 +580,10 @@ const lit = new Container();
 world.addChild(lit);
 lit.addChild(tileLayer);
 lit.addChild(scrapLayer);
+// Стекло витрин над стеллажами (вид 3/4, `drawGlass`): поверх куч, но под
+// котами и чертежами. Узел постоянный, перерисовывается вместе с картой.
+const glassGfx = new Graphics();
+lit.addChild(glassGfx);
 lit.addChild(bpLayer);
 lit.addChild(dealLayer);
 // Нижний на экране кот рисуется поверх верхнего (§12.271): коты не входят в
@@ -581,6 +596,18 @@ unitLayer.sortableChildren = true;
 // пол и мебель, кота не пересвечивает), тень поверх котов, но под метками
 // работы и оверлеем — подсказки и выбор обязаны читаться и в тени.
 const lighting = createLighting(app, TILE);
+// Вид 3/4 (прототип, `oblique.js`): клавиша V, выбор помнит `localStorage`
+// вида — это выбор игрока о своём экране, как свет и звук.
+const VIEW_KEY = "sp-view";
+let view34 = (() => {
+  try {
+    return localStorage.getItem(VIEW_KEY) !== "flat";
+  } catch {
+    return true;
+  }
+})();
+lighting.setWallRise(view34 ? wallRise(false) : 0);
+if (import.meta.env.DEV) Object.assign(globalThis.__sp, { lighting, redrawView });
 lit.addChild(lighting.glow);
 lit.addChild(unitLayer);
 lit.addChild(lighting.shade);
@@ -632,6 +659,10 @@ orderMarker.visible = false;
 // Осмотренная клетка (§12.58): уголки, а не заливка, — заливкой рисуется
 // `hoverRect`, и два одинаковых прямоугольника читались бы как один.
 const cellMarker = new Graphics();
+// Сетка вида 3/4 со стройкой в руке (`drawGrid`) — в оверлее, над светом:
+// внутри освещаемого слоя её гасила тень, и в тёмной скале она не читалась.
+const gridGfx = new Graphics();
+overlay.addChild(gridGfx);
 overlay.addChild(hoverRect);
 overlay.addChild(orderMarker);
 overlay.addChild(cellMarker);
@@ -694,7 +725,6 @@ let dragTo = null; // текущий угол рамки; переживает �
 // Кот, стоявший под началом рамки. Запоминается в момент нажатия, а не читается
 // на отпускании: на ×10 кот успевает уйти за время клика, а игрок целился в
 // того, кого видел.
-let dragUnit = null;
 // Сколько на базе раций. С §12.152 они **не** дают лицензии на вылазку — её
 // держит гараж, — и остались чистой связью: дежурный на рации прибавляет силы
 // всем идущим отрядам разом (§12.60).
@@ -1498,6 +1528,47 @@ function drawMap(map) {
   const H = meta.height;
   const at = (x, y) =>
     x < 0 || y < 0 || x >= W || y >= H ? -1 : mapCells[y * W + x];
+  // Вид 3/4 (прототип, `oblique.js`): свой пол, стены в разрезе и мебель
+  // коробками; глифы ролей и свет — общие с плоским видом.
+  if (view34) {
+    const [ground, faces, props, caps] = [0, 0, 0, 0].map(() => new Graphics());
+    drawOblique({
+      lowered: wallsDown,
+      ground,
+      faces,
+      props,
+      caps,
+      at,
+      W,
+      H,
+      T: TILE,
+      palette: meta.palette ?? [],
+      tints: paletteColors,
+      tileDefAt,
+      noise: cellNoise,
+      shade,
+      mix: mixColor,
+      rock: COLORS.rock,
+      rockSpeck: COLORS.rockSpeck,
+    });
+    tileLayer.addChild(ground, faces, props, caps);
+    lighting.setSconces(sconceCells(at, W, H, cellNoise));
+    gridGfx.clear();
+    if (wallsDown) drawGrid(gridGfx, W, H, TILE);
+    glassGfx.clear();
+    drawGlass(glassGfx, {
+      at,
+      W,
+      H,
+      T: TILE,
+      palette: meta.palette ?? [],
+    });
+    drawRoleGlyphs();
+    return;
+  }
+  glassGfx.clear();
+  gridGfx.clear();
+  lighting.setSconces([]);
   const g = new Graphics();
   const T = TILE;
   // 1. Скала: сплошной тёмный камень с крапом. Сетки на пустоте нет — там
@@ -1694,7 +1765,36 @@ function drawMap(map) {
   }
   tileLayer.addChild(f);
   tileLayer.addChild(w);
+  drawRoleGlyphs();
+}
 
+// Стены вида 3/4 опускаются, пока в руке инструмент стройки: высокое лицо
+// северной стены стоит в клетке скалы, и пол рядом со стеной размечали бы
+// через клетку. Карта перерисовывается только на смене состояния.
+let wallsDown = false;
+function syncWallsDown() {
+  const down = mode === "build";
+  if (down === wallsDown) return;
+  wallsDown = down;
+  if (view34 && mapCells) redrawView();
+}
+
+function redrawView() {
+  lighting.setWallRise(view34 ? wallRise(wallsDown) : 0);
+  if (mapCells) drawMap({ cells: mapCells });
+}
+
+function toggleView() {
+  view34 = !view34;
+  try {
+    localStorage.setItem(VIEW_KEY, view34 ? "34" : "flat");
+  } catch {
+    // Хранилища нет — выбор живёт до перезагрузки.
+  }
+  redrawView();
+}
+
+function drawRoleGlyphs() {
   // Вторым проходом — что клетка делает (§12.109). Заливка отвечает «какая это
   // комната», глиф — «зачем она». До него роль тайла жила только в цвете, то
   // есть в том, что игрок обязан выучить: склад от лаборатории отличался
@@ -1707,6 +1807,7 @@ function drawMap(map) {
   for (const r of tileRegions()) {
     const ctx = tileGlyphContext(r.tile);
     if (!ctx) continue;
+    if (view34 && COVERS_CELL.has(meta.palette?.[r.tile]?.id)) continue;
 
     // Размер — по **узкой** стороне области, а не по площади: глиф не должен
     // вылезать за комнату, а из коридора в одну клетку шириной вылезет любой,
@@ -1835,7 +1936,11 @@ function drawScrap(list) {
   const slotOf = new Map();
   for (const s of list ?? []) {
     const x = s.x * TILE;
-    const y = s.y * TILE;
+    // В виде 3/4 куча лежит на поверхности мебели (столешница стеллажа,
+    // паллета) и поднята вместе с ней — иначе на сдвинутой вверх столешнице
+    // нельзя сказать, чья это куча: стеллажа или паллеты позади.
+    const rise = view34 ? surfaceRise(tileDefAt(s.x, s.y)?.id) * TILE : 0;
+    const y = s.y * TILE - rise;
     const n = s.count >= 15 ? 3 : s.count >= 5 ? 2 : 1;
     const ck = `${s.x},${s.y}`;
     const m = perCell.get(ck);
@@ -6830,26 +6935,13 @@ function applyDrag() {
 // под курсором. Без этого рамка висела бы на экране до следующего движения мыши
 // и читалась как «что-то ещё выделено».
 function endDrag(apply, global) {
-  if (dragFrom && apply) {
-    // Клик по коту — это «покажи мне его», а не «застрой клетку под ним»:
-    // возвращаемся в курсор и выбираем кота. Отличает клик от разметки размер
-    // жеста: одна клетка — клик, две и больше — рамка, и застроить (или снести)
-    // клетку под котом по-прежнему можно, протянув через неё.
-    const rect = rectOf(dragFrom, dragTo);
-    if (dragUnit && rect.w === 1 && rect.h === 1) {
-      selectCursor();
-      // Тот же первый шаг, что и у клика курсором (§12.58): клетка показана, мир
-      // не тронут. Клетку выставляем **до** выбора кота — перерисовку оверлея
-      // зовёт `selectUnit`, и она должна увидеть уже обе половины выделения.
-      selectedCell = { x: rect.x, y: rect.y };
-      selectUnit(dragUnit);
-    } else {
-      applyDrag();
-    }
-  }
+  // В режиме стройки карта только строит и стирает: клик по коту застраивает
+  // клетку под ним, а не выбирает его. Режим виден целиком — стены опущены,
+  // поверх сетка, — и выбор кота посреди разметки читался бы как промах.
+  // Выбрать кота — выйти из «Постройки».
+  if (dragFrom && apply) applyDrag();
   dragFrom = null;
   dragTo = null;
-  dragUnit = null;
   hoverRect.clear();
   if (global) updateHover(global);
 }
@@ -6976,6 +7068,14 @@ function modeChrome() {
         tint: COLORS.build,
       };
     }
+    if (!toolInHand()) {
+      return {
+        key: "build",
+        label: "СТРОЙКА: выберите, что строить",
+        color: COLORS.build,
+        tint: null,
+      };
+    }
     if (buildTile < 0) {
       return { key: "erase", label: "СНОС", color: COLORS.erase, tint: null };
     }
@@ -6994,6 +7094,7 @@ function modeChrome() {
 // липкий (после мазка не сбрасывается), поэтому «я всё ещё в стройке» обязано
 // читаться до клика — периферийным зрением и там, куда игрок смотрит.
 function applyModeChrome() {
+  syncWallsDown();
   const m = modeChrome();
   stageEl.classList.remove("mode-cursor", "mode-build", "mode-erase");
   stageEl.classList.add(`mode-${m.key}`);
@@ -7061,7 +7162,7 @@ function askBuildMask(r) {
   const structure = build ? buildStruct : -1;
   // Объект и тайл взаимно исключают друг друга, и ядро спрашивают по-разному:
   // у тайла «можно ли сюда его», у объекта «встанет ли отсюда весь штамп».
-  const tile = build && structure < 0 ? buildTile : -1;
+  const tile = build && structure < 0 ? (buildTile ?? -1) : -1;
   const rect = r ? [r.x, r.y, r.w, r.h] : [0, 0, 0, 0];
   const key = `${tile}:${structure}:${buildRot}:${rect.join(",")}`;
   if (key === maskAsked) return;
@@ -7161,7 +7262,7 @@ function updateHover(global) {
   // отпустив кнопку здесь, игрок выберет кота, и цвет обязан сказать это до
   // клика, а не после.
   const overUnit =
-    r.w === 1 && r.h === 1 && (dragFrom ? dragUnit : t && unitAt(t.tx, t.ty));
+    mode === "cursor" && r.w === 1 && r.h === 1 && t && unitAt(t.tx, t.ty);
   const m = modeChrome();
   const col = overUnit ? COLORS.select : (m.tint ?? m.color);
   hoverRect
@@ -7198,7 +7299,7 @@ app.stage.on("pointerdown", (e) => {
     return;
   }
   const t = tileAt(e.global);
-  if (!t) return;
+  if (!t || !toolInHand()) return;
   // Объект ставится одним кликом: размер у него свой, и тянуть его рамкой
   // значило бы дать игроку выбрать то, что уже выбрано в рулсете (§12.162).
   if (buildStruct >= 0) {
@@ -7213,7 +7314,6 @@ app.stage.on("pointerdown", (e) => {
   }
   dragFrom = t;
   dragTo = t;
-  dragUnit = unitAt(t.tx, t.ty);
   updateHover(e.global);
 });
 app.stage.on("pointermove", (e) => {
@@ -7453,6 +7553,10 @@ window.addEventListener("keydown", (e) => {
     syncLightUi();
     return;
   }
+  if (e.code === "KeyV") {
+    toggleView();
+    return;
+  }
   if (e.code === "KeyR" && buildStruct >= 0) {
     buildRot = (buildRot + 1) % 4;
     applyModeChrome();
@@ -7473,8 +7577,15 @@ window.addEventListener("keydown", (e) => {
     // Дальше Escape отменяет ровно одно — и начинает с самого навязчивого.
     // Режим разметки липкий (§12.62) и держит на прицеле каждый клик по карте,
     // поэтому выходит первым; выделение подождёт второго нажатия.
+    // Инструмент в руке кладётся первым нажатием, раздел «Постройка»
+    // сворачивается вторым — вместе с ним уходит и режим.
     if (mode !== "cursor") {
-      selectCursor();
+      if (toolInHand() && openSection === "Постройка") {
+        selectBuildIdle();
+      } else {
+        openOnly(null);
+        if (mode !== "cursor") selectCursor();
+      }
       return;
     }
     // Режима нет — снимаем выделение целиком: и клетку, и котов. Клика,
@@ -7630,6 +7741,10 @@ function openOnly(title) {
     // тем более что свечение по периметру сейчас выключено.
     if (mode !== "cursor") selectCursor();
   }
+  // Раскрытая «Постройка» и есть режим стройки: стены опускаются и карта
+  // перестаёт выбирать котов ещё до того, как взят инструмент, — режим виден
+  // с первого клика, а не со второго.
+  if (title === "Постройка" && openSection !== title) selectBuildIdle();
   openSection = title;
   for (const s of sections) {
     const on = s.title === title;
@@ -7682,7 +7797,14 @@ document.addEventListener(
     if (!(t instanceof Node) || app.canvas.contains(t)) return;
     const build = sections.find((s) => s.title === "Постройка");
     if (build && (build.head.contains(t) || build.body.contains(t))) return;
-    selectCursor();
+    // Тулбар режим кладёт сам — кликом: двери свёрнуты `folds`, заголовки
+    // разделов зовут `openOnly`. Свернуть «Постройку» здесь, на нажатии,
+    // значило бы уронить столбец под мышью: «Вылазки» уезжали вверх до
+    // отпускания кнопки, и клик не доходил ни до какой двери.
+    if (document.getElementById("toolbar")?.contains(t)) return;
+    // Раскрытая «Постройка» — это режим, поэтому уходит он вместе с ней.
+    if (openSection === "Постройка") openOnly(null);
+    else selectCursor();
   },
   true,
 );
@@ -12424,7 +12546,8 @@ function closeOtherWindows(keep) {
   // «Склад» или штаб, игрок ушёл из разметки, и держать инструмент в руке под
   // модалом незачем — карта под ним всё равно не отвечает. Кладём его тем же
   // `selectCursor`, что и `openOnly`: плашка режима уходит вместе с ним.
-  if (mode !== "cursor") selectCursor();
+  if (openSection === "Постройка") openOnly(null);
+  else if (mode !== "cursor") selectCursor();
   for (const [key, , close] of WINDOWS) {
     if (key !== keep) close();
   }
@@ -14906,6 +15029,21 @@ function selectCursor() {
   activate(null);
   applyModeChrome();
   askBuildMask(null);
+}
+
+// Режим стройки без инструмента: раздел «Постройка» раскрыт, а тайл ещё не
+// взят. Карта в нём ничего не делает — ни строит, ни выбирает котов.
+function selectBuildIdle() {
+  mode = "build";
+  buildTile = null;
+  buildStruct = -1;
+  activate(null);
+  applyModeChrome();
+  askBuildMask(null);
+}
+
+function toolInHand() {
+  return mode === "build" && (buildStruct >= 0 || buildTile !== null);
 }
 
 // Времени выбор инструмента не касается: паузу ставит только игрок (§12.86).
