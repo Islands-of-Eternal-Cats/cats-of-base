@@ -3,7 +3,7 @@
 // базе крупнее стартовой; в игре вид включается клавишей V.
 
 import { Application, Container, Graphics } from "pixi.js";
-import { drawOblique, surfaceRise } from "./oblique.js";
+import { drawGlass, drawOblique, surfaceRise } from "./oblique.js";
 
 const TILES = {
   ".": ["floor", "#1b2a3f"],
@@ -142,6 +142,14 @@ for (const [x, y, c] of [
   extra.circle(cx + 2.5, cy - 8, 1.2).fill(0x111111);
 }
 world.addChild(extra);
+// Стекло витрин — поверх куч, как в игре.
+const glass = new Graphics();
+world.addChild(glass);
+function drawGlassLayer() {
+  glass.clear();
+  drawGlass(glass, { at, W, H, T, palette });
+}
+drawGlassLayer();
 
 function fit() {
   const s = Math.min(app.screen.width / (W * T + 40), app.screen.height / (H * T + 60));

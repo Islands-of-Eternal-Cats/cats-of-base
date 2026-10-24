@@ -718,3 +718,61 @@ export const surfaceRise = (id) => SURFACE[id] ?? 0;
 /// не ставится — бледный значок на столешнице читается грязью, а роль и так
 /// видна по самой мебели.
 export const COVERS_CELL = new Set(["rack", "bench"]);
+
+/// Стекло витрины над стеллажами: кучи на стеллаже лежат **внутри** шкафа, а
+/// на паллете — открыто, и это читается с первого взгляда. Рисуется в свой
+/// узел поверх куч (`g`), но под котами. Стекло почти прозрачное: кучи обязаны
+/// читаться первыми (§12.109), поэтому оттенок лёгкий, а блик — одна-две
+/// косые полосы на ряд, а не на клетку. Ряд стеллажей — одна витрина: рамка
+/// только по краю ряда, как стойки у самого стеллажа.
+export function drawGlass(g, d) {
+  const { at, W, H, T, palette } = d;
+  const h = T * SURFACE.rack;
+  const isRack = (x, y) => palette[at(x, y)]?.id === "rack";
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (!isRack(x, y)) continue;
+      const px = x * T;
+      const top = y * T - h;
+      g.rect(px, top, T, T).fill({ color: 0xcfe8ff, alpha: 0.1 });
+      // Рамка по краю ряда: светлая сверху и слева (свет падает сверху),
+      // тёмная снизу и справа.
+      if (!isRack(x, y - 1)) g.rect(px, top, T, 1.5).fill({ color: 0xffffff, alpha: 0.45 });
+      if (!isRack(x - 1, y)) g.rect(px, top, 1.5, T).fill({ color: 0xffffff, alpha: 0.3 });
+      if (!isRack(x, y + 1)) g.rect(px, top + T - 1.5, T, 1.5).fill({ color: 0x0b0d12, alpha: 0.5 });
+      if (!isRack(x + 1, y)) g.rect(px + T - 1.5, top, 1.5, T).fill({ color: 0x0b0d12, alpha: 0.35 });
+    }
+  }
+  // Блики: по горизонтальному ряду, косая полоса через каждые три клетки,
+  // целиком внутри ряда — у края она обрывалась бы и читалась царапиной.
+  for (let y = 0; y < H; y++) {
+    let x = 0;
+    while (x < W) {
+      if (!isRack(x, y)) {
+        x++;
+        continue;
+      }
+      const x0 = x;
+      while (x < W && isRack(x, y)) x++;
+      const run = x - x0;
+      const top = y * T - h;
+      const slant = T * 0.35;
+      for (let i = 0; i < Math.max(1, Math.floor(run / 3)); i++) {
+        const o = (x0 + 0.55 + i * 3) * T;
+        for (const [dx, w, a] of [
+          [0, T * 0.16, 0.16],
+          [T * 0.24, T * 0.06, 0.12],
+        ]) {
+          const left = o + dx;
+          if (left + w > x * T - 2) continue;
+          g.moveTo(left, top + 2)
+            .lineTo(left + w, top + 2)
+            .lineTo(left + w - slant, top + T - 2)
+            .lineTo(left - slant, top + T - 2)
+            .closePath()
+            .fill({ color: 0xffffff, alpha: a });
+        }
+      }
+    }
+  }
+}

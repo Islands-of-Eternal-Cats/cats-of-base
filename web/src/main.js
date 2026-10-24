@@ -4,7 +4,13 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { ITEM_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
 import { createLighting } from "./light.js";
-import { COVERS_CELL, drawOblique, surfaceRise, wallRise } from "./oblique.js";
+import {
+  COVERS_CELL,
+  drawGlass,
+  drawOblique,
+  surfaceRise,
+  wallRise,
+} from "./oblique.js";
 import {
   articleKeys,
   articleLinks,
@@ -572,6 +578,10 @@ const lit = new Container();
 world.addChild(lit);
 lit.addChild(tileLayer);
 lit.addChild(scrapLayer);
+// Стекло витрин над стеллажами (вид 3/4, `drawGlass`): поверх куч, но под
+// котами и чертежами. Узел постоянный, перерисовывается вместе с картой.
+const glassGfx = new Graphics();
+lit.addChild(glassGfx);
 lit.addChild(bpLayer);
 lit.addChild(dealLayer);
 // Нижний на экране кот рисуется поверх верхнего (§12.271): коты не входят в
@@ -1535,9 +1545,18 @@ function drawMap(map) {
       rockSpeck: COLORS.rockSpeck,
     });
     tileLayer.addChild(ground, faces, props, caps);
+    glassGfx.clear();
+    drawGlass(glassGfx, {
+      at,
+      W,
+      H,
+      T: TILE,
+      palette: meta.palette ?? [],
+    });
     drawRoleGlyphs();
     return;
   }
+  glassGfx.clear();
   const g = new Graphics();
   const T = TILE;
   // 1. Скала: сплошной тёмный камень с крапом. Сетки на пустоте нет — там
