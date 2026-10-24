@@ -4,6 +4,7 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { ITEM_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
 import { createLighting } from "./light.js";
+import { drawOblique, WALL_RISE } from "./oblique.js";
 import {
   articleKeys,
   articleLinks,
@@ -556,6 +557,8 @@ const scrapLayer = new Container(); // кучи лома на полу
 const bpLayer = new Container(); // чертежи (призраки будущих тайлов)
 const dealLayer = new Container(); // контейнеры сделок в ячейках постов (§12.68)
 const unitLayer = new Container();
+// Отладка вида (только dev): снимок мира крупным планом из консоли.
+if (import.meta.env.DEV) globalThis.__sp = { app, world };
 // Работа в ячейке (§12.30, §12.96, §12.132): что именно тут делают и докуда
 // дошли. Слой стоит **поверх котов** намеренно: мастер стоит ровно на той
 // клетке, о которой речь, и под ним значок был бы виден только тогда, когда
@@ -581,6 +584,17 @@ unitLayer.sortableChildren = true;
 // пол и мебель, кота не пересвечивает), тень поверх котов, но под метками
 // работы и оверлеем — подсказки и выбор обязаны читаться и в тени.
 const lighting = createLighting(app, TILE);
+// Вид 3/4 (прототип, `oblique.js`): клавиша V, выбор помнит `localStorage`
+// вида — это выбор игрока о своём экране, как свет и звук.
+const VIEW_KEY = "sp-view";
+let view34 = (() => {
+  try {
+    return localStorage.getItem(VIEW_KEY) !== "flat";
+  } catch {
+    return true;
+  }
+})();
+lighting.setWallRise(view34 ? WALL_RISE : 0);
 lit.addChild(lighting.glow);
 lit.addChild(unitLayer);
 lit.addChild(lighting.shade);
@@ -1498,6 +1512,32 @@ function drawMap(map) {
   const H = meta.height;
   const at = (x, y) =>
     x < 0 || y < 0 || x >= W || y >= H ? -1 : mapCells[y * W + x];
+  // Вид 3/4 (прототип, `oblique.js`): свой пол, стены в разрезе и мебель
+  // коробками; глифы ролей и свет — общие с плоским видом.
+  if (view34) {
+    const [ground, faces, props, caps] = [0, 0, 0, 0].map(() => new Graphics());
+    drawOblique({
+      ground,
+      faces,
+      props,
+      caps,
+      at,
+      W,
+      H,
+      T: TILE,
+      palette: meta.palette ?? [],
+      tints: paletteColors,
+      tileDefAt,
+      noise: cellNoise,
+      shade,
+      mix: mixColor,
+      rock: COLORS.rock,
+      rockSpeck: COLORS.rockSpeck,
+    });
+    tileLayer.addChild(ground, faces, props, caps);
+    drawRoleGlyphs();
+    return;
+  }
   const g = new Graphics();
   const T = TILE;
   // 1. Скала: сплошной тёмный камень с крапом. Сетки на пустоте нет — там
@@ -1694,7 +1734,21 @@ function drawMap(map) {
   }
   tileLayer.addChild(f);
   tileLayer.addChild(w);
+  drawRoleGlyphs();
+}
 
+function toggleView() {
+  view34 = !view34;
+  try {
+    localStorage.setItem(VIEW_KEY, view34 ? "34" : "flat");
+  } catch {
+    // Хранилища нет — выбор живёт до перезагрузки.
+  }
+  lighting.setWallRise(view34 ? WALL_RISE : 0);
+  if (mapCells) drawMap({ cells: mapCells });
+}
+
+function drawRoleGlyphs() {
   // Вторым проходом — что клетка делает (§12.109). Заливка отвечает «какая это
   // комната», глиф — «зачем она». До него роль тайла жила только в цвете, то
   // есть в том, что игрок обязан выучить: склад от лаборатории отличался
@@ -7451,6 +7505,10 @@ window.addEventListener("keydown", (e) => {
     if (e.shiftKey) lighting.toggleStress();
     else lighting.toggle();
     syncLightUi();
+    return;
+  }
+  if (e.code === "KeyV") {
+    toggleView();
     return;
   }
   if (e.code === "KeyR" && buildStruct >= 0) {
