@@ -4,7 +4,7 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { ITEM_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
 import { createLighting } from "./light.js";
-import { drawOblique } from "./oblique.js";
+import { drawOblique, wallRise } from "./oblique.js";
 import {
   articleKeys,
   articleLinks,
@@ -594,6 +594,7 @@ let view34 = (() => {
     return true;
   }
 })();
+lighting.setWallRise(view34 ? wallRise(false) : 0);
 lit.addChild(lighting.glow);
 lit.addChild(unitLayer);
 lit.addChild(lighting.shade);
@@ -1516,6 +1517,7 @@ function drawMap(map) {
   if (view34) {
     const [ground, faces, props, caps] = [0, 0, 0, 0].map(() => new Graphics());
     drawOblique({
+      lowered: wallsDown,
       ground,
       faces,
       props,
@@ -1736,6 +1738,22 @@ function drawMap(map) {
   drawRoleGlyphs();
 }
 
+// Стены вида 3/4 опускаются, пока в руке инструмент стройки: высокое лицо
+// северной стены стоит в клетке скалы, и пол рядом со стеной размечали бы
+// через клетку. Карта перерисовывается только на смене состояния.
+let wallsDown = false;
+function syncWallsDown() {
+  const down = mode === "build";
+  if (down === wallsDown) return;
+  wallsDown = down;
+  if (view34 && mapCells) redrawView();
+}
+
+function redrawView() {
+  lighting.setWallRise(view34 ? wallRise(wallsDown) : 0);
+  if (mapCells) drawMap({ cells: mapCells });
+}
+
 function toggleView() {
   view34 = !view34;
   try {
@@ -1743,7 +1761,7 @@ function toggleView() {
   } catch {
     // Хранилища нет — выбор живёт до перезагрузки.
   }
-  if (mapCells) drawMap({ cells: mapCells });
+  redrawView();
 }
 
 function drawRoleGlyphs() {
@@ -7046,6 +7064,7 @@ function modeChrome() {
 // липкий (после мазка не сбрасывается), поэтому «я всё ещё в стройке» обязано
 // читаться до клика — периферийным зрением и там, куда игрок смотрит.
 function applyModeChrome() {
+  syncWallsDown();
   const m = modeChrome();
   stageEl.classList.remove("mode-cursor", "mode-build", "mode-erase");
   stageEl.classList.add(`mode-${m.key}`);

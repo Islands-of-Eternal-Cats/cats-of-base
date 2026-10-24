@@ -18,14 +18,16 @@
 // ⚠️ Узлы здесь не живут: функция только рисует в переданные `Graphics`, а
 // пересобирает и разрушает их `drawMap` (§12.84, седьмое лицо).
 
-/// Высота лица северной стены, в долях клетки.
-const RISE = 0.45;
+/// Высота лица северной стены, в долях клетки: высокой (лицо в клетке скалы)
+/// и опущенной на время стройки (лицо на кромке пола).
+const RISE = 0.72;
+const LOW = 0.45;
 /// Сколько лица заходит в клетку скалы над полом; остальное лежит на верхней
 /// кромке пола. Весь в скале — и стена съедает клетку, куда игрок хочет
 /// строить; весь на полу — и мебель у стены закрывает лицо целиком.
 const LIFT = 0.2;
 /// Толщина стены (её верха) в долях клетки.
-const THICK = 0.24;
+const THICK = 0.28;
 /// Сколько цвета комнаты подмешано к материалу пола: материал теперь говорит
 /// «что это за комната» сам, оттенок только поддерживает его.
 const TINT = 0.22;
@@ -105,81 +107,217 @@ export function drawOblique(d) {
     }
   }
 
-  // 3. Стены. Верх стены — полоса в скале по краю пола, как в плоском виде,
-  // и обводит каждую комнату замкнутой рамкой. Северная стена вдобавок
-  // показывает лицо — **в основном на верхней кромке своего же пола**, а не
-  // в клетке скалы над ним: игрок читает стену как тонкую границу, и клетка за ней
-  // обязана выглядеть скалой, которую можно застроить. Лицо в клетке скалы
-  // забирало её почти целиком, и пол рядом со стеной размечали через клетку.
+  // 3. Стены. Верх стены — полоса в скале по краю пола, и обводит каждую
+  // комнату замкнутой рамкой; лицо показывает только северная. Высот у неё
+  // две: пока игрок смотрит на базу, стена высокая и
+  // её лицо стоит в клетке скалы над полом; с инструментом в руке стена
+  // опускается — лицо уходит на кромку пола, и клетка за стеной видна скалой,
+  // которую можно застроить. Высокое лицо забирало клетку почти целиком, и
+  // пол рядом со стеной размечали через клетку.
   const wall = 0x535866;
   const wallTop = 0x6c707c;
   const edge = shade(wallTop, -0.35);
   const wt = T * THICK;
-  const h = T * RISE;
-  const lift = T * LIFT;
   const isRock = (x, y) => at(x, y) < 0;
+
+  // Ореол скалы: клетки вокруг базы чуть светлее глубины — база читается
+  // вырезанной в камне, а не нарисованной на чёрном.
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (at(x, y) >= 0) continue;
+      let near = false;
+      for (let dy = -1; dy <= 1 && !near; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (at(x + dx, y + dy) >= 0) near = true;
+        }
+      }
+      if (near) ground.rect(x * T, y * T, T, T).fill({ color: 0x2a2d36, alpha: 0.45 });
+    }
+  }
+
+  if (d.lowered) lowWalls();
+  else tallWalls();
+
+  // Затенение у основания стен: пол темнеет к краю со всех сторон, сильнее в
+  // углах, — объём комнаты держится не только высотой лица.
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       if (at(x, y) < 0) continue;
       const px = x * T;
       const py = y * T;
-      const up = isRock(x, y - 1);
-      const down = isRock(x, y + 1);
-      const left = isRock(x - 1, y);
-      const right = isRock(x + 1, y);
-      const x0 = px - (left ? wt : 0);
-      const x1 = px + T + (right ? wt : 0);
-
-      if (up) {
-        const fy = py - lift;
-        wallFace(faces, px, fy, T, h, x, y, tints[at(x, y)] ?? 0x464b57, d);
-        // Лицо кончается ребром там, где рядом пол без своей северной стены:
-        // у прохода в коридор и на ступеньке комнаты.
-        if (!left && !isRock(x - 1, y) && !isRock(x - 1, y - 1)) {
-          faces.rect(px, fy, 1, h).fill(shade(wall, -0.3));
-        }
-        if (!right && !isRock(x + 1, y) && !isRock(x + 1, y - 1)) {
-          faces.rect(px + T - 1, fy, 1, h).fill(shade(wall, -0.3));
-        }
-        caps.rect(x0, fy - wt, x1 - x0, wt).fill(wallTop);
-        caps.rect(x0, fy - wt, x1 - x0, 1.5).fill(shade(wallTop, 0.2));
-        // Угловые столбы: боковая стена доходит до поднятого верха северной.
-        if (left) caps.rect(px - wt, fy, wt, lift).fill(wallTop);
-        if (right) caps.rect(px + T, fy, wt, lift).fill(wallTop);
-        // Тень стены на пол под лицом.
-        ground.rect(px, fy + h, T, T * 0.2).fill({ color: 0, alpha: 0.22 });
+      const ao = (rx, ry, rw, rh) => {
+        ground.rect(rx, ry, rw, rh).fill({ color: 0, alpha: 0.1 });
+      };
+      const s1 = T * 0.06;
+      const s2 = T * 0.16;
+      if (isRock(x + 1, y)) {
+        ao(px + T - s2, py, s2, T);
+        ao(px + T - s1, py, s1, T);
       }
-      if (left) {
-        caps.rect(px - wt, py, wt, T).fill(wallTop);
-        caps.rect(px - 1.5, py, 1.5, T).fill(edge);
-        ground.rect(px, py, T * 0.12, T).fill({ color: 0, alpha: 0.16 });
+      if (isRock(x - 1, y)) ao(px, py, s2, T);
+      if (isRock(x, y + 1)) {
+        ao(px, py + T - s2, T, s2);
+        ao(px, py + T - s1, T, s1);
       }
-      if (right) {
-        caps.rect(px + T, py, wt, T).fill(wallTop);
-        caps.rect(px + T, py, 1.5, T).fill(edge);
-      }
-      if (down) {
-        // Южная стена: верх и тонкая передняя кромка — лицом она от камеры.
-        caps.rect(x0, py + T, x1 - x0, wt).fill(wallTop);
-        caps.rect(x0, py + T, x1 - x0, 1.5).fill(shade(wallTop, 0.2));
-        caps.rect(x0, py + T + wt, x1 - x0, 3).fill(shade(wall, -0.35));
-      }
+      if (isRock(x, y - 1)) ao(px, py, T, s2);
     }
   }
-  // Внутренние углы скалы: пол с двух сторон по диагонали, полосы двух клеток
-  // сходятся, и квадрат стыка закрываем ровной заливкой. Только сверху: снизу
-  // стык закрывает поднятый верх северной стены, а квадрат лёг бы на её лицо.
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      if (at(x, y) >= 0) continue;
-      for (const [dx, dy] of [
-        [-1, -1],
-        [1, -1],
-      ]) {
-        if (at(x + dx, y) < 0 || at(x, y + dy) < 0) continue;
-        caps.rect(dx < 0 ? x * T : x * T + T - wt, y * T, wt, wt).fill(wallTop);
+
+  // Сетка поверх всего — только со стройкой в руке: видно, что стена стоит в
+  // своей клетке, а скала за ней делится на клетки, куда целятся.
+  if (d.lowered) {
+    for (let x = 0; x <= W; x++) caps.rect(x * T, 0, 1, H * T).fill({ color: 0xffffff, alpha: 0.07 });
+    for (let y = 0; y <= H; y++) caps.rect(0, y * T, W * T, 1).fill({ color: 0xffffff, alpha: 0.07 });
+  }
+
+  // Высокие стены: лицо в клетке скалы над полом.
+  function tallWalls() {
+    const h = Math.min(T * RISE, T - wt);
+    const late = [];
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (at(x, y) < 0) continue;
+        const px = x * T;
+        const py = y * T;
+        const up = isRock(x, y - 1);
+        const down = isRock(x, y + 1);
+        const left = isRock(x - 1, y);
+        const right = isRock(x + 1, y);
+
+        if (up) {
+          // Перемычка скалы в одну клетку: верх северной стены доходит до южной
+          // стены комнаты сверху, и перемычка читается одной стеной.
+          const thin = at(x, y - 2) >= 0;
+          const top = thin ? py - T : py - h - wt;
+          wallFace(faces, px, py - h, T, h, x, y, tints[at(x, y)] ?? 0x464b57, d);
+          caps.rect(px, top, T, py - h - top).fill(wallTop);
+          caps.rect(px, py - h - 1.5, T, 1.5).fill(edge);
+          // Угловые столбы: верх боковой стены поднимается к верху северной.
+          if (left) caps.rect(px - wt, top, wt, py - top).fill(wallTop);
+          if (right) caps.rect(px + T, top, wt, py - top).fill(wallTop);
+          if (left) caps.rect(px - 1.5, py - h - 1.5, 1.5, h + 1.5).fill(edge);
+          if (right) caps.rect(px + T, py - h - 1.5, 1.5, h + 1.5).fill(edge);
+          // Тень стены на пол под ней — у высокой стены она длиннее.
+          ground.rect(px, py, T, T * 0.32).fill({ color: 0, alpha: 0.22 });
+          ground.rect(px, py, T, T * 0.12).fill({ color: 0, alpha: 0.2 });
+        }
+        // Боковая стена. Если под её клеткой скалы пол, эта клетка — поднятая
+        // северная стена соседней комнаты (торец перемычки у коридора или
+        // ступенька комнаты): её верх и лицо уже доходят до нашего края. Полоса
+        // тогда идёт только до низа поднятого верха и смыкается с ним, а лицо
+        // кончается своим ребром. Довести полосу до пола нельзя: она легла бы
+        // столбом поперёк лица.
+        const side = (s) => {
+          const wx = s < 0 ? px - wt : px + T;
+          const ex = s < 0 ? px - 1.5 : px + T;
+          const raised = at(x + s, y + 1) >= 0;
+          const bottom = !raised ? py + T : at(x + s, y - 1) >= 0 ? py : py + T - h;
+          if (bottom > py) {
+            caps.rect(wx, py, wt, bottom - py).fill(wallTop);
+            // Кромку кладём после всех верхов: верх поднятой стены ряда ниже
+            // рисуется позже и перекрыл бы её на стыке, оставив светлый зуб.
+            late.push([ex, py, 1.5, bottom - py, edge]);
+          }
+          if (raised) {
+            // Ребро, которым кончается лицо.
+            const fx = s < 0 ? px - 1 : px + T;
+            late.push([fx, py + T - h, 1, h, shade(wall, -0.3)]);
+          }
+          return bottom - py;
+        };
+        if (left) {
+          // Тень стены на пол — только там, где стена лежит рядом верхом. Лицо
+          // поднятой стены отбрасывает тень на юг, а не вбок: полоса вдоль него
+          // ложилась бы чёрной щелью на углу.
+          const span = side(-1);
+          if (span > 0) ground.rect(px, py, T * 0.12, span).fill({ color: 0, alpha: 0.16 });
+        }
+        if (right) side(1);
+        if (down) {
+          // Южная стена: верх и тонкая передняя кромка — лицом она от камеры.
+          const x0 = px - (left ? wt : 0);
+          const x1 = px + T + (right ? wt : 0);
+          caps.rect(x0, py + T, x1 - x0, wt).fill(wallTop);
+          caps.rect(x0, py + T, x1 - x0, 1.5).fill(shade(wallTop, 0.2));
+          caps.rect(x0, py + T + wt, x1 - x0, 3).fill(shade(wall, -0.35));
+        }
       }
     }
+
+    for (const [rx, ry, rw, rh, c] of late) caps.rect(rx, ry, rw, rh).fill(c);
+
+
+  }
+
+  // Опущенные стены: лицо на кромке пола, в скалу заходит только `LIFT`.
+  function lowWalls() {
+    const h = T * LOW;
+    const lift = T * LIFT;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (at(x, y) < 0) continue;
+        const px = x * T;
+        const py = y * T;
+        const up = isRock(x, y - 1);
+        const down = isRock(x, y + 1);
+        const left = isRock(x - 1, y);
+        const right = isRock(x + 1, y);
+        const x0 = px - (left ? wt : 0);
+        const x1 = px + T + (right ? wt : 0);
+
+        if (up) {
+          const fy = py - lift;
+          wallFace(faces, px, fy, T, h, x, y, tints[at(x, y)] ?? 0x464b57, d);
+          // Лицо кончается ребром там, где рядом пол без своей северной стены:
+          // у прохода в коридор и на ступеньке комнаты.
+          if (!left && !isRock(x - 1, y) && !isRock(x - 1, y - 1)) {
+            faces.rect(px, fy, 1, h).fill(shade(wall, -0.3));
+          }
+          if (!right && !isRock(x + 1, y) && !isRock(x + 1, y - 1)) {
+            faces.rect(px + T - 1, fy, 1, h).fill(shade(wall, -0.3));
+          }
+          caps.rect(x0, fy - wt, x1 - x0, wt).fill(wallTop);
+          caps.rect(x0, fy - wt, x1 - x0, 1.5).fill(shade(wallTop, 0.2));
+          // Угловые столбы: боковая стена доходит до поднятого верха северной.
+          if (left) caps.rect(px - wt, fy, wt, lift).fill(wallTop);
+          if (right) caps.rect(px + T, fy, wt, lift).fill(wallTop);
+          // Тень стены на пол под лицом.
+          ground.rect(px, fy + h, T, T * 0.2).fill({ color: 0, alpha: 0.22 });
+        }
+        if (left) {
+          caps.rect(px - wt, py, wt, T).fill(wallTop);
+          caps.rect(px - 1.5, py, 1.5, T).fill(edge);
+          ground.rect(px, py, T * 0.12, T).fill({ color: 0, alpha: 0.16 });
+        }
+        if (right) {
+          caps.rect(px + T, py, wt, T).fill(wallTop);
+          caps.rect(px + T, py, 1.5, T).fill(edge);
+        }
+        if (down) {
+          // Южная стена: верх и тонкая передняя кромка — лицом она от камеры.
+          caps.rect(x0, py + T, x1 - x0, wt).fill(wallTop);
+          caps.rect(x0, py + T, x1 - x0, 1.5).fill(shade(wallTop, 0.2));
+          caps.rect(x0, py + T + wt, x1 - x0, 3).fill(shade(wall, -0.35));
+        }
+      }
+    }
+    // Внутренние углы скалы: пол с двух сторон по диагонали, полосы двух клеток
+    // сходятся, и квадрат стыка закрываем ровной заливкой. Только сверху: снизу
+    // стык закрывает поднятый верх северной стены, а квадрат лёг бы на её лицо.
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (at(x, y) >= 0) continue;
+        for (const [dx, dy] of [
+          [-1, -1],
+          [1, -1],
+        ]) {
+          if (at(x + dx, y) < 0 || at(x, y + dy) < 0) continue;
+          caps.rect(dx < 0 ? x * T : x * T + T - wt, y * T, wt, wt).fill(wallTop);
+        }
+      }
+    }
+
+
   }
 
   // 4. Мебель — после лиц стен: то, что стоит у северной стены, стоит перед ней.
@@ -307,7 +445,7 @@ function wallFace(g, x, y, w, h, cx, cy, tint, d) {
   g.rect(x + w * 0.5, y + h * 0.55, 1, h * 0.45).fill({ color: 0x000000, alpha: 0.3 });
   g.rect(x, y + h - 3, w, 3).fill(shade(panel, -0.4));
   const n = noise(cx, cy, 90);
-  const T = h / RISE;
+  const { T } = d;
   const mx = x + w * 0.5;
   if (n > 0.86) {
     // Вентиляционная решётка.
@@ -540,3 +678,7 @@ function prop(g, id, x, y, tint, n, d) {
       break;
   }
 }
+
+/// Высота северной стены в клетках — свету: луч, вошедший в неё снизу, обязан
+/// осветить всё лицо, а не кромку. У опущенной стены лицо лежит на полу.
+export const wallRise = (lowered) => (lowered ? 0 : RISE);

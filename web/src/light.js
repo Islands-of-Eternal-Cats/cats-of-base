@@ -101,6 +101,10 @@ const ANIMATE = false;
 const PREFS_KEY = "sp-light";
 /// Сколько луч заходит в скалу, в клетках: освещает стену изнутри комнаты.
 const RIM = 0.2;
+/// Высота стены, обращённой к камере, в виде 3/4 (`oblique.js`), в клетках;
+/// ноль — плоский вид. Луч, вошедший в скалу **снизу**, идёт в неё на эту
+/// высоту, а не на `RIM`: иначе грань северной стены стояла бы в тени целиком.
+let wallRise = 0;
 /// Лучей на лампу: на радиусе в 3–4 клетки этого хватает, чтобы край тени
 /// не шёл зубцами (а остаток сгладит пониженное разрешение).
 const RAYS = 240;
@@ -286,10 +290,18 @@ function visibility(cells, W, H, cx, cy, radius, tile) {
     const dy = Math.sin(a);
     let d = 0;
     let hit = -1;
+    let rim = RIM;
     while (d < radius) {
       d += step;
-      if (hit < 0 && isVoid(cx + dx * d, cy + dy * d)) hit = d;
-      if (hit >= 0 && d >= hit + RIM) break;
+      if (hit < 0 && isVoid(cx + dx * d, cy + dy * d)) {
+        hit = d;
+        // Вошёл через южную кромку клетки скалы — это лицо северной стены.
+        const py = cy + dy * (d - step);
+        rim = dy < 0 && Math.floor(py) > Math.floor(cy + dy * d) && wallRise > 0
+          ? Math.min(wallRise / -dy, wallRise * 2)
+          : RIM;
+      }
+      if (hit >= 0 && d >= hit + rim) break;
     }
     d = Math.min(d, radius);
     pts.push((cx + dx * d) * tile, (cy + dy * d) * tile);
@@ -927,6 +939,10 @@ export function createLighting(app, tile) {
     setBloom,
     setBump,
     setRound,
+    /// Высота северной стены вида 3/4; действует со следующей `rebuild`.
+    setWallRise: (h) => {
+      wallRise = h;
+    },
     attach,
     /// Есть ли у браузера float-текстуры, без которых HDR не считается.
     canHdr,

@@ -69,26 +69,40 @@ document.body.appendChild(app.canvas);
 const world = new Container();
 app.stage.addChild(world);
 
-const [ground, faces, props, caps] = [0, 0, 0, 0].map(() => new Graphics());
-drawOblique({
-  ground,
-  faces,
-  props,
-  caps,
-  at,
-  W,
-  H,
-  T,
-  palette,
-  tints,
-  tileDefAt: (x, y) => palette[at(x, y)],
-  noise: cellNoise,
-  shade,
-  mix: mixColor,
-  rock: 0x16171c,
-  rockSpeck: 0x1e2027,
+const mapLayer = new Container();
+world.addChild(mapLayer);
+// B — опустить стены, как с инструментом стройки в руке.
+let lowered = false;
+function draw() {
+  for (const n of mapLayer.removeChildren()) n.destroy();
+  const [ground, faces, props, caps] = [0, 0, 0, 0].map(() => new Graphics());
+  drawOblique({
+    lowered,
+    ground,
+    faces,
+    props,
+    caps,
+    at,
+    W,
+    H,
+    T,
+    palette,
+    tints,
+    tileDefAt: (x, y) => palette[at(x, y)],
+    noise: cellNoise,
+    shade,
+    mix: mixColor,
+    rock: 0x16171c,
+    rockSpeck: 0x1e2027,
+  });
+  mapLayer.addChild(ground, faces, props, caps);
+}
+draw();
+window.addEventListener("keydown", (e) => {
+  if (e.code !== "KeyB") return;
+  lowered = !lowered;
+  draw();
 });
-world.addChild(ground, faces, props, caps);
 
 // Кучи и коты-заглушки — проверить, читаются ли они поверх обстановки.
 const extra = new Graphics();
@@ -134,4 +148,4 @@ function fit() {
 }
 fit();
 window.addEventListener("resize", fit);
-globalThis.__sp = { app, world };
+globalThis.__sp = { app, world, toggle: () => { lowered = !lowered; draw(); } };
