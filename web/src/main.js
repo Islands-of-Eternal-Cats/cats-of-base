@@ -708,7 +708,6 @@ let dragTo = null; // текущий угол рамки; переживает �
 // Кот, стоявший под началом рамки. Запоминается в момент нажатия, а не читается
 // на отпускании: на ×10 кот успевает уйти за время клика, а игрок целился в
 // того, кого видел.
-let dragUnit = null;
 // Сколько на базе раций. С §12.152 они **не** дают лицензии на вылазку — её
 // держит гараж, — и остались чистой связью: дежурный на рации прибавляет силы
 // всем идущим отрядам разом (§12.60).
@@ -6900,26 +6899,13 @@ function applyDrag() {
 // под курсором. Без этого рамка висела бы на экране до следующего движения мыши
 // и читалась как «что-то ещё выделено».
 function endDrag(apply, global) {
-  if (dragFrom && apply) {
-    // Клик по коту — это «покажи мне его», а не «застрой клетку под ним»:
-    // возвращаемся в курсор и выбираем кота. Отличает клик от разметки размер
-    // жеста: одна клетка — клик, две и больше — рамка, и застроить (или снести)
-    // клетку под котом по-прежнему можно, протянув через неё.
-    const rect = rectOf(dragFrom, dragTo);
-    if (dragUnit && rect.w === 1 && rect.h === 1) {
-      selectCursor();
-      // Тот же первый шаг, что и у клика курсором (§12.58): клетка показана, мир
-      // не тронут. Клетку выставляем **до** выбора кота — перерисовку оверлея
-      // зовёт `selectUnit`, и она должна увидеть уже обе половины выделения.
-      selectedCell = { x: rect.x, y: rect.y };
-      selectUnit(dragUnit);
-    } else {
-      applyDrag();
-    }
-  }
+  // В режиме стройки карта только строит и стирает: клик по коту застраивает
+  // клетку под ним, а не выбирает его. Режим виден целиком — стены опущены,
+  // поверх сетка, — и выбор кота посреди разметки читался бы как промах.
+  // Выбрать кота — выйти из «Постройки».
+  if (dragFrom && apply) applyDrag();
   dragFrom = null;
   dragTo = null;
-  dragUnit = null;
   hoverRect.clear();
   if (global) updateHover(global);
 }
@@ -7046,6 +7032,14 @@ function modeChrome() {
         tint: COLORS.build,
       };
     }
+    if (!toolInHand()) {
+      return {
+        key: "build",
+        label: "СТРОЙКА: выберите, что строить",
+        color: COLORS.build,
+        tint: null,
+      };
+    }
     if (buildTile < 0) {
       return { key: "erase", label: "СНОС", color: COLORS.erase, tint: null };
     }
@@ -7132,7 +7126,7 @@ function askBuildMask(r) {
   const structure = build ? buildStruct : -1;
   // Объект и тайл взаимно исключают друг друга, и ядро спрашивают по-разному:
   // у тайла «можно ли сюда его», у объекта «встанет ли отсюда весь штамп».
-  const tile = build && structure < 0 ? buildTile : -1;
+  const tile = build && structure < 0 ? (buildTile ?? -1) : -1;
   const rect = r ? [r.x, r.y, r.w, r.h] : [0, 0, 0, 0];
   const key = `${tile}:${structure}:${buildRot}:${rect.join(",")}`;
   if (key === maskAsked) return;
@@ -7232,7 +7226,7 @@ function updateHover(global) {
   // отпустив кнопку здесь, игрок выберет кота, и цвет обязан сказать это до
   // клика, а не после.
   const overUnit =
-    r.w === 1 && r.h === 1 && (dragFrom ? dragUnit : t && unitAt(t.tx, t.ty));
+    mode === "cursor" && r.w === 1 && r.h === 1 && t && unitAt(t.tx, t.ty);
   const m = modeChrome();
   const col = overUnit ? COLORS.select : (m.tint ?? m.color);
   hoverRect
@@ -7269,7 +7263,7 @@ app.stage.on("pointerdown", (e) => {
     return;
   }
   const t = tileAt(e.global);
-  if (!t) return;
+  if (!t || !toolInHand()) return;
   // Объект ставится одним кликом: размер у него свой, и тянуть его рамкой
   // значило бы дать игроку выбрать то, что уже выбрано в рулсете (§12.162).
   if (buildStruct >= 0) {
@@ -7284,7 +7278,6 @@ app.stage.on("pointerdown", (e) => {
   }
   dragFrom = t;
   dragTo = t;
-  dragUnit = unitAt(t.tx, t.ty);
   updateHover(e.global);
 });
 app.stage.on("pointermove", (e) => {
@@ -7548,8 +7541,15 @@ window.addEventListener("keydown", (e) => {
     // Дальше Escape отменяет ровно одно — и начинает с самого навязчивого.
     // Режим разметки липкий (§12.62) и держит на прицеле каждый клик по карте,
     // поэтому выходит первым; выделение подождёт второго нажатия.
+    // Инструмент в руке кладётся первым нажатием, раздел «Постройка»
+    // сворачивается вторым — вместе с ним уходит и режим.
     if (mode !== "cursor") {
-      selectCursor();
+      if (toolInHand() && openSection === "Постройка") {
+        selectBuildIdle();
+      } else {
+        openOnly(null);
+        if (mode !== "cursor") selectCursor();
+      }
       return;
     }
     // Режима нет — снимаем выделение целиком: и клетку, и котов. Клика,
@@ -7705,6 +7705,10 @@ function openOnly(title) {
     // тем более что свечение по периметру сейчас выключено.
     if (mode !== "cursor") selectCursor();
   }
+  // Раскрытая «Постройка» и есть режим стройки: стены опускаются и карта
+  // перестаёт выбирать котов ещё до того, как взят инструмент, — режим виден
+  // с первого клика, а не со второго.
+  if (title === "Постройка" && openSection !== title) selectBuildIdle();
   openSection = title;
   for (const s of sections) {
     const on = s.title === title;
@@ -7757,7 +7761,9 @@ document.addEventListener(
     if (!(t instanceof Node) || app.canvas.contains(t)) return;
     const build = sections.find((s) => s.title === "Постройка");
     if (build && (build.head.contains(t) || build.body.contains(t))) return;
-    selectCursor();
+    // Раскрытая «Постройка» — это режим, поэтому уходит он вместе с ней.
+    if (openSection === "Постройка") openOnly(null);
+    else selectCursor();
   },
   true,
 );
@@ -12499,7 +12505,8 @@ function closeOtherWindows(keep) {
   // «Склад» или штаб, игрок ушёл из разметки, и держать инструмент в руке под
   // модалом незачем — карта под ним всё равно не отвечает. Кладём его тем же
   // `selectCursor`, что и `openOnly`: плашка режима уходит вместе с ним.
-  if (mode !== "cursor") selectCursor();
+  if (openSection === "Постройка") openOnly(null);
+  else if (mode !== "cursor") selectCursor();
   for (const [key, , close] of WINDOWS) {
     if (key !== keep) close();
   }
@@ -14981,6 +14988,21 @@ function selectCursor() {
   activate(null);
   applyModeChrome();
   askBuildMask(null);
+}
+
+// Режим стройки без инструмента: раздел «Постройка» раскрыт, а тайл ещё не
+// взят. Карта в нём ничего не делает — ни строит, ни выбирает котов.
+function selectBuildIdle() {
+  mode = "build";
+  buildTile = null;
+  buildStruct = -1;
+  activate(null);
+  applyModeChrome();
+  askBuildMask(null);
+}
+
+function toolInHand() {
+  return mode === "build" && (buildStruct >= 0 || buildTile !== null);
 }
 
 // Времени выбор инструмента не касается: паузу ставит только игрок (§12.86).
