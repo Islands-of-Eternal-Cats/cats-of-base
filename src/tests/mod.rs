@@ -894,6 +894,13 @@ impl Sim {
             .unwrap_or(0)
     }
 
+    /// Положить коту груз в лапы без задачи — так его оставляет ходка, у
+    /// которой пропал адресат.
+    fn give_load(&mut self, unit: &str, item: usize, count: i32) {
+        let cat = self.entity_of(unit);
+        self.world.entity_mut(cat).insert(Carrying { item, count });
+    }
+
     /// Что именно кот несёт; `None` — лапы пусты.
     fn carrying_item_of(&mut self, unit: &str) -> Option<usize> {
         let mut q = self.world.query::<(&UnitId, Option<&Carrying>)>();
