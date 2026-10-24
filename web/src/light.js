@@ -137,6 +137,13 @@ const ROLE_LIGHT = {
 /// попавший на её узлы, оставался вовсе без света.
 const CEIL = { color: 0xdde6ff, radius: 2.8, alpha: 0.6 };
 const CEIL_STEP = 3;
+/// Бра на северной стене (вид 3/4): тёплый свет у самой стены. Где оно висит,
+/// решает вид (`sconceCells` в `oblique.js` — то же правило, что его рисует), и
+/// лампа встаёт у основания стены, чуть ниже кромки пола: свет падает в комнату
+/// и поднимается по лицу стены (`wallRise`). Потолочные лампы обходят бра
+/// стороной, как обходят друг друга.
+const SCONCE = { color: 0xffcf8a, radius: 2.6, alpha: 0.85 };
+const SCONCE_Y = 0.12;
 /// Свет у кота — тёплое пятнышко, чтобы кот в тени не терялся.
 const CAT = { color: 0xffd9a8, radius: 1.3, alpha: 0.3 };
 
@@ -218,7 +225,7 @@ function floorCells(cells, W, H) {
 /// полу, а не по прямой: лампа за стеной соседней комнаты сюда не светит и
 /// клетку не покрывает. Порядок полностью задан картой — между пересборками
 /// лампы не скачут.
-function ceilingSpots(cells, W, H) {
+function ceilingSpots(cells, W, H, seeds = []) {
   const floor = (x, y) =>
     x >= 0 && y >= 0 && x < W && y < H && cells[y * W + x] >= 0;
   // Глубина: шаги до ближайшей скалы (край карты — тоже скала).
@@ -249,11 +256,10 @@ function ceilingSpots(cells, W, H) {
       depth[by * W + bx] - depth[ay * W + ax] || ay - by || ax - bx,
   );
   // Сколько шагов по полу до ближайшей лампы; растёт заливкой от каждой новой.
+  // Бра (`seeds`) — уже стоящие лампы: заливка начинается и от них.
   const near = new Int32Array(W * H).fill(CEIL_STEP);
   const out = [];
-  for (const [x, y] of order) {
-    if (near[y * W + x] < CEIL_STEP) continue;
-    out.push([x, y]);
+  const lit = (x, y) => {
     near[y * W + x] = 0;
     const wave = [y * W + x];
     for (let i = 0; i < wave.length; i++) {
@@ -270,6 +276,12 @@ function ceilingSpots(cells, W, H) {
         wave.push(ny * W + nx);
       }
     }
+  };
+  for (const [x, y] of seeds) if (floor(x, y)) lit(x, y);
+  for (const [x, y] of order) {
+    if (near[y * W + x] < CEIL_STEP) continue;
+    out.push([x, y]);
+    lit(x, y);
   }
   return out;
 }
@@ -562,6 +574,8 @@ export function createLighting(app, tile) {
   /// Shift+L перебирает 0 → 1 → 10.
   let stress = 0;
   let lastMap = null;
+  // Клетки под бра вида 3/4 (`setSconces`); в плоском виде пусто.
+  let sconces = [];
   let clock = 0;
   // Сколько миллисекунд CPU уходит на свет за кадр, среднее за секунду замера.
   let costSum = 0;
@@ -670,9 +684,10 @@ export function createLighting(app, tile) {
         spots.push([spec, x + 0.5, (at - x) / W + 0.5]);
       }
     }
+    for (const [x, y] of sconces) spots.push([SCONCE, x + 0.5, y + SCONCE_Y]);
     for (const [x, y] of stress
       ? floorCells(cells, W, H)
-      : ceilingSpots(cells, W, H)) {
+      : ceilingSpots(cells, W, H, sconces)) {
       for (let k = 0; k < Math.max(1, stress); k++) {
         const ox = stress > 1 ? ((k * 37) % 10) / 10 : 0.5;
         const oy = stress > 1 ? ((k * 61) % 10) / 10 : 0.5;
@@ -942,6 +957,11 @@ export function createLighting(app, tile) {
     /// Высота северной стены вида 3/4; действует со следующей `rebuild`.
     setWallRise: (h) => {
       wallRise = h;
+    },
+    /// Клетки пола под бра (вид 3/4, `sconceCells`); действует со следующей
+    /// `rebuild`. Пусто — бра нет (плоский вид).
+    setSconces: (list) => {
+      sconces = list;
     },
     attach,
     /// Есть ли у браузера float-текстуры, без которых HDR не считается.

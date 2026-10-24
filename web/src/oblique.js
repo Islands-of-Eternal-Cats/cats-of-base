@@ -429,6 +429,32 @@ function floorCell(g, mat, x, y, T, base, d) {
   }
 }
 
+/// Что висит на лице северной стены над клеткой пола (x, y). Одно правило на
+/// рисунок и на свет: бра, нарисованное здесь, обязано светить, а свет,
+/// поставленный по другому правилу, горел бы мимо нарисованных ламп. Два бра
+/// подряд не вешаются — соседнее становится трубой: двойная лампа в одном
+/// месте выбеливает пол.
+export function wallDecor(noise, x, y) {
+  const raw = (n) =>
+    n > 0.86 ? "vent" : n > 0.72 ? "sconce" : n > 0.6 ? "pipe" : n > 0.52 ? "poster" : null;
+  const kind = raw(noise(x, y, 90));
+  if (kind === "sconce" && raw(noise(x - 1, y, 90)) === "sconce") return "pipe";
+  return kind;
+}
+
+/// Клетки пола под бра — для света. Бра висит только на северной стене: у
+/// клетки над полом скала.
+export function sconceCells(at, W, H, noise) {
+  const out = [];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (at(x, y) < 0 || at(x, y - 1) >= 0) continue;
+      if (wallDecor(noise, x, y) === "sconce") out.push([x, y]);
+    }
+  }
+  return out;
+}
+
 /// Лицо стены: панели, плинтус и изредка что-то на стене.
 function wallFace(g, x, y, w, h, cx, cy, tint, d) {
   const { noise, shade, mix } = d;
@@ -444,25 +470,26 @@ function wallFace(g, x, y, w, h, cx, cy, tint, d) {
   g.rect(x, y + h * 0.55, w, 1.5).fill(shade(paint, 0.25));
   g.rect(x + w * 0.5, y + h * 0.55, 1, h * 0.45).fill({ color: 0x000000, alpha: 0.3 });
   g.rect(x, y + h - 3, w, 3).fill(shade(panel, -0.4));
-  const n = noise(cx, cy, 90);
+  const kind = wallDecor(noise, cx, cy);
   const { T } = d;
   const mx = x + w * 0.5;
-  if (n > 0.86) {
+  if (kind === "vent") {
     // Вентиляционная решётка.
     g.rect(mx - T * 0.18, y + h * 0.14, T * 0.36, h * 0.24).fill(shade(paint, -0.45));
     for (let i = 0; i < 3; i++) {
       g.rect(mx - T * 0.16, y + h * 0.17 + i * h * 0.07, T * 0.32, 1).fill(shade(paint, 0.15));
     }
-  } else if (n > 0.72) {
-    // Бра: тёплое пятно на стене над светильником.
+  } else if (kind === "sconce") {
+    // Бра: тёплое пятно на стене над светильником. Светит оно по-настоящему —
+    // `sconceCells` отдаёт его свету, и лампа встаёт под ним (`light.js`).
     g.ellipse(mx, y + h * 0.3, T * 0.36, h * 0.3).fill({ color: 0xffd890, alpha: 0.1 });
     g.rect(mx - T * 0.08, y + h * 0.26, T * 0.16, h * 0.1).fill(0xffe6b0);
     g.rect(mx - T * 0.1, y + h * 0.36, T * 0.2, 2).fill(0x3a3d46);
-  } else if (n > 0.6) {
+  } else if (kind === "pipe") {
     // Труба вдоль стены.
     g.rect(x, y + h * 0.1, w, 3).fill(0x6a6f7c);
     g.rect(x, y + h * 0.1, w, 1).fill(0x9aa0ae);
-  } else if (n > 0.52) {
+  } else if (kind === "poster") {
     // Плакат.
     g.rect(mx - T * 0.13, y + h * 0.1, T * 0.26, h * 0.36).fill(0xcfc4a2);
     g.rect(mx - T * 0.1, y + h * 0.14, T * 0.2, h * 0.16).fill(shade(tint, 0.2));

@@ -8,6 +8,7 @@ import {
   COVERS_CELL,
   drawGlass,
   drawOblique,
+  sconceCells,
   surfaceRise,
   wallRise,
 } from "./oblique.js";
@@ -605,6 +606,7 @@ let view34 = (() => {
   }
 })();
 lighting.setWallRise(view34 ? wallRise(false) : 0);
+if (import.meta.env.DEV) Object.assign(globalThis.__sp, { lighting, redrawView });
 lit.addChild(lighting.glow);
 lit.addChild(unitLayer);
 lit.addChild(lighting.shade);
@@ -1545,6 +1547,7 @@ function drawMap(map) {
       rockSpeck: COLORS.rockSpeck,
     });
     tileLayer.addChild(ground, faces, props, caps);
+    lighting.setSconces(sconceCells(at, W, H, cellNoise));
     glassGfx.clear();
     drawGlass(glassGfx, {
       at,
@@ -1557,6 +1560,7 @@ function drawMap(map) {
     return;
   }
   glassGfx.clear();
+  lighting.setSconces([]);
   const g = new Graphics();
   const T = TILE;
   // 1. Скала: сплошной тёмный камень с крапом. Сетки на пустоте нет — там
