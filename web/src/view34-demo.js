@@ -3,7 +3,7 @@
 // базе крупнее стартовой; в игре вид включается клавишей V.
 
 import { Application, Container, Graphics } from "pixi.js";
-import { drawOblique } from "./oblique.js";
+import { drawOblique, surfaceRise } from "./oblique.js";
 
 const TILES = {
   ".": ["floor", "#1b2a3f"],
@@ -115,9 +115,10 @@ for (const [x, y] of [
   [12, 5],
   [7, 10],
 ]) {
+  const rise = surfaceRise(palette[at(x, y)]?.id) * T;
   for (let i = 0; i < 3; i++) {
     extra
-      .rect(x * T + 6 + i * 3, y * T + T - 10 - i * 4, 14, 4)
+      .rect(x * T + 6 + i * 3, y * T + T - 10 - i * 4 - rise, 14, 4)
       .fill(i % 2 ? 0xd9b64a : 0xe8c860);
   }
 }

@@ -4,7 +4,7 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { ITEM_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
 import { createLighting } from "./light.js";
-import { COVERS_CELL, drawOblique, wallRise } from "./oblique.js";
+import { COVERS_CELL, drawOblique, surfaceRise, wallRise } from "./oblique.js";
 import {
   articleKeys,
   articleLinks,
@@ -1905,7 +1905,11 @@ function drawScrap(list) {
   const slotOf = new Map();
   for (const s of list ?? []) {
     const x = s.x * TILE;
-    const y = s.y * TILE;
+    // В виде 3/4 куча лежит на поверхности мебели (столешница стеллажа,
+    // паллета) и поднята вместе с ней — иначе на сдвинутой вверх столешнице
+    // нельзя сказать, чья это куча: стеллажа или паллеты позади.
+    const rise = view34 ? surfaceRise(tileDefAt(s.x, s.y)?.id) * TILE : 0;
+    const y = s.y * TILE - rise;
     const n = s.count >= 15 ? 3 : s.count >= 5 ? 2 : 1;
     const ck = `${s.x},${s.y}`;
     const m = perCell.get(ck);
