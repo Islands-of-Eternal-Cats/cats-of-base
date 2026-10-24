@@ -4,7 +4,7 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { ITEM_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
 import { createLighting } from "./light.js";
-import { drawOblique, WALL_RISE } from "./oblique.js";
+import { drawOblique } from "./oblique.js";
 import {
   articleKeys,
   articleLinks,
@@ -594,7 +594,6 @@ let view34 = (() => {
     return true;
   }
 })();
-lighting.setWallRise(view34 ? WALL_RISE : 0);
 lit.addChild(lighting.glow);
 lit.addChild(unitLayer);
 lit.addChild(lighting.shade);
@@ -1744,7 +1743,6 @@ function toggleView() {
   } catch {
     // Хранилища нет — выбор живёт до перезагрузки.
   }
-  lighting.setWallRise(view34 ? WALL_RISE : 0);
   if (mapCells) drawMap({ cells: mapCells });
 }
 
