@@ -7761,6 +7761,11 @@ document.addEventListener(
     if (!(t instanceof Node) || app.canvas.contains(t)) return;
     const build = sections.find((s) => s.title === "Постройка");
     if (build && (build.head.contains(t) || build.body.contains(t))) return;
+    // Тулбар режим кладёт сам — кликом: двери свёрнуты `folds`, заголовки
+    // разделов зовут `openOnly`. Свернуть «Постройку» здесь, на нажатии,
+    // значило бы уронить столбец под мышью: «Вылазки» уезжали вверх до
+    // отпускания кнопки, и клик не доходил ни до какой двери.
+    if (document.getElementById("toolbar")?.contains(t)) return;
     // Раскрытая «Постройка» — это режим, поэтому уходит он вместе с ней.
     if (openSection === "Постройка") openOnly(null);
     else selectCursor();
