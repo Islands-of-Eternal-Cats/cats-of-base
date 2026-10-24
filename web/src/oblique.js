@@ -163,13 +163,6 @@ export function drawOblique(d) {
     }
   }
 
-  // Сетка поверх всего — только со стройкой в руке: видно, что стена стоит в
-  // своей клетке, а скала за ней делится на клетки, куда целятся.
-  if (d.lowered) {
-    for (let x = 0; x <= W; x++) caps.rect(x * T, 0, 1, H * T).fill({ color: 0xffffff, alpha: 0.07 });
-    for (let y = 0; y <= H; y++) caps.rect(0, y * T, W * T, 1).fill({ color: 0xffffff, alpha: 0.07 });
-  }
-
   // Высокие стены: лицо в клетке скалы над полом.
   function tallWalls() {
     const h = Math.min(T * RISE, T - wt);
@@ -802,4 +795,13 @@ export function drawGlass(g, d) {
       }
     }
   }
+}
+
+/// Сетка клеток со стройкой в руке: видно, что стена стоит в своей клетке, а
+/// скала за ней делится на клетки, куда целятся. Рисуется в свой узел **вне
+/// освещаемого слоя** — сетка это прицел, а не часть мира, и в тени она
+/// пропадала ровно там, где игрок строит: в темноте за стеной.
+export function drawGrid(g, W, H, T) {
+  for (let x = 0; x <= W; x++) g.rect(x * T, 0, 1, H * T).fill({ color: 0xffffff, alpha: 0.09 });
+  for (let y = 0; y <= H; y++) g.rect(0, y * T, W * T, 1).fill({ color: 0xffffff, alpha: 0.09 });
 }

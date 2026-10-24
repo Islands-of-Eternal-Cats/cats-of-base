@@ -3,7 +3,7 @@
 // базе крупнее стартовой; в игре вид включается клавишей V.
 
 import { Application, Container, Graphics } from "pixi.js";
-import { drawGlass, drawOblique, surfaceRise } from "./oblique.js";
+import { drawGlass, drawGrid, drawOblique, surfaceRise } from "./oblique.js";
 
 const TILES = {
   ".": ["floor", "#1b2a3f"],
@@ -96,6 +96,11 @@ function draw() {
     rockSpeck: 0x1e2027,
   });
   mapLayer.addChild(ground, faces, props, caps);
+  if (lowered) {
+    const grid = new Graphics();
+    drawGrid(grid, W, H, T);
+    mapLayer.addChild(grid);
+  }
 }
 draw();
 window.addEventListener("keydown", (e) => {

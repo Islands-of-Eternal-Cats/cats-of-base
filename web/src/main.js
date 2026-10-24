@@ -7,6 +7,7 @@ import { createLighting } from "./light.js";
 import {
   COVERS_CELL,
   drawGlass,
+  drawGrid,
   drawOblique,
   sconceCells,
   surfaceRise,
@@ -658,6 +659,10 @@ orderMarker.visible = false;
 // Осмотренная клетка (§12.58): уголки, а не заливка, — заливкой рисуется
 // `hoverRect`, и два одинаковых прямоугольника читались бы как один.
 const cellMarker = new Graphics();
+// Сетка вида 3/4 со стройкой в руке (`drawGrid`) — в оверлее, над светом:
+// внутри освещаемого слоя её гасила тень, и в тёмной скале она не читалась.
+const gridGfx = new Graphics();
+overlay.addChild(gridGfx);
 overlay.addChild(hoverRect);
 overlay.addChild(orderMarker);
 overlay.addChild(cellMarker);
@@ -1548,6 +1553,8 @@ function drawMap(map) {
     });
     tileLayer.addChild(ground, faces, props, caps);
     lighting.setSconces(sconceCells(at, W, H, cellNoise));
+    gridGfx.clear();
+    if (wallsDown) drawGrid(gridGfx, W, H, TILE);
     glassGfx.clear();
     drawGlass(glassGfx, {
       at,
@@ -1560,6 +1567,7 @@ function drawMap(map) {
     return;
   }
   glassGfx.clear();
+  gridGfx.clear();
   lighting.setSconces([]);
   const g = new Graphics();
   const T = TILE;
