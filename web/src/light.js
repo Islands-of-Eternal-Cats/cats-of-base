@@ -62,10 +62,19 @@ const DEFAULTS = {
   bloom: 35,
   // Рельеф плоских текстур (только HDR, `hdr.js`): сила, 0 — выключен.
   bump: 45,
+  // Объём котов (только HDR): размытый силуэт — купол высоты, 0 — выключен.
+  round: 60,
 };
 /// Сила рельефа на максимуме ползунка и доля зерна в высоте.
 const BUMP_MAX = 9;
 const GRAIN = 0.045;
+/// Сила объёма котов на максимуме ползунка и радиус размытия силуэта в
+/// долях клетки: шире — кот круглее целиком, уже — скруглён только край.
+const ROUND_MAX = 14;
+const ROUND_BLUR = 0.22;
+/// Сила наклона нормалей у тел кота (шар, капсулы) на максимуме ползунка:
+/// единица — честная геометрия, больше — объём с нажимом.
+const SHAPE_MAX = 1.3;
 /// «Насыщенность» (0–100): на нуле все лампы спокойного тёплого белого
 /// (`CALM`), на `SAT_BASE` — цвета из `ROLE_LIGHT` как есть, выше — сочнее.
 /// Вместе с ней разгорается свет **каждой клетки** цветом её типа (`CELL`):
@@ -306,6 +315,20 @@ export function createLighting(app, tile) {
   /// Слой тайлов: его снимок — карта высот рельефа.
   let tilesNode = null;
   let heightTarget = null;
+  /// Слой котов: его силуэт каждым кадром — маска объёма, а размытый силуэт —
+  /// высота (купол: к краю ниже, к середине выше).
+  let unitsNode = null;
+  let bodyTarget = null;
+  let bodySoft = null;
+  /// Части тела кота (`catShapes` в виде) и сколько котов шейдер берёт.
+  let shapes = null;
+  const bodyMat = new Matrix();
+  const armMat = new Matrix();
+  const nodeMat = new Matrix();
+  const bodySrc = new Sprite();
+  bodySrc.filters = [
+    new BlurFilter({ strength: tile * ROUND_BLUR, quality: 3 }),
+  ];
   const scene = new Container(); // рисуется только в текстуру, на сцене его нет
   const ambient = new Sprite(Texture.WHITE);
   const bakedSprite = new Sprite();
@@ -410,6 +433,87 @@ export function createLighting(app, tile) {
       bloom: prefs.bloom / 100,
     });
     hdr.bump((prefs.bump / 100) * BUMP_MAX, GRAIN);
+    hdr.round((prefs.round / 100) * ROUND_MAX, (prefs.round / 100) * SHAPE_MAX);
+  }
+
+  /// Локальный трансформ узла — сам, без `worldTransform`: тот считается
+  /// рендером, а свет идёт в тикере до него.
+  function local(m, n) {
+    return m.setTransform(
+      n.x,
+      n.y,
+      n.pivot.x,
+      n.pivot.y,
+      n.scale.x,
+      n.scale.y,
+      n.rotation,
+      n.skew.x,
+      n.skew.y,
+    );
+  }
+
+  /// Каждому коту — обратный трансформ «поле света → корпус» и «→ рука»:
+  /// по нему шейдер переводит пиксель в координаты `drawCat` и спрашивает
+  /// шар и капсулы там, где они и нарисованы. Порядок — порядок слоя: кто
+  /// нарисован позже, тот и впереди.
+  function packBodies() {
+    if (!shapes) return;
+    const out = hdr.catBuffer();
+    let n = 0;
+    for (const c of unitsNode.children) {
+      if (!c.visible || !c.body || n >= out.max) continue;
+      local(bodyMat, c);
+      bodyMat.tx += PAD;
+      bodyMat.ty += PAD;
+      bodyMat.append(local(nodeMat, c.body));
+      armMat.copyFrom(bodyMat).append(local(nodeMat, c.arm)).invert();
+      bodyMat.invert();
+      const o = n * 12;
+      const v = out.data;
+      v[o] = bodyMat.a;
+      v[o + 1] = bodyMat.b;
+      v[o + 2] = bodyMat.c;
+      v[o + 3] = bodyMat.d;
+      v[o + 4] = bodyMat.tx;
+      v[o + 5] = bodyMat.ty;
+      v[o + 6] = armMat.a;
+      v[o + 7] = armMat.b;
+      v[o + 8] = armMat.c;
+      v[o + 9] = armMat.d;
+      v[o + 10] = armMat.tx;
+      v[o + 11] = armMat.ty;
+      n++;
+    }
+    hdr.cats(n);
+  }
+
+  /// Снять силуэт котов и размыть его — каждым кадром, коты ходят. Текстуры
+  /// в пикселях мира: силуэт и так мельче клетки, а купол — гладкий.
+  function snapBodies() {
+    if (!hdr || !unitsNode || !target) return;
+    const pw = target.width;
+    const ph = target.height;
+    if (!bodyTarget || bodyTarget.width !== pw || bodyTarget.height !== ph) {
+      bodyTarget?.destroy(true);
+      bodySoft?.destroy(true);
+      bodyTarget = RenderTexture.create({ width: pw, height: ph });
+      // float: купол ведёт разностями в пиксель, и восьми бит на них мало —
+      // по коту шли бы ступеньки.
+      bodySoft = RenderTexture.create({
+        width: pw,
+        height: ph,
+        format: lightFormat,
+      });
+      bodySrc.texture = bodyTarget;
+      hdr.bodies(bodyTarget, bodySoft);
+    }
+    app.renderer.render({
+      container: unitsNode,
+      target: bodyTarget,
+      clear: true,
+      transform: new Matrix().translate(PAD, PAD),
+    });
+    app.renderer.render({ container: bodySrc, target: bodySoft, clear: true });
   }
 
   /// Снять слой тайлов в карту высот — на каждой пересборке карты: светлое
@@ -666,6 +770,10 @@ export function createLighting(app, tile) {
       ambient.visible = false;
       app.renderer.render({ container: scene, target, clear: true });
       ambient.visible = true;
+      if (prefs.round > 0) {
+        snapBodies();
+        packBodies();
+      }
       if (worldNode) {
         const p = worldNode.toGlobal({ x: -PAD, y: -PAD });
         const k = worldNode.scale.x;
@@ -735,10 +843,13 @@ export function createLighting(app, tile) {
   }
 
   /// Мировые слои под HDR-фильтр и сам мир (для координат света).
-  function attach(container, world, tiles) {
+  function attach(container, world, tiles, units, cat) {
     lit = container;
     worldNode = world;
     tilesNode = tiles;
+    unitsNode = units;
+    shapes = cat;
+    hdr?.shapes(cat);
     applyMode();
   }
 
@@ -757,6 +868,12 @@ export function createLighting(app, tile) {
 
   function setBump(v) {
     prefs.bump = v;
+    applyHdr();
+    save();
+  }
+
+  function setRound(v) {
+    prefs.round = v;
     applyHdr();
     save();
   }
@@ -809,6 +926,7 @@ export function createLighting(app, tile) {
     setExposure,
     setBloom,
     setBump,
+    setRound,
     attach,
     /// Есть ли у браузера float-текстуры, без которых HDR не считается.
     canHdr,

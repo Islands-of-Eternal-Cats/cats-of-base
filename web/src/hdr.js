@@ -26,11 +26,27 @@
 // (`uAmbient`) взят постоянный свет сверху-слева. Плоская поверхность при
 // этом освещена ровно как без рельефа — множитель нормирован на `L.z`.
 //
+// **Объём котов.** Кот нарисован плоской заливкой, и под лампой это
+// картонка. Тела у него считаются честно: голова — шар, корпус, руки и лапы —
+// капсулы (`catShapes` в виде, в координатах `drawCat`). Каждым кадром
+// `light.js` кладёт в `uCats` обратный трансформ каждого кота (поле света →
+// корпус и → передняя рука): пиксель переводится в координаты кота, там
+// спрашивается часть, а её нормаль возвращается в мир транспонированной
+// матрицей — так зеркало разворота, бок спящего и взмах руки работают сами.
+// Что не тело (уши, хвост, ноша) — по размытому силуэту (`uBodySoft`): к
+// краю ниже, к середине выше; маска — сам силуэт (`uBody`), иначе вокруг
+// кота по полу шёл бы ореол.
+//
 // Рельеф только у карты: кот, куча и чертёж поверх пола свою краску имеют, и
 // там, где цвет пикселя расходится с картой высот, нормаль плоская — иначе
 // по коту ехала бы плитка пола под ним.
 
 import { Filter, GlProgram, Texture, UniformGroup } from "pixi.js";
+
+/// Сколько котов и частей тела шейдер берёт: котов на базе меньше десятка
+/// (с запасом на найм), частей у `catShapes` шесть.
+const MAX_CATS = 32;
+const MAX_PARTS = 8;
 
 const vertex = `
 in vec2 aPosition;
@@ -53,6 +69,8 @@ void main(void)
 `;
 
 const fragment = `
+#define MAX_CATS ${MAX_CATS}
+#define MAX_PARTS ${MAX_PARTS}
 in vec2 vTextureCoord;
 in vec2 vGlobal;
 out vec4 finalColor;
@@ -74,6 +92,63 @@ uniform vec2 uMapPx;   // поле света в пикселях мира
 uniform float uTile;   // клетка в пикселях мира
 uniform float uBump;   // сила рельефа, 0 — выключен
 uniform float uGrain;  // доля зерна в высоте
+uniform sampler2D uBody;     // силуэт котов (альфа)
+uniform sampler2D uBodySoft; // он же размытый — высота купола
+uniform float uRound;        // сила объёма по силуэту, 0 — выключен
+// Тела котов: по три vec4 на кота — (a, b, c, d), (tx, ty, A, B), (C, D, TX, TY):
+// трансформ поля в корпус и в переднюю руку, как у Matrix в Pixi.
+uniform vec4 uCats[MAX_CATS * 3];
+uniform float uCatN;
+// Части: по два vec4 — (cx, y0, y1, rx), (ry, рука ли, 0, 0).
+uniform vec4 uParts[MAX_PARTS * 2];
+uniform float uPartN;
+uniform float uReach;  // дальше этого от начала кота частей нет
+uniform float uShape;  // сила наклона нормалей тел, 0 — выключен
+
+// Часть тела — капсула с вертикальной осью (шар — капсула нулевой длины):
+// нормаль в координатах кота и признак попадания в w.
+vec4 part(vec2 p, vec4 a, vec4 b)
+{
+    float rx = a.w;
+    float ry = b.x;
+    float qx = (p.x - a.x) / rx;
+    float qy = (p.y - clamp(p.y, a.y + ry, a.z - ry)) / ry;
+    float s = qx * qx + qy * qy;
+    if (s >= 1.0) return vec4(0.0);
+    return vec4(qx, qy * rx / ry, sqrt(1.0 - s), 1.0);
+}
+
+// Нормаль тела кота под пикселем поля (w — попали ли); позже нарисованный
+// кот — впереди.
+vec4 catNormal(vec2 pw)
+{
+    vec4 got = vec4(0.0);
+    for (int i = 0; i < MAX_CATS; i++) {
+        if (float(i) >= uCatN) break;
+        vec4 m0 = uCats[i * 3];
+        vec4 m1 = uCats[i * 3 + 1];
+        vec4 m2 = uCats[i * 3 + 2];
+        vec2 pb = vec2(m0.x * pw.x + m0.z * pw.y + m1.x, m0.y * pw.x + m0.w * pw.y + m1.y);
+        if (dot(pb, pb) > uReach * uReach) continue;
+        vec2 pa = vec2(m1.z * pw.x + m2.x * pw.y + m2.z, m1.w * pw.x + m2.y * pw.y + m2.w);
+        for (int k = 0; k < MAX_PARTS; k++) {
+            if (float(k) >= uPartN) break;
+            vec4 a = uParts[k * 2];
+            vec4 b = uParts[k * 2 + 1];
+            bool arm = b.y > 0.5;
+            vec4 h = part(arm ? pa : pb, a, b);
+            if (h.w > 0.0) {
+                vec2 g = h.xy * uShape;
+                vec2 gw = arm
+                    ? vec2(m1.z * g.x + m1.w * g.y, m2.x * g.x + m2.y * g.y)
+                    : vec2(m0.x * g.x + m0.y * g.y, m0.z * g.x + m0.w * g.y);
+                got = vec4(normalize(vec3(gw, h.z)), 1.0);
+                break;
+            }
+        }
+    }
+    return got;
+}
 
 float hash(vec2 p)
 {
@@ -122,13 +197,27 @@ void main(void)
     vec2 uv = (vGlobal - uLightRect.xy) / uLightRect.zw;
     vec3 lamp = texture(uLight, uv).rgb * uGain;
     vec3 light = uAmbient + lamp;
-    if (uBump > 0.0) {
+    if (uBump > 0.0 || uRound > 0.0 || uShape > 0.0) {
         // Нормаль по карте высот; где пиксель не карта (кот, куча) — плоская.
         vec2 e = 1.0 / uMapPx;
-        float hx = heightAt(uv + vec2(e.x, 0.0)) - heightAt(uv - vec2(e.x, 0.0));
-        float hy = heightAt(uv + vec2(0.0, e.y)) - heightAt(uv - vec2(0.0, e.y));
-        float onMap = 1.0 - smoothstep(0.05, 0.14, distance(albedo, texture(uHeight, uv).rgb));
-        vec3 n = normalize(vec3(-hx * uBump * onMap, -hy * uBump * onMap, 1.0));
+        vec3 n = vec3(0.0, 0.0, 1.0);
+        if (uBump > 0.0) {
+            float hx = heightAt(uv + vec2(e.x, 0.0)) - heightAt(uv - vec2(e.x, 0.0));
+            float hy = heightAt(uv + vec2(0.0, e.y)) - heightAt(uv - vec2(0.0, e.y));
+            float onMap = 1.0 - smoothstep(0.05, 0.14, distance(albedo, texture(uHeight, uv).rgb));
+            n = normalize(vec3(-hx * uBump * onMap, -hy * uBump * onMap, 1.0));
+        }
+        vec4 cat = uShape > 0.0 ? catNormal(uv * uMapPx) : vec4(0.0);
+        float body = uRound > 0.0 ? texture(uBody, uv).a : 0.0;
+        if (cat.w > 0.0) {
+            n = cat.xyz;
+        } else if (body > 0.0) {
+            vec2 b = 1.5 * e;
+            float bx = texture(uBodySoft, uv + vec2(b.x, 0.0)).a - texture(uBodySoft, uv - vec2(b.x, 0.0)).a;
+            float by = texture(uBodySoft, uv + vec2(0.0, b.y)).a - texture(uBodySoft, uv - vec2(0.0, b.y)).a;
+            vec3 nb = normalize(vec3(-bx * uRound, -by * uRound, 1.0));
+            n = normalize(mix(n, nb, smoothstep(0.0, 0.6, body)));
+        }
         // Куда светят лампы: градиент яркости света на ~полклетки, отнесённый
         // к самой яркости — направление, а не сила.
         vec2 le = vec2(uTile * 0.5) / uMapPx;
@@ -177,6 +266,21 @@ export function createHdrFilter() {
     uTile: { value: 28, type: "f32" },
     uBump: { value: 0, type: "f32" },
     uGrain: { value: 0.05, type: "f32" },
+    uRound: { value: 0, type: "f32" },
+    uCats: {
+      value: new Float32Array(MAX_CATS * 12),
+      type: "vec4<f32>",
+      size: MAX_CATS * 3,
+    },
+    uCatN: { value: 0, type: "f32" },
+    uParts: {
+      value: new Float32Array(MAX_PARTS * 8),
+      type: "vec4<f32>",
+      size: MAX_PARTS * 2,
+    },
+    uPartN: { value: 0, type: "f32" },
+    uReach: { value: 0, type: "f32" },
+    uShape: { value: 0, type: "f32" },
   });
   const filter = new Filter({
     // highp: шум зерна считается в пикселях мира (до тысяч), и на mediump
@@ -192,6 +296,8 @@ export function createHdrFilter() {
       uLight: Texture.WHITE.source,
       uBloom: Texture.EMPTY.source,
       uHeight: Texture.EMPTY.source,
+      uBody: Texture.EMPTY.source,
+      uBodySoft: Texture.EMPTY.source,
     },
     // Разрешение экрана, а не единица: иначе текст и тонкие контуры внутри
     // мира мылятся (фильтр рисует слой в текстуру и только потом на экран).
@@ -220,6 +326,38 @@ export function createHdrFilter() {
       if (u.uBump === strength && u.uGrain === grain) return;
       u.uBump = strength;
       u.uGrain = grain;
+      uniforms.update();
+    },
+    /// Силуэт котов и он же размытый (пересоздаются вместе с полем света).
+    bodies(sharp, soft) {
+      filter.resources.uBody = sharp.source;
+      filter.resources.uBodySoft = soft.source;
+    },
+    /// Объём котов: сила по силуэту и сила тел, 0 — выключен.
+    round(strength, shape) {
+      if (u.uRound === strength && u.uShape === shape) return;
+      u.uRound = strength;
+      u.uShape = shape;
+      uniforms.update();
+    },
+    /// Части тела кота (`catShapes` в виде) — один раз.
+    shapes({ reach, parts }) {
+      const p = u.uParts;
+      p.fill(0);
+      parts.slice(0, MAX_PARTS).forEach((s, k) => {
+        p.set([s.cx, s.y0, s.y1, s.rx, s.ry, s.arm ? 1 : 0, 0, 0], k * 8);
+      });
+      u.uPartN = Math.min(parts.length, MAX_PARTS);
+      u.uReach = reach;
+      uniforms.update();
+    },
+    /// Куда класть трансформы котов (по 12 чисел) и сколько их влезает.
+    catBuffer() {
+      return { data: u.uCats, max: MAX_CATS };
+    },
+    /// Сколько котов положено в `catBuffer` этим кадром.
+    cats(n) {
+      u.uCatN = n;
       uniforms.update();
     },
     /// Где на экране лежит карта: x, y, ширина, высота.

@@ -584,7 +584,7 @@ const lighting = createLighting(app, TILE);
 lit.addChild(lighting.glow);
 lit.addChild(unitLayer);
 lit.addChild(lighting.shade);
-lighting.attach(lit, world, tileLayer);
+lighting.attach(lit, world, tileLayer, unitLayer, catShapes());
 world.addChild(workLayer);
 world.addChild(overlay);
 app.stage.addChild(world);
@@ -2793,6 +2793,55 @@ function wornLook(gear) {
 // середины, смотрит от зрителя. Нет морды и розового в ушах, хвост лежит
 // поверх корпуса, а не за ним, нагрудных подсумков не видно — лямки и ремень
 // остаются: они и сзади те же.
+/// Объём кота для света (`hdr.js`): те же части, что рисует `drawCat`, но
+/// телами — голова шаром, корпус, руки и лапы капсулами (вертикальная ось,
+/// `rx` — полуширина, `ry` — радиус скругления торцов). Порядок — **от
+/// ближнего к дальнему**: где части перекрылись, свет берёт первую. Обводка
+/// входит в тело, иначе тёмный кант остался бы плоским ободком. Числа обязаны
+/// ходить вместе с `drawCat`: разойдутся — шар уедет с нарисованной головы.
+/// `arm` — часть в координатах узла передней руки (она машет, §12.252).
+function catShapes() {
+  const r = TILE * 0.3;
+  const hr = r * 0.82 * 1.16;
+  const hy = -r * 1.3;
+  const legs = [-r * 0.42, r * 0.02].map((lx) => ({
+    cx: lx + r * 0.21,
+    y0: r * 0.35 - 1,
+    y1: r * 1.18,
+    rx: r * 0.21 + 1,
+    ry: r * 0.21 + 1,
+  }));
+  return {
+    reach: r * 2.6,
+    parts: [
+      { cx: 0, y0: hy - hr, y1: hy + hr, rx: hr, ry: hr },
+      {
+        arm: true,
+        cx: 0,
+        y0: -r * 0.05 - 1,
+        y1: r * 0.7 + 1,
+        rx: r * 0.17 + 1,
+        ry: r * 0.17 + 1,
+      },
+      {
+        cx: 0,
+        y0: -r * 0.55 - 1.5,
+        y1: r * 0.5 + 1.5,
+        rx: r * 0.75 + 1.5,
+        ry: r * 0.4,
+      },
+      {
+        cx: -r * 0.81,
+        y0: -r * 0.4 - 1,
+        y1: r * 0.35 + 1,
+        rx: r * 0.17 + 1,
+        ry: r * 0.17 + 1,
+      },
+      ...legs,
+    ],
+  };
+}
+
 function drawCat(
   g,
   fur,
@@ -7280,6 +7329,7 @@ function syncLightUi() {
     "exposure",
     "bloom",
     "bump",
+    "round",
   ]) {
     const u = lightUi[key];
     if (u.range.value !== String(p[key])) u.range.value = String(p[key]);
@@ -8022,6 +8072,13 @@ function buildToolbar() {
       100,
       "Объём плоских текстур: швы плит, крап скалы и зерно бетона ловят свет ламп; в простом режиме не действует",
       (v) => lighting.setBump(v),
+    ],
+    [
+      "round",
+      "Объём котов (HDR)",
+      100,
+      "Коты круглые, а не вырезаны из картона: край тела уходит в тень от лампы; в простом режиме не действует",
+      (v) => lighting.setRound(v),
     ],
   ]) {
     const row = document.createElement("div");
