@@ -963,7 +963,7 @@ fn the_shipped_ruleset_starts_with_every_room_reachable() {
                 || rules.is_shop(t)
                 || rules.is_trade_post(t)
                 || rules.is_relay_node(t)
-                || rules.teaches_of(t).is_some())
+                || rules.is_desk(t))
     });
 
     assert!(

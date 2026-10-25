@@ -234,3 +234,55 @@ fn a_second_cat_sent_to_a_taken_desk_takes_the_next_seat() {
         "b — за соседней партой объекта: {db:?}"
     );
 }
+
+/// Парта на два домена (§12.290): к «Науке» классной комнаты прибавлена
+/// «Связь» с теми же порогами.
+fn two_domain_classroom() -> (Sim, usize, usize) {
+    let (mut sim, science) = classroom(ROOM);
+    let relay = sim.set_skill("relay", &[20, 100, 300]);
+    sim.set_taught(relay, 3);
+    sim.add_teaches(DESK, relay);
+    (sim, science, relay)
+}
+
+/// Одна парта учит и «Связи»: учитель связи садится сам, как учитель науки.
+#[test]
+fn one_desk_teaches_relay_too() {
+    let (mut sim, _, relay) = two_domain_classroom();
+    sim.set_xp("b", relay, 300); // третий уровень «Связи»
+    assert!(sim.teach("a", "relay"));
+    sim.tick_n(400);
+    assert_eq!(
+        sim.level_of("a", relay),
+        1,
+        "выучился связи за той же партой"
+    );
+    assert_eq!(sim.xp_of("b", relay), 300, "учитель за учёбу не растёт");
+}
+
+/// Учитель учит своему домену и только ему: знаток «Науки» ученику «Связи»
+/// не учитель, и тот ждёт.
+#[test]
+fn a_teacher_of_one_domain_does_not_teach_another() {
+    let (mut sim, science, relay) = two_domain_classroom();
+    sim.set_xp("b", science, 300);
+    assert!(sim.teach("a", "relay"));
+    sim.tick_n(200);
+    assert!(sim.is_studying("a"), "ученик сидит за партой");
+    assert!(!sim.is_teaching("b"), "учёный связи не учит");
+    assert_eq!(sim.xp_of("a", relay), 0, "и опыт не растёт");
+}
+
+/// Клик по парте на два домена (§12.290): кот учится первому по списку
+/// парты, где ему ещё есть куда расти.
+#[test]
+fn a_click_on_a_desk_picks_a_domain_the_cat_can_still_learn() {
+    let (mut sim, science, _) = two_domain_classroom();
+    assert!(sim.set_target("a", 2, 1));
+    assert_eq!(sim.enrolled_in("a"), Some(science), "первый по списку");
+
+    let (mut sim, science, relay) = two_domain_classroom();
+    sim.set_xp("a", science, 300); // «Наука» на потолке парты
+    assert!(sim.set_target("a", 2, 1));
+    assert_eq!(sim.enrolled_in("a"), Some(relay), "науке учиться некуда");
+}

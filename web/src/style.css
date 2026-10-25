@@ -2927,6 +2927,30 @@ main#stage.mode-cursor #mode-banner {
 .wiki-also > span {
   color: var(--muted);
 }
+/* «Больше не показывать» у всплывшей статьи — внизу и тихо: это отказ от
+   будущих окон, а не ответ на нынешнее. */
+.wiki-mute {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+}
+.wiki-mute input,
+.wiki-mute-opt input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.wiki-mute-opt {
+  gap: 8px;
+  cursor: pointer;
+}
 /* Оглавление: группа на вид записи, ссылки в строку. Сеткой из кнопок было бы
    красивее и нечитаемо — имена сканируются, плитки нет (§12.195). */
 .wiki-group {

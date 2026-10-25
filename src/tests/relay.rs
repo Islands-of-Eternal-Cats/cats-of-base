@@ -588,7 +588,14 @@ fn the_shipped_ruleset_puts_someone_on_the_radio() {
         .copied()
         .expect("стол на старте");
 
-    // Сам по себе к рации никто не садится (§12.76) — связиста назначает игрок.
+    // Сам по себе к рации никто не садится (§12.76) — связиста назначает игрок,
+    // и только обученного «Связи» (§12.291): стартовые её не знают.
+    assert!(
+        !sim.post_relay("sp3", node.0, node.1),
+        "без «Связи» за рацию не сажают"
+    );
+    let comms = sim.skill_index("relay").expect("навык «Связь»");
+    sim.set_xp("sp3", comms, 200); // первый уровень
     assert!(sim.post_relay("sp3", node.0, node.1), "связист назначен");
     assert!(
         sim.launch(0, squad(&["excellent", "sp2"])),
@@ -718,4 +725,17 @@ fn an_operator_posted_mid_gathering_is_pulled_off_work() {
         t += 1;
         assert!(t < 100, "отряд так и не ушёл");
     }
+}
+
+/// Допуск к рации (§12.291): радист — только тот, кто умеет «Связь». Отказ не
+/// снимает прежнего радиста: решение игрока не стоит отряду связи.
+#[test]
+fn only_a_cat_who_knows_relay_takes_the_radio() {
+    let (mut sim, _) = sim_with_comms(2, 40);
+    let comms = sim.set_skill("relay", &[20, 100]);
+    assert!(!sim.post_relay("b", 2, 1), "не умеет — не радист");
+    sim.set_xp("a", comms, 20);
+    assert!(sim.post_relay("a", 2, 1), "умеет — радист");
+    assert!(!sim.post_relay("b", 2, 1), "отказ");
+    assert_eq!(sim.post_of("a"), Some((2, 1)), "и прежний на месте");
 }

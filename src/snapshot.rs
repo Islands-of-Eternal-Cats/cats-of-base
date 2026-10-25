@@ -925,6 +925,10 @@ pub(crate) struct EntitySnap {
     /// `reflex` по имени в JS значило бы завести второй экземпляр правила.
     pub(crate) guide_step: i32,
     pub(crate) guide_cut: i32,
+    /// Допуск к рации (§12.291, `relay::may_operate`): умеет ли кот «Связь».
+    /// Тем же выражением, каким `post_relay` отказывает, — иначе кнопка 📻 в
+    /// штабе горела бы у кота, которого фасад не примет.
+    pub(crate) may_relay: bool,
     /// Бодрость и её потолок; `energy_max = 0` — усталость выключена рулсетом.
     pub(crate) energy: i32,
     pub(crate) energy_max: i32,

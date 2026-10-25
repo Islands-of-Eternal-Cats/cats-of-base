@@ -171,7 +171,7 @@ fn desk_cells<'a>(
 ) -> impl Iterator<Item = (i32, i32)> + 'a {
     (0..map.height)
         .flat_map(|y| (0..map.width).map(move |x| (x, y)))
-        .filter(move |&(x, y)| tiles.teaches_of(map.tile_at(x, y)) == Some(skill))
+        .filter(move |&(x, y)| tiles.teaches(map.tile_at(x, y), skill))
 }
 
 /// Ближайшая свободная парта по **уже готовому** обходу.
@@ -445,10 +445,12 @@ pub(crate) fn assign_tutor(
         .map(|(s, _)| s.spot)
         .collect();
     // Места учителя без учителя: `(место учителя, домен, опыт ученика)`.
-    // **Одна запись на место, а не на ученика** (§12.287): у большой парты
-    // учеников трое, и по записи на каждого к одной кафедре шли бы трое
+    // **Одна запись на место и домен, а не на ученика** (§12.287): у большой
+    // парты учеников трое, и по записи на каждого к одной кафедре шли бы трое
     // учителей. Опыт берётся наименьший — учителю довольно научить хоть
-    // кого-то из класса, ровно как `study` держит его за кафедрой.
+    // кого-то из класса, ровно как `study` держит его за кафедрой. Домен в
+    // ключе с §12.290: за одной партой учат и «Науку», и «Связь», и класс
+    // вперемешку зовёт того, кто есть, — учитель один, учит он одному.
     let mut waiting: Vec<((i32, i32), usize, i32)> = Vec::new();
     for (s, skills) in desks.iter().filter(|(s, _)| !s.teacher) {
         let Some(lectern) = lectern_of(&map, &tiles, &owners, s.spot) else {
@@ -458,15 +460,22 @@ pub(crate) fn assign_tutor(
             continue;
         }
         let xp = skills.map_or(0, |k| k.xp_of(s.skill));
-        match waiting.iter_mut().find(|(at, ..)| *at == lectern) {
+        match waiting
+            .iter_mut()
+            .find(|(at, k, _)| *at == lectern && *k == s.skill)
+        {
             Some((_, _, least)) => *least = (*least).min(xp),
             None => waiting.push((lectern, s.skill, xp)),
         }
     }
-    waiting.sort_unstable_by_key(|&(at, ..)| (at.1, at.0));
+    waiting.sort_unstable_by_key(|&(at, skill, _)| (at.1, at.0, skill));
 
     let mut taken: Vec<Entity> = Vec::new();
+    let mut manned: Vec<(i32, i32)> = Vec::new();
     for (lectern, skill, pupil_xp) in waiting {
+        if manned.contains(&lectern) {
+            continue; // кафедру уже занял учитель другого домена этого класса
+        }
         let best = cats
             .iter()
             .filter(|(e, ..)| !taken.contains(e))
@@ -480,6 +489,7 @@ pub(crate) fn assign_tutor(
             continue; // учить некому — ученик ждёт
         };
         taken.push(cat_e);
+        manned.push(lectern);
         if let Ok((.., assignment, haul, researching, crafting)) = cats.get(cat_e) {
             release_work(
                 &mut commands,
@@ -546,20 +556,27 @@ pub(crate) fn study(
     let owners = owners_of(&map, &structures, &placed);
     // Кто сидит на местах учителя (§12.258): `(место, опыт, дошёл ли)`. И кто
     // ждёт на партах: `(место учителя его парты, опыт)`.
-    let tutors: Vec<((i32, i32), i32, bool)> = students
+    // Домен едет в обеих записях (§12.290): за одной партой учат разному, и
+    // учитель «Науки» ученику «Связи» не учитель.
+    let tutors: Vec<((i32, i32), usize, i32, bool)> = students
         .iter()
         .filter(|(_, _, s, ..)| s.teacher)
         .map(|(_, p, s, path, skills, ..)| {
             let here = path.is_none() && (p.x, p.y) == s.spot;
-            (s.spot, skills.map_or(0, |k| k.xp_of(s.skill)), here)
+            (
+                s.spot,
+                s.skill,
+                skills.map_or(0, |k| k.xp_of(s.skill)),
+                here,
+            )
         })
         .collect();
-    let pupils: Vec<((i32, i32), i32)> = students
+    let pupils: Vec<((i32, i32), usize, i32)> = students
         .iter()
         .filter(|(_, _, s, ..)| !s.teacher)
         .filter_map(|(_, _, s, _, skills, ..)| {
             let lectern = lectern_of(&map, &tiles, &owners, s.spot)?;
-            Some((lectern, skills.map_or(0, |k| k.xp_of(s.skill))))
+            Some((lectern, s.skill, skills.map_or(0, |k| k.xp_of(s.skill))))
         })
         .collect();
 
@@ -570,9 +587,11 @@ pub(crate) fn study(
         if task.teacher {
             let mine = skills.map_or(0, |k| k.xp_of(task.skill));
             let needed = tiles.is_lectern(map.tile_at(task.spot.0, task.spot.1))
-                && pupils
-                    .iter()
-                    .any(|&(at, xp)| at == task.spot && may_tutor(&rules, task.skill, mine, xp));
+                && pupils.iter().any(|&(at, skill, xp)| {
+                    at == task.spot
+                        && skill == task.skill
+                        && may_tutor(&rules, task.skill, mine, xp)
+                });
             if !needed {
                 commands.entity(cat_e).remove::<(Study, Path, Stride)>();
             } else if path.is_none()
@@ -604,7 +623,7 @@ pub(crate) fn study(
 
         // Парту могли снести, пока кот шёл: ищем другую свободную, а нет её —
         // учёба кончилась. Занятой считаем и свою, поэтому сравниваем с целью.
-        if tiles.teaches_of(map.tile_at(task.spot.0, task.spot.1)) != Some(task.skill) {
+        if !tiles.teaches(map.tile_at(task.spot.0, task.spot.1), task.skill) {
             let others: Vec<(i32, i32)> =
                 taken.iter().copied().filter(|&c| c != task.spot).collect();
             let Some(spot) = nearest_desk(&map, &tiles, task.skill, (pos.x, pos.y), &others) else {
@@ -637,8 +656,11 @@ pub(crate) fn study(
                 None => true,
                 Some(at) => {
                     let mine = skills.map_or(0, |k| k.xp_of(task.skill));
-                    tutors.iter().any(|&(spot, xp, here)| {
-                        spot == at && here && may_tutor(&rules, task.skill, xp, mine)
+                    tutors.iter().any(|&(spot, skill, xp, here)| {
+                        spot == at
+                            && here
+                            && skill == task.skill
+                            && may_tutor(&rules, task.skill, xp, mine)
                     })
                 }
             };

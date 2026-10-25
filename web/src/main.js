@@ -475,14 +475,16 @@ onPanelClick(raidWinEl, ".crew-pick", (b) => {
     y: Number(b.dataset.y),
   });
 });
-onPanelClick(raidWinEl, ".crew-duty", (b) =>
+onPanelClick(raidWinEl, ".crew-duty", (b) => {
+  // Не умеет «Связь» (§12.291): кнопка погашена классом, причина в подсказке.
+  if (b.classList.contains("off")) return;
   sendAction({
     type: b.dataset.in ? "unpostRelay" : "postRelay",
     id: b.dataset.id,
     x: Number(b.dataset.x),
     y: Number(b.dataset.y),
-  }),
-);
+  });
+});
 onPanelClick(raidWinEl, ".raid-go", (b) => {
   // Классом, а не `disabled` (§12.121). Причина отказа у заказа написана
   // строкой `.raidwin-why` прямо над кнопкой — но правило сплошное, без
@@ -4126,9 +4128,7 @@ function renderCellPanel(snap) {
     parts.push(
       `<div class="cell-armed">ещё клик сюда — ${
         pupils.length
-          ? `сядут учиться «${esc(skillLabel(def.teaches))}»: ${pupils
-              .map(esc)
-              .join(" · ")}${
+          ? `сядут учиться ${deskLabels(def)}: ${pupils.map(esc).join(" · ")}${
               walkers.length ? `; пойдут: ${walkers.map(esc).join(" · ")}` : ""
             }`
           : def?.relay && selectedUnits.length === 1
@@ -4279,7 +4279,7 @@ function renderCellPanel(snap) {
 
   // Ученик за партой — тем же порядком (§12.147). До него о приписке говорила
   // кнопка раздела «Обучение», то есть колонка, которая про клетку не знает.
-  if (def?.teaches) parts.push(...deskCell(snap, x, y, def));
+  if (isDesk(def)) parts.push(...deskCell(snap, x, y, def));
 
   // Место учителя — кто учит и во что ему встаёт класс (§12.287).
   if (def?.lectern) parts.push(...lecternCell(snap, x, y));
@@ -4307,7 +4307,7 @@ function renderCellPanel(snap) {
   // иначе одно имя стоит дважды через строку. Остальных — да, клетку коты
   // делят на проходе.
   const said = new Set();
-  if (def?.teaches)
+  if (isDesk(def))
     for (const e of snap.entities ?? [])
       if (atStudy(e) && e.x === x && e.y === y) said.add(e.id);
   if (def?.lab) {
@@ -4545,10 +4545,18 @@ function crewList(snap, x, y) {
     // рации — дежурить негде, и кнопки нет вовсе (§12.60).
     if (!radioOnBase()) return { band, id: e.id, html: pick };
     const on = e.post_x === x && e.post_y === y;
+    // Допуск считает ядро (`may_relay`, §12.291). Снять приписку можно всегда:
+    // запертая отмена оставила бы её несбрасываемой.
+    const barred = !on && !e.may_relay;
+    const dutyTip = on
+      ? "Снять приписку к рации"
+      : barred
+        ? "Не умеет «Связь»: радистом сажают только того, кто ей обучен"
+        : "Радист этого отряда: сядет за свободную рацию, когда отряд выйдет";
     const duty =
-      `<button class="tool crew-duty${on ? " on" : ""}" data-id="${esc(e.id)}"` +
+      `<button class="tool crew-duty${on ? " on" : ""}${barred ? " off" : ""}" data-id="${esc(e.id)}"` +
       ` data-x="${x}" data-y="${y}"${on ? ' data-in="1"' : ""}` +
-      ` data-tip="${on ? "Снять приписку к рации" : "Радист этого отряда: сядет за свободную рацию, когда отряд выйдет"}">📻</button>`;
+      ` data-tip="${dutyTip}">📻</button>`;
     return { band, id: e.id, html: pick + duty };
   });
 
@@ -5648,33 +5656,38 @@ function tileDefAt(x, y) {
 }
 
 function deskCell(snap, x, y, def) {
-  const i = (meta.skills ?? []).findIndex((s) => s.id === def.teaches);
-  if (i < 0) return [];
+  const domains = deskDomains(def);
+  if (!domains.length) return [];
   const ents = snap.entities ?? [];
   const here = ents.find((e) => atStudy(e) && e.x === x && e.y === y);
   // Сидящего за **другой** партой того же домена сюда пускать нельзя: это уже
   // не про эту клетку. Всех остальных приписанных — можно, и строка о них
   // говорит про домен, а не про место: за какую из свободных парт кот сядет,
   // решает ядро, и назвать здесь одну значило бы обещать не то (§12.16).
-  const atDesk = (e) => atStudy(e) && !!tileDefAt(e.x, e.y)?.teaches;
-  const cat = here ?? ents.find((e) => e.study === i && !atDesk(e));
+  const atDesk = (e) => atStudy(e) && isDesk(tileDefAt(e.x, e.y));
+  const cat = here ?? ents.find((e) => domains.includes(e.study) && !atDesk(e));
   if (!cat) {
     const out = [
-      `<div class="cat-sub">парта свободна: учит «${esc(skillLabel(def.teaches))}»</div>`,
+      `<div class="cat-sub">парта свободна: учит ${deskLabels(def)}</div>`,
     ];
     // Почему второй клик не посадит выбранного кота (§12.53): молчащая клетка
     // читается как поломка ровно так же, как молчащая кнопка. Потолок парты
     // считает ядро (`desk` у навыка) — врождённого предела в виде нет.
     if (selectedUnits.length === 1) {
       const one = ents.find((e) => e.id === selectedUnits[0]);
-      const skill = one?.skills?.[i];
-      if (one && skill && skill.xp >= skill.desk)
+      const capped = domains.every((k) => {
+        const skill = one?.skills?.[k];
+        return skill && skill.xp >= skill.desk;
+      });
+      if (one && capped)
         out.push(
           `<div class="cat-sub">${esc(one.id)} на её потолке: дальше только практика</div>`,
         );
     }
     return out;
   }
+  // Домен — приписка ученика (§12.290): парта учит нескольким.
+  const i = domains.includes(cat.study) ? cat.study : domains[0];
   const skill = cat.skills?.[i];
   // Доля считается от порога текущего уровня, как в `skillBlock`: «Учить» —
   // один уровень (§12.269), и полоска от нуля опыта показывала бы у ученика
@@ -5706,7 +5719,7 @@ function deskCell(snap, x, y, def) {
       : "приписан: сядет за свободную парту сам";
   return [
     '<div class="cat-skill">' +
-      `<div class="cat-row"><span>${esc(skillLabel(def.teaches))} · ${esc(cat.id)}</span><b>${pct}%</b></div>` +
+      `<div class="cat-row"><span>${esc(meta.skills?.[i]?.label ?? "")} · ${esc(cat.id)}</span><b>${pct}%</b></div>` +
       `<div class="bar"><i style="width:${pct}%"></i></div>` +
       (state ? `<div class="cat-sub">${state}</div>` : "") +
       `<button class="tool study-off" data-key="unteach@${esc(cat.id)}" ` +
@@ -6848,14 +6861,13 @@ function alreadyHere(def, x, y) {
   // для любой клетки — у пола других причин «уже здесь» нет вовсе.
   if (cat.order_x === x && cat.order_y === y) return true;
   if (def?.relay) return cat.post_x === x && cat.post_y === y;
-  if (!def?.teaches) return false;
-  const i = (meta.skills ?? []).findIndex((s) => s.id === def.teaches);
+  if (!isDesk(def)) return false;
   // У парты приписка к **домену**, а не к клетке (§12.84), поэтому «уже здесь»
   // значит «уже учится этому»: кот, идущий к соседней парте того же домена,
   // тоже никуда не денется. Позицию сюда добавлять нельзя — на дороге к парте
   // рамка снова загорелась бы, а это ровно тот случай, на котором её и
   // поймали: она обещает перемену коту, который и так идёт.
-  return cat.study === i;
+  return deskDomains(def).includes(cat.study);
 }
 
 /// Кто из выбранных котов сядет за парту по клику в эту клетку — в порядке
@@ -6865,8 +6877,8 @@ function alreadyHere(def, x, y) {
 /// первой: занята она — `teach_at` сажает за соседнюю. Кому парта ничего не
 /// даст, за неё не сядет, и места не займёт.
 function deskWelcomes(def, x, y) {
-  if (!def?.teaches || !selectedUnits.length) return [];
-  const i = (meta.skills ?? []).findIndex((s) => s.id === def.teaches);
+  if (!isDesk(def) || !selectedUnits.length) return [];
+  const domains = deskDomains(def);
   const ents = lastSnap?.entities ?? [];
   const seats = (lastSnap?.classes ?? []).find((c) =>
     c.seats.some(([sx, sy]) => sx === x && sy === y),
@@ -6886,12 +6898,37 @@ function deskWelcomes(def, x, y) {
   const out = [];
   for (const id of selectedUnits) {
     if (free <= 0) break;
-    const skill = ents.find((e) => e.id === id)?.skills?.[i];
-    if (!skill || skill.xp >= skill.desk) continue;
+    // Домен выбирает ядро (`teach_at`, §12.290): приписка, иначе первый по
+    // списку парты, где есть куда расти. Здесь — только «сядет ли вообще».
+    const cat = ents.find((e) => e.id === id);
+    const gives = (k) => {
+      const skill = cat?.skills?.[k];
+      return skill && skill.xp < skill.desk;
+    };
+    const k = domains.includes(cat?.study) ? cat.study : domains.find(gives);
+    if (k === undefined || !gives(k)) continue;
     out.push(id);
     free -= 1;
   }
   return out;
+}
+
+// Домены парты индексами палитры навыков (§12.290: `teaches` — список).
+function deskDomains(def) {
+  return (def?.teaches ?? [])
+    .map((id) => (meta.skills ?? []).findIndex((s) => s.id === id))
+    .filter((i) => i >= 0);
+}
+
+function isDesk(def) {
+  return deskDomains(def).length > 0;
+}
+
+// «Наука» · «Связь» — чему учит парта.
+function deskLabels(def) {
+  return deskDomains(def)
+    .map((i) => `«${esc(meta.skills[i].label)}»`)
+    .join(", ");
 }
 
 function skillLabel(id) {
@@ -8392,6 +8429,24 @@ function buildToolbar() {
   );
   liveTitle(trace, "Журнал команд: как партия пришла в это состояние");
   game.appendChild(trace);
+
+  // Модалы «Новая запись» (§12.251): тот же чекбокс, что внизу всплывшей
+  // статьи, и обратная дорога к нему. Тулбар строится раз на мир, кадром не
+  // перерисовывается — родной `change` доходит.
+  const mute = document.createElement("label");
+  mute.className = "tool wiki-mute-opt";
+  wikiMuteBox = document.createElement("input");
+  wikiMuteBox.type = "checkbox";
+  wikiMuteBox.checked = !wikiPopups;
+  wikiMuteBox.addEventListener("change", () =>
+    setWikiPopups(!wikiMuteBox.checked),
+  );
+  mute.append(wikiMuteBox, "Не показывать новые статьи");
+  liveTitle(
+    mute,
+    "Не открывать статью справочника окном, когда она появляется",
+  );
+  game.appendChild(mute);
 
   // Раскрыт тот раздел, что был открыт до перестройки; на первом кадре не
   // раскрыт никакой.
@@ -12109,7 +12164,7 @@ function tileRoleWords(t) {
   if (t.capacity > 0) words.push(`хранит ${t.capacity}`);
   if (t.rest > 0) words.push("на ней спят");
   if (t.heal > 0) words.push("лечат раненых");
-  if (t.teaches) words.push("учат");
+  if (t.teaches?.length) words.push("учат");
   if (t.lab) words.push("ведут науку");
   if (t.shop) words.push("делают вещи");
   if (t.trade) words.push("торгуют");
@@ -12277,7 +12332,16 @@ function buildWikiWindow() {
     "</div>" +
     `<div class="wiki-body">${wikiPicture(wikiKey)}${renderArticle(wikiKey, wikiName)}</div>` +
     wikiFacts(wikiKey) +
-    also;
+    also +
+    // Только у всплывшей статьи: открытой самим игроком отказываться не от
+    // чего. Чекбокс, а не кнопка: окно не закрывается, и передумать можно
+    // тут же. Вернуть потом — тем же чекбоксом в разделе «Партия».
+    (wikiFresh
+      ? '<label class="wiki-mute" data-tip="Новые статьи справочника не будут ' +
+        'всплывать сами. Вернуть можно в разделе «Партия»">' +
+        `<input type="checkbox" class="wiki-mute-box"${wikiPopups ? "" : " checked"}>` +
+        "Больше не показывать</label>"
+      : "");
 }
 
 // Клики внутри справочника — делегированием и парой `mousedown`/`mouseup`, как
@@ -12285,6 +12349,16 @@ function buildWikiWindow() {
 // на одну статью из разных мест поделили бы обработчик.
 onPanelClick(wikiWinEl, ".wiki-link", (b) => openWiki(b.dataset.go));
 onPanelClick(wikiWinEl, ".wiki-back", () => wikiGoBack());
+// Окно справочника перестраивается только кликом игрока (`buildWikiWindow`),
+// а не кадром, поэтому родное `change` у чекбокса доходит (§12.84 тут не
+// про него). Слушатель один, на окне.
+wikiWinEl.addEventListener("change", (e) => {
+  if (
+    e.target instanceof HTMLInputElement &&
+    e.target.matches(".wiki-mute-box")
+  )
+    setWikiPopups(!e.target.checked);
+});
 
 // Значок «i» ловится **на документе**: он стоит в десятке разных панелей и
 // окон, и вешать по слушателю на каждую — это тот же список из десяти мест,
@@ -12523,6 +12597,22 @@ let wikiOpenSeen = null;
 let wikiQueue = [];
 // Плашка над открывшейся статьёй: «Новая запись» · «Запись дополнена»; "" — нет.
 let wikiFresh = "";
+// Всплывают ли открывшиеся статьи модалом. Выбор игрока, а не партии: живёт
+// в `localStorage` рядом с видом 3/4 и звуком, новая партия его не сбрасывает.
+// Выключенные модалы не гасят меток «дополнено» в оглавлении: статья
+// открылась, просто без окна поверх карты.
+const WIKI_POPUPS_KEY = "sp.wikiPopups";
+let wikiPopups = localStorage.getItem(WIKI_POPUPS_KEY) !== "off";
+// Чекбокс «Больше не показывать» в разделе «Партия»: второй вход в тот же
+// выбор, что и чекбокс внизу всплывшей статьи.
+let wikiMuteBox = null;
+
+function setWikiPopups(on) {
+  wikiPopups = on;
+  localStorage.setItem(WIKI_POPUPS_KEY, on ? "on" : "off");
+  if (!on) wikiQueue = [];
+  if (wikiMuteBox) wikiMuteBox.checked = !on;
+}
 
 // Грани, открывшиеся позже своей статьи (§12.265): рецепт пробоотборника,
 // пришедший после статьи о нём. Статья всплывает модалом «Запись дополнена»,
@@ -12577,6 +12667,9 @@ function noteWikiOpened() {
     }
   }
   wikiOpenSeen = open;
+  // Базовую линию ведём и при выключенных модалах: включённые обратно, они
+  // не должны вывалить всё, что открылось за это время.
+  if (!wikiPopups) wikiQueue = [];
   if (!wikiQueue.length || WINDOWS.some(([, isOpen]) => isOpen())) return;
   const [key, fresh] = wikiQueue.shift();
   wikiFresh = fresh;

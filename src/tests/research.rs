@@ -675,6 +675,67 @@ fn the_shipped_ruleset_opens_one_building_by_the_first_find() {
     );
 }
 
+/// **Боевой рулсет: рацию открывает связист, и только её** (§12.290) —
+/// дословно учёный и лаборатория. Связь пришла к базе отдельным котом:
+/// стартовые её не знают, учёный тоже, а первый кандидат со «Связью» —
+/// нейтральный и раньше учёного.
+#[test]
+fn the_shipped_ruleset_opens_the_radio_by_its_operator() {
+    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let relay = sim.skill_index("relay").expect("навык «Связь»");
+    let radio = sim.tile_index("relay").expect("рация в палитре") as usize;
+    assert!(!sim.tile_is_open(radio), "на старте рации нет");
+
+    let before: Vec<bool> = (0..sim.palette.len())
+        .map(|def| sim.tile_is_open(def))
+        .collect();
+    sim.master("science", 3); // учёный рацию не приводит
+    assert!(!sim.tile_is_open(radio), "учёный рацию не открывает");
+    let mid: Vec<bool> = (0..sim.palette.len())
+        .map(|def| sim.tile_is_open(def))
+        .collect();
+    sim.master("relay", 1);
+    let fresh: Vec<usize> = (0..sim.palette.len())
+        .filter(|&def| sim.tile_is_open(def) && !mid[def])
+        .collect();
+    let opened: Vec<&str> = fresh
+        .iter()
+        .map(|&def| sim.palette[def].id.as_str())
+        .collect();
+    assert_eq!(opened, ["relay"], "связист открыл {opened:?}");
+    assert!(!before[radio]);
+
+    let recruits = &sim.world.resource::<RecruitRules>().0;
+    let knows = |r: &RecruitRule| r.skills.iter().any(|&(k, xp)| k == relay && xp > 0);
+    let first = recruits
+        .iter()
+        .filter(|r| knows(r))
+        .min_by_key(|r| r.requires)
+        .expect("кандидат со «Связью»");
+    assert_eq!(first.id, "morse", "связист — Морзе");
+    assert!(
+        first.needs.is_empty(),
+        "и нейтральный: связь не ветка развилки"
+    );
+    let scientist = recruits
+        .iter()
+        .find(|r| r.id == "antenna")
+        .expect("Антенна");
+    // Связь у учёного законна, но не выше первого уровня: учить её — дело
+    // связиста, иначе наука и связь снова решались бы одним наймом.
+    let skills = sim.world.resource::<SkillRules>();
+    let level = scientist
+        .skills
+        .iter()
+        .find(|&&(k, _)| k == relay)
+        .map_or(0, |&(_, xp)| skills.level(relay, xp));
+    assert!(level <= 1, "учёный знает связь на {level}-м уровне");
+    assert!(
+        first.requires < scientist.requires,
+        "связь нужна раньше науки: она режет дорогу с первых вылазок"
+    );
+}
+
 /// **Боевой рулсет: цепочка палитры идёт вперёд.** Предшественник ниже по
 /// списку не разрешится вовсе — тайл просто откроется сразу, и замысел цепочки
 /// развалится молча (§12.210).

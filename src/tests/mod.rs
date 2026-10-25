@@ -218,7 +218,7 @@ fn sim_from(rows: &[&str]) -> Sim {
             gate: false,
             muster: false,
             brief: 0,
-            teaches: String::new(),
+            teaches: Vec::new(),
             lab: false,
             shop: false,
             solid: false,
@@ -1017,7 +1017,12 @@ impl Sim {
 
     /// Сделать тайл партой: какому домену он учит.
     fn set_teaches(&mut self, tile: i16, skill: usize) {
-        self.tile_rule(tile, |r| r.teaches = Some(skill));
+        self.tile_rule(tile, |r| r.teaches = vec![skill]);
+    }
+
+    /// Ещё один домен той же парте (§12.290): `set_teaches` заменяет список.
+    fn add_teaches(&mut self, tile: i16, skill: usize) {
+        self.tile_rule(tile, |r| r.teaches.push(skill));
     }
 
     /// Закрыть постройку тайла технологией (пустая строка — открыт всегда).
@@ -1512,6 +1517,13 @@ impl Sim {
     fn is_enrolled(&mut self, unit: &str) -> bool {
         let cat = self.entity_of(unit);
         self.world.get::<Enrolled>(cat).is_some()
+    }
+
+    /// К какому домену кот приписан (§12.290): у парты их несколько, и клик
+    /// по ней выбирает один.
+    fn enrolled_in(&mut self, unit: &str) -> Option<usize> {
+        let cat = self.entity_of(unit);
+        self.world.get::<Enrolled>(cat).map(|e| e.skill)
     }
 
     /// Домен, которому капнуло в **этом** тике; `None` — в этом тике кот не

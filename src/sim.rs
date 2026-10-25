@@ -1605,7 +1605,7 @@ impl Sim {
                     gate: t.gate,
                     muster: t.muster,
                     brief: t.brief,
-                    teaches: skill_index(&t.teaches),
+                    teaches: t.teaches.iter().filter_map(|k| skill_index(k)).collect(),
                     lectern: t.lectern,
                     lab: t.lab,
                     shop: t.shop,
@@ -5087,16 +5087,34 @@ impl Sim {
     /// в одну клетку, — второму и третьему жест значит «за эту парту», а не
     /// «за эту клетку». Свободной в объекте нет — «иди туда» остаётся приказом.
     fn teach_at(&mut self, unit_id: &str, x: i32, y: i32) -> bool {
-        let skill = {
+        let domains: Vec<usize> = {
             let map = self.world.resource::<BaseMap>();
             let tiles = self.world.resource::<TileRules>();
-            match tiles.teaches_of(map.tile_at(x, y)) {
-                Some(skill) => skill,
-                None => return false,
-            }
+            tiles.teaches_of(map.tile_at(x, y)).to_vec()
         };
+        if domains.is_empty() {
+            return false;
+        }
         let Some(cat_e) = self.unit_on_base(unit_id) else {
             return false;
+        };
+        // Чему учиться (§12.290): парта учит нескольким доменам, а клик один.
+        // Приписан кот к одному из них — ему и учится, иначе клик менял бы
+        // решение, принятое в «Личном деле». Нет — первому по списку парты,
+        // где парта ему ещё что-то даст; не даст ни в одном — приказ.
+        let skill = {
+            let enrolled = self.world.get::<Enrolled>(cat_e).map(|e| e.skill);
+            let skills = self.world.get::<Skills>(cat_e);
+            let stats = self.world.get::<Stats>(cat_e);
+            let rules = self.world.resource::<SkillRules>();
+            let gives = |k: usize| skills.map_or(0, |s| s.xp_of(k)) < desk_cap(rules, stats, k);
+            match enrolled.filter(|k| domains.contains(k)) {
+                Some(k) => k,
+                None => match domains.iter().copied().find(|&k| gives(k)) {
+                    Some(k) => k,
+                    None => return false,
+                },
+            }
         };
         // Клик по своей же парте — как и раньше, просто приказ. А при поиске
         // соседней своя не в счёт, иначе кот пересел бы с неё на другую.
@@ -5116,8 +5134,7 @@ impl Sim {
             let free = seats_at(map, tiles, &owners, (x, y), TileRules::is_desk)
                 .into_iter()
                 .find(|&(sx, sy)| {
-                    !taken.contains(&(sx, sy))
-                        && tiles.teaches_of(map.tile_at(sx, sy)) == Some(skill)
+                    !taken.contains(&(sx, sy)) && tiles.teaches(map.tile_at(sx, sy), skill)
                 });
             match free {
                 Some(spot) => spot,
@@ -5316,6 +5333,14 @@ impl Sim {
         let Some(cat_e) = self.unit_on_base(unit_id) else {
             return false;
         };
+        // Допуск (§12.291) — до того, как прежний радист уступит место: отказ
+        // не должен стоить отряду связи.
+        if !crate::relay::may_operate(
+            self.world.resource::<SkillRules>(),
+            self.world.get::<Skills>(cat_e),
+        ) {
+            return false;
+        }
         // Прежний связист этого узла уступает: решение игрока свежее. Идущему к
         // рации снимаем и маршрут — иначе он дошагает до чужого места и встанет
         // там без дела, как это делает `unpost_relay`.
@@ -6103,6 +6128,7 @@ impl Sim {
                     // искать `reflex` по имени в JS — второй экземпляр правила.
                     guide_step: guide_of(stat_rules, stats),
                     guide_cut: guide_cut(guide_of(stat_rules, stats)),
+                    may_relay: crate::relay::may_operate(rules, skills),
                 });
             }
         }
@@ -6899,7 +6925,7 @@ impl Sim {
                 .map(|k| {
                     rules.taught_cap(k) > 0
                         && (0..tiles.0.len()).any(|t| {
-                            tiles.teaches_of(t as i16) == Some(k)
+                            tiles.teaches(t as i16, k)
                                 && (tiles_open[t] || map.was_erected(t as i16))
                         })
                 })
