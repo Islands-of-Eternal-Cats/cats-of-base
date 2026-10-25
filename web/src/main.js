@@ -1051,8 +1051,15 @@ function hex(s) {
 // окно, а не тайл.
 function layout() {
   if (!meta) return;
+  // В виде 3/4 стена над верхним рядом пола встаёт **над** картой: лицо и верх
+  // северной стены занимают клетку выше (`oblique.js`, высота плюс толщина —
+  // ровно клетка). Пол в нулевом ряду — и стена уходила за край сцены, а
+  // комната читалась открытой сверху. Клетку над картой держим всегда — и не
+  // по застройке (карта прыгала бы на первом чертеже в верхнем ряду), и не по
+  // виду: на V клетки обязаны остаться там же, где были.
+  const rise = TILE;
   const w = meta.width * TILE;
-  const h = meta.height * TILE;
+  const h = meta.height * TILE + rise;
   // Свободная полоса, а не вся сцена: `#stage` растянут во всё окно, а тулбар и
   // правая колонка стоят `position: fixed` **поверх** него (на этом держится
   // подсветка режима по периметру карты). Впиши карту в `app.screen` — и её
@@ -1086,7 +1093,7 @@ function layout() {
       ? pad + Math.floor((avail - drawn) / 2)
       : Math.floor((whole - drawn) / 2);
   world.x = put(w * worldScale, padLeft, availW, app.screen.width);
-  world.y = put(h * worldScale, 8, availH, app.screen.height);
+  world.y = put(h * worldScale, 8, availH, app.screen.height) + rise * worldScale;
 }
 app.renderer.on("resize", layout);
 
