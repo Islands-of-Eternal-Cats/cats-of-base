@@ -4547,14 +4547,16 @@ function crewList(snap, x, y) {
     const on = e.post_x === x && e.post_y === y;
     // Допуск считает ядро (`may_relay`, §12.291). Снять приписку можно всегда:
     // запертая отмена оставила бы её несбрасываемой.
-    const barred = !on && !e.may_relay;
+    // Не умеющему «Связь» значка нет вовсе: серые 📻 у всей колонки прятали
+    // ту одну, что отличает радиста. Место под кнопку остаётся пустым, чтобы
+    // строки не разъезжались по ширине.
+    const gap = '<span class="tool crew-duty void" aria-hidden="true">📻</span>';
+    if (!on && !e.may_relay) return { band, id: e.id, html: pick + gap };
     const dutyTip = on
       ? "Снять приписку к рации"
-      : barred
-        ? "Не умеет «Связь»: радистом сажают только того, кто ей обучен"
-        : "Радист этого отряда: сядет за свободную рацию, когда отряд выйдет";
+      : "Радист этого отряда: сядет за свободную рацию, когда отряд выйдет";
     const duty =
-      `<button class="tool crew-duty${on ? " on" : ""}${barred ? " off" : ""}" data-id="${esc(e.id)}"` +
+      `<button class="tool crew-duty${on ? " on" : ""}" data-id="${esc(e.id)}"` +
       ` data-x="${x}" data-y="${y}"${on ? ' data-in="1"' : ""}` +
       ` data-tip="${dutyTip}">📻</button>`;
     return { band, id: e.id, html: pick + duty };

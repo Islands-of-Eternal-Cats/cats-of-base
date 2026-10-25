@@ -884,6 +884,10 @@ main#stage.mode-cursor #mode-banner {
   filter: grayscale(1);
   opacity: 0.55;
 }
+/* Не умеет «Связь» (§12.291): место держим, значок прячем. */
+.crew-duty.void {
+  visibility: hidden;
+}
 .crew-duty.on {
   filter: none;
   opacity: 1;
