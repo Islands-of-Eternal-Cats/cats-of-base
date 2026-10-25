@@ -200,8 +200,9 @@ fn the_shipped_ruleset_grows_skills_and_deals_paws() {
     let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
     let build = sim.skill_index("build").expect("навык стройки в рулсете");
 
-    assert_eq!(sim.carry_max_of("sp2"), 8, "«Носильщик» удваивает лапы");
-    assert_eq!(sim.carry_max_of("sp3"), 4, "у остальных — базовые");
+    // «Носильщика» среди стартовых нет: он у кандидатов (Гвоздь, Кирпич).
+    assert_eq!(sim.carry_max_of("sp2"), 4, "у стартовых — базовые лапы");
+    assert_eq!(sim.carry_max_of("sp3"), 4, "у стартовых — базовые лапы");
 
     assert!(
         sim.plan_demolish_rect(6, 10, 3, 4),
