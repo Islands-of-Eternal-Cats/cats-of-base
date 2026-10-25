@@ -653,11 +653,46 @@ function prop(g, id, x, y, tint, n, d) {
       g.rect(cx - T * 0.06, cy - h, T * 0.12, h).fill(0x4a3a26);
       g.ellipse(cx, cy - h + 3, r, r * 0.86).fill(0x5a4630);
       g.ellipse(cx, cy - h, r, r * 0.86).fill(0x8a6a44);
-      g.rect(cx - T * 0.2, cy - h - T * 0.16, T * 0.4, T * 0.32).fill(0xd9cfae);
-      g.moveTo(cx - T * 0.14, cy - h + T * 0.1)
-        .lineTo(cx - T * 0.02, cy - h - T * 0.08)
-        .lineTo(cx + T * 0.12, cy - h + T * 0.02)
-        .stroke({ color: 0xb04a3a, width: 1.5 });
+      // Карта похода — та же, что в плоском виде (`main.js`), только лист
+      // сплющен по вертикали вместе со столешницей: сгиб, река, роща, база,
+      // пунктир маршрута и крестик цели.
+      const mw = T * 0.6;
+      const mh = T * 0.52 * 0.86;
+      const mx = cx - mw / 2;
+      const my = cy - h - mh / 2;
+      g.rect(mx + 1, my + 1, mw, mh).fill({ color: 0x000000, alpha: 0.25 });
+      g.rect(mx, my, mw, mh).fill(0xe2d6b0);
+      g.rect(mx + mw / 2, my, mw / 2, mh).fill({ color: 0x000000, alpha: 0.06 });
+      g.moveTo(mx + mw / 2, my)
+        .lineTo(mx + mw / 2, my + mh)
+        .stroke({ color: 0xb8a97e, width: 0.6 });
+      g.moveTo(mx + mw * 0.62, my)
+        .quadraticCurveTo(mx + mw * 0.5, my + mh * 0.5, mx + mw * 0.9, my + mh)
+        .stroke({ color: 0x5a86b0, width: 1.2 });
+      g.ellipse(mx + mw * 0.22, my + mh * 0.28, mw * 0.08, mw * 0.08 * 0.86).fill(0x6f8f4a);
+      g.ellipse(mx + mw * 0.34, my + mh * 0.22, mw * 0.06, mw * 0.06 * 0.86).fill(0x6f8f4a);
+      g.rect(mx + mw * 0.1, my + mh * 0.7, mw * 0.12, mh * 0.14).fill(0x4a4438);
+      const route = [
+        [0.22, 0.74],
+        [0.38, 0.62],
+        [0.5, 0.66],
+        [0.62, 0.48],
+        [0.76, 0.36],
+      ];
+      for (let i = 0; i < route.length - 1; i++) {
+        const [ax, ay] = route[i];
+        const [bx, by] = route[i + 1];
+        g.moveTo(mx + mw * ax, my + mh * ay)
+          .lineTo(mx + mw * (ax + (bx - ax) * 0.6), my + mh * (ay + (by - ay) * 0.6))
+          .stroke({ color: 0xb04a3a, width: 1 });
+      }
+      const [qx, qy] = [mx + mw * 0.82, my + mh * 0.3];
+      const k = mw * 0.07;
+      g.moveTo(qx - k, qy - k * 0.86)
+        .lineTo(qx + k, qy + k * 0.86)
+        .moveTo(qx + k, qy - k * 0.86)
+        .lineTo(qx - k, qy + k * 0.86)
+        .stroke({ color: 0xb04a3a, width: 1.3 });
       break;
     }
     case "lab": {
