@@ -205,6 +205,8 @@ pub(crate) struct Snapshot {
     /// перечислять такие значило бы везти наружу пустое место. Отсортированы по
     /// клетке ядром, как `deals`.
     pub(crate) bins: Vec<BinSnap>,
+    /// Классы у мест учителя (§12.287), по клетке места учителя row-major.
+    pub(crate) classes: Vec<ClassSnap>,
     /// Курсы всех фракций по всем предметам, которыми они торгуют.
     pub(crate) prices: Vec<PriceSnap>,
     /// Действующие правила автопродажи, по одному на предмет (§12.88).
@@ -583,6 +585,21 @@ pub(crate) struct BinSnap {
     pub(crate) x: i32,
     pub(crate) y: i32,
     pub(crate) accepts: Vec<usize>,
+}
+
+/// Класс у места учителя (§12.287): парты того же объекта, кто учит сейчас,
+/// сколько учеников дошло до своих парт и во что урок встаёт учителю —
+/// проценты обычной ставки, тем же `class_load`, каким считает `tire`.
+/// Вид по `seats` обещает рассадку выбранных котов, а по `load` пишет
+/// «устаёт ×2» — своей арифметики у него нет.
+#[derive(Serialize)]
+pub(crate) struct ClassSnap {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) seats: Vec<(i32, i32)>,
+    pub(crate) teacher: Option<String>,
+    pub(crate) pupils: usize,
+    pub(crate) load: i32,
 }
 
 /// Курс фракции по предмету — то же выражение, что рассчитает заказ (§12.44).

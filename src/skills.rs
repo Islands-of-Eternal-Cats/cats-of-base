@@ -117,6 +117,32 @@ pub(crate) fn lectern_of(
         .next()
 }
 
+/// Сколько учеников **сидит** у каждого места учителя (§12.287): по
+/// клеткам дошедших до своей парты. Одно выражение на расход учителя (`tire`)
+/// и на снимок — разойдись они, и панель говорила бы «устаёт ×2» про учителя,
+/// который тратит как за обычной работой.
+///
+/// Места учителя без единого ученика в ответ не идут: спрашивающему ноль и
+/// отсутствие значат одно.
+pub(crate) fn class_sizes(
+    map: &BaseMap,
+    tiles: &TileRules,
+    owners: &Owners,
+    seated: &[(i32, i32)],
+) -> Vec<((i32, i32), usize)> {
+    let mut out: Vec<((i32, i32), usize)> = Vec::new();
+    for &spot in seated {
+        let Some(at) = lectern_of(map, tiles, owners, spot) else {
+            continue;
+        };
+        match out.iter_mut().find(|(l, _)| *l == at) {
+            Some((_, n)) => *n += 1,
+            None => out.push((at, 1)),
+        }
+    }
+    out
+}
+
 /// Докуда учитель с таким опытом доводит ученика (§12.258): до уровня на
 /// единицу ниже своего. Учить можно только тому, что знаешь лучше.
 pub(crate) fn tutor_cap(rules: &SkillRules, skill: usize, teacher_xp: i32) -> i32 {
@@ -418,16 +444,25 @@ pub(crate) fn assign_tutor(
         .filter(|(s, _)| s.teacher)
         .map(|(s, _)| s.spot)
         .collect();
-    // Ученики без учителя: `(место учителя, домен, опыт ученика)`.
-    let mut waiting: Vec<((i32, i32), usize, i32)> = desks
-        .iter()
-        .filter(|(s, _)| !s.teacher)
-        .filter_map(|(s, skills)| {
-            let lectern = lectern_of(&map, &tiles, &owners, s.spot)?;
-            (!seated.contains(&lectern))
-                .then(|| (lectern, s.skill, skills.map_or(0, |k| k.xp_of(s.skill))))
-        })
-        .collect();
+    // Места учителя без учителя: `(место учителя, домен, опыт ученика)`.
+    // **Одна запись на место, а не на ученика** (§12.287): у большой парты
+    // учеников трое, и по записи на каждого к одной кафедре шли бы трое
+    // учителей. Опыт берётся наименьший — учителю довольно научить хоть
+    // кого-то из класса, ровно как `study` держит его за кафедрой.
+    let mut waiting: Vec<((i32, i32), usize, i32)> = Vec::new();
+    for (s, skills) in desks.iter().filter(|(s, _)| !s.teacher) {
+        let Some(lectern) = lectern_of(&map, &tiles, &owners, s.spot) else {
+            continue;
+        };
+        if seated.contains(&lectern) {
+            continue;
+        }
+        let xp = skills.map_or(0, |k| k.xp_of(s.skill));
+        match waiting.iter_mut().find(|(at, ..)| *at == lectern) {
+            Some((_, _, least)) => *least = (*least).min(xp),
+            None => waiting.push((lectern, s.skill, xp)),
+        }
+    }
     waiting.sort_unstable_by_key(|&(at, ..)| (at.1, at.0));
 
     let mut taken: Vec<Entity> = Vec::new();

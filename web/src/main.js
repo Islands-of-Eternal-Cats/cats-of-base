@@ -3,6 +3,16 @@
 
 import { Application, Container, Graphics, Text } from "pixi.js";
 import { ITEM_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
+import { createLighting } from "./light.js";
+import {
+  COVERS_CELL,
+  drawGlass,
+  drawGrid,
+  drawOblique,
+  sconceCells,
+  surfaceRise,
+  wallRise,
+} from "./oblique.js";
 import {
   articleKeys,
   articleLinks,
@@ -559,23 +569,53 @@ const scrapLayer = new Container(); // кучи лома на полу
 const bpLayer = new Container(); // чертежи (призраки будущих тайлов)
 const dealLayer = new Container(); // контейнеры сделок в ячейках постов (§12.68)
 const unitLayer = new Container();
+// Отладка вида (только dev): снимок мира крупным планом из консоли.
+if (import.meta.env.DEV) globalThis.__sp = { app, world };
 // Работа в ячейке (§12.30, §12.96, §12.132): что именно тут делают и докуда
 // дошли. Слой стоит **поверх котов** намеренно: мастер стоит ровно на той
 // клетке, о которой речь, и под ним значок был бы виден только тогда, когда
 // кот от станка ушёл, — то есть когда работа как раз и не идёт.
 const workLayer = new Container();
 const overlay = new Container();
-world.addChild(tileLayer);
-world.addChild(scrapLayer);
-world.addChild(bpLayer);
-world.addChild(dealLayer);
+// Всё, что свет освещает, — под одним контейнером: на него вешается
+// HDR-фильтр (`hdr.js`). Метки работы и оверлей стоят вне его и читаются в
+// любой тьме.
+const lit = new Container();
+world.addChild(lit);
+lit.addChild(tileLayer);
+lit.addChild(scrapLayer);
+// Стекло витрин над стеллажами (вид 3/4, `drawGlass`): поверх куч, но под
+// котами и чертежами. Узел постоянный, перерисовывается вместе с картой.
+const glassGfx = new Graphics();
+lit.addChild(glassGfx);
+lit.addChild(bpLayer);
+lit.addChild(dealLayer);
 // Нижний на экране кот рисуется поверх верхнего (§12.271): коты не входят в
 // проходимость (инвариант 8) и на диагонали налезают друг на друга, а порядок
 // по `y` читает наложение глубиной, а не столкновением. Ключ — `zIndex`,
 // который пишет `stepUnits` вместе с позицией; Pixi пересортирует слой только
 // когда ключ изменился.
 unitLayer.sortableChildren = true;
-world.addChild(unitLayer);
+// Свет (прототип, `light.js`) — двумя слоями: высветление под котами (светит
+// пол и мебель, кота не пересвечивает), тень поверх котов, но под метками
+// работы и оверлеем — подсказки и выбор обязаны читаться и в тени.
+const lighting = createLighting(app, TILE);
+// Вид 3/4 (прототип, `oblique.js`): клавиша V, выбор помнит `localStorage`
+// вида — это выбор игрока о своём экране, как свет и звук.
+const VIEW_KEY = "sp-view";
+let view34 = (() => {
+  try {
+    return localStorage.getItem(VIEW_KEY) !== "flat";
+  } catch {
+    return true;
+  }
+})();
+lighting.setWallRise(view34 ? wallRise(false) : 0);
+if (import.meta.env.DEV) Object.assign(globalThis.__sp, { lighting, redrawView });
+lit.addChild(lighting.glow);
+lit.addChild(unitLayer);
+lit.addChild(lighting.shade);
+lighting.attach(lit, world, tileLayer, unitLayer, catShapes());
 world.addChild(workLayer);
 world.addChild(overlay);
 app.stage.addChild(world);
@@ -623,6 +663,10 @@ orderMarker.visible = false;
 // Осмотренная клетка (§12.58): уголки, а не заливка, — заливкой рисуется
 // `hoverRect`, и два одинаковых прямоугольника читались бы как один.
 const cellMarker = new Graphics();
+// Сетка вида 3/4 со стройкой в руке (`drawGrid`) — в оверлее, над светом:
+// внутри освещаемого слоя её гасила тень, и в тёмной скале она не читалась.
+const gridGfx = new Graphics();
+overlay.addChild(gridGfx);
 overlay.addChild(hoverRect);
 overlay.addChild(orderMarker);
 overlay.addChild(cellMarker);
@@ -685,7 +729,6 @@ let dragTo = null; // текущий угол рамки; переживает �
 // Кот, стоявший под началом рамки. Запоминается в момент нажатия, а не читается
 // на отпускании: на ×10 кот успевает уйти за время клика, а игрок целился в
 // того, кого видел.
-let dragUnit = null;
 // Сколько на базе раций. С §12.152 они **не** дают лицензии на вылазку — её
 // держит гараж, — и остались чистой связью: дежурный на рации прибавляет силы
 // всем идущим отрядам разом (§12.60).
@@ -1527,6 +1570,47 @@ function drawMap(map) {
   const H = meta.height;
   const at = (x, y) =>
     x < 0 || y < 0 || x >= W || y >= H ? -1 : mapCells[y * W + x];
+  // Вид 3/4 (прототип, `oblique.js`): свой пол, стены в разрезе и мебель
+  // коробками; глифы ролей и свет — общие с плоским видом.
+  if (view34) {
+    const [ground, faces, props, caps] = [0, 0, 0, 0].map(() => new Graphics());
+    drawOblique({
+      lowered: wallsDown,
+      ground,
+      faces,
+      props,
+      caps,
+      at,
+      W,
+      H,
+      T: TILE,
+      palette: meta.palette ?? [],
+      tints: paletteColors,
+      tileDefAt,
+      noise: cellNoise,
+      shade,
+      mix: mixColor,
+      rock: COLORS.rock,
+      rockSpeck: COLORS.rockSpeck,
+    });
+    tileLayer.addChild(ground, faces, props, caps);
+    lighting.setSconces(sconceCells(at, W, H, cellNoise));
+    gridGfx.clear();
+    if (wallsDown) drawGrid(gridGfx, W, H, TILE);
+    glassGfx.clear();
+    drawGlass(glassGfx, {
+      at,
+      W,
+      H,
+      T: TILE,
+      palette: meta.palette ?? [],
+    });
+    drawRoleGlyphs();
+    return;
+  }
+  glassGfx.clear();
+  gridGfx.clear();
+  lighting.setSconces([]);
   const g = new Graphics();
   const T = TILE;
   // 1. Скала: сплошной тёмный камень с крапом. Сетки на пустоте нет — там
@@ -1723,7 +1807,36 @@ function drawMap(map) {
   }
   tileLayer.addChild(f);
   tileLayer.addChild(w);
+  drawRoleGlyphs();
+}
 
+// Стены вида 3/4 опускаются, пока в руке инструмент стройки: высокое лицо
+// северной стены стоит в клетке скалы, и пол рядом со стеной размечали бы
+// через клетку. Карта перерисовывается только на смене состояния.
+let wallsDown = false;
+function syncWallsDown() {
+  const down = mode === "build";
+  if (down === wallsDown) return;
+  wallsDown = down;
+  if (view34 && mapCells) redrawView();
+}
+
+function redrawView() {
+  lighting.setWallRise(view34 ? wallRise(wallsDown) : 0);
+  if (mapCells) drawMap({ cells: mapCells });
+}
+
+function toggleView() {
+  view34 = !view34;
+  try {
+    localStorage.setItem(VIEW_KEY, view34 ? "34" : "flat");
+  } catch {
+    // Хранилища нет — выбор живёт до перезагрузки.
+  }
+  redrawView();
+}
+
+function drawRoleGlyphs() {
   // Вторым проходом — что клетка делает (§12.109). Заливка отвечает «какая это
   // комната», глиф — «зачем она». До него роль тайла жила только в цвете, то
   // есть в том, что игрок обязан выучить: склад от лаборатории отличался
@@ -1736,6 +1849,7 @@ function drawMap(map) {
   for (const r of tileRegions()) {
     const ctx = tileGlyphContext(r.tile);
     if (!ctx) continue;
+    if (view34 && COVERS_CELL.has(meta.palette?.[r.tile]?.id)) continue;
 
     // Размер — по **узкой** стороне области, а не по площади: глиф не должен
     // вылезать за комнату, а из коридора в одну клетку шириной вылезет любой,
@@ -1819,6 +1933,7 @@ function drawMap(map) {
     node.alpha = 0.14;
     tileLayer.addChild(node);
   }
+  lighting.rebuild(meta, mapCells, tileRegions());
 }
 
 // Кучи лома на полу. Точное количество — в шапке; здесь только «сколько
@@ -1863,7 +1978,11 @@ function drawScrap(list) {
   const slotOf = new Map();
   for (const s of list ?? []) {
     const x = s.x * TILE;
-    const y = s.y * TILE;
+    // В виде 3/4 куча лежит на поверхности мебели (столешница стеллажа,
+    // паллета) и поднята вместе с ней — иначе на сдвинутой вверх столешнице
+    // нельзя сказать, чья это куча: стеллажа или паллеты позади.
+    const rise = view34 ? surfaceRise(tileDefAt(s.x, s.y)?.id) * TILE : 0;
+    const y = s.y * TILE - rise;
     const n = s.count >= 15 ? 3 : s.count >= 5 ? 2 : 1;
     const ck = `${s.x},${s.y}`;
     const m = perCell.get(ck);
@@ -2830,6 +2949,55 @@ function wornLook(gear) {
 // середины, смотрит от зрителя. Нет морды и розового в ушах, хвост лежит
 // поверх корпуса, а не за ним, нагрудных подсумков не видно — лямки и ремень
 // остаются: они и сзади те же.
+/// Объём кота для света (`hdr.js`): те же части, что рисует `drawCat`, но
+/// телами — голова шаром, корпус, руки и лапы капсулами (вертикальная ось,
+/// `rx` — полуширина, `ry` — радиус скругления торцов). Порядок — **от
+/// ближнего к дальнему**: где части перекрылись, свет берёт первую. Обводка
+/// входит в тело, иначе тёмный кант остался бы плоским ободком. Числа обязаны
+/// ходить вместе с `drawCat`: разойдутся — шар уедет с нарисованной головы.
+/// `arm` — часть в координатах узла передней руки (она машет, §12.252).
+function catShapes() {
+  const r = TILE * 0.3;
+  const hr = r * 0.82 * 1.16;
+  const hy = -r * 1.3;
+  const legs = [-r * 0.42, r * 0.02].map((lx) => ({
+    cx: lx + r * 0.21,
+    y0: r * 0.35 - 1,
+    y1: r * 1.18,
+    rx: r * 0.21 + 1,
+    ry: r * 0.21 + 1,
+  }));
+  return {
+    reach: r * 2.6,
+    parts: [
+      { cx: 0, y0: hy - hr, y1: hy + hr, rx: hr, ry: hr },
+      {
+        arm: true,
+        cx: 0,
+        y0: -r * 0.05 - 1,
+        y1: r * 0.7 + 1,
+        rx: r * 0.17 + 1,
+        ry: r * 0.17 + 1,
+      },
+      {
+        cx: 0,
+        y0: -r * 0.55 - 1.5,
+        y1: r * 0.5 + 1.5,
+        rx: r * 0.75 + 1.5,
+        ry: r * 0.4,
+      },
+      {
+        cx: -r * 0.81,
+        y0: -r * 0.4 - 1,
+        y1: r * 0.35 + 1,
+        rx: r * 0.17 + 1,
+        ry: r * 0.17 + 1,
+      },
+      ...legs,
+    ],
+  };
+}
+
 function drawCat(
   g,
   fur,
@@ -3251,6 +3419,7 @@ function notePerf(now) {
   const fps = Math.round((perfFrames * 1000) / span);
   const tps = Math.round((perfTicks * 1000) / span);
   perfEl.textContent = `${fps} FPS · ${tps} TPS`;
+  syncLightStats();
   perfFrames = 0;
   perfTicks = 0;
   perfAt = now;
@@ -3943,10 +4112,18 @@ function renderCellPanel(snap) {
     // обещать нечего
   } else if (cellIsArmed() && !alreadyHere(def, x, y)) {
     const who = selectedUnits.map(esc).join(" · ");
+    // Кто сядет за парты, а кто просто пойдёт (§12.287): у большой парты мест
+    // три, и лишним выбранным клик остаётся приказом.
+    const pupils = deskWelcomes(def, x, y);
+    const walkers = selectedUnits.filter((id) => !pupils.includes(id));
     parts.push(
       `<div class="cell-armed">ещё клик сюда — ${
-        deskWelcomes(def, x, y)
-          ? `сядут учиться «${esc(skillLabel(def.teaches))}»: ${who}`
+        pupils.length
+          ? `сядут учиться «${esc(skillLabel(def.teaches))}»: ${pupils
+              .map(esc)
+              .join(" · ")}${
+              walkers.length ? `; пойдут: ${walkers.map(esc).join(" · ")}` : ""
+            }`
           : def?.relay && selectedUnits.length === 1
             ? `${who} сядет на связь, когда отсюда уйдёт отряд`
             : `пойдут: ${who}`
@@ -4097,6 +4274,9 @@ function renderCellPanel(snap) {
   // кнопка раздела «Обучение», то есть колонка, которая про клетку не знает.
   if (def?.teaches) parts.push(...deskCell(snap, x, y, def));
 
+  // Место учителя — кто учит и во что ему встаёт класс (§12.287).
+  if (def?.lectern) parts.push(...lecternCell(snap, x, y));
+
   // Тема в ячейке лаборатории — карточкой дословно парты (§12.233): кто
   // изучает, докуда дошёл и «Отменить» — цена написана над кнопкой (§12.80).
   if (def?.lab) parts.push(...labCell(snap, x, y));
@@ -4129,6 +4309,10 @@ function renderCellPanel(snap) {
   }
   if (def?.shop) {
     const u = (snap.crafting ?? []).find((v) => v.x === x && v.y === y)?.unit;
+    if (u) said.add(u);
+  }
+  if (def?.lectern) {
+    const u = classAt(snap, x, y)?.teacher;
     if (u) said.add(u);
   }
   const here = unitsAt(x, y).filter((id) => !said.has(id));
@@ -5524,6 +5708,32 @@ function deskCell(snap, x, y, def) {
   ];
 }
 
+/// Класс у места учителя (§12.287) — из снимка, по клетке места учителя.
+function classAt(snap, x, y) {
+  return (snap?.classes ?? []).find((c) => c.x === x && c.y === y) ?? null;
+}
+
+/// Место учителя: кто учит, сколько учеников и во что это встаёт учителю
+/// (§12.287). Множитель приходит из ядра (`load`, тем же `class_load`, каким
+/// считает `tire`): своей арифметики усталости у вида нет. Пустое место
+/// говорит, что учитель сядет сам, — молчащая клетка читалась бы поломкой
+/// (§12.53).
+function lecternCell(snap, x, y) {
+  const c = classAt(snap, x, y);
+  if (!c) return [];
+  if (!c.teacher)
+    return [
+      '<div class="cat-sub">учителя нет: сядет сам, когда за партой ученик</div>',
+    ];
+  const tired =
+    c.load > 100
+      ? ` · устаёт ×${(c.load / 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`
+      : "";
+  return [
+    `<div class="cat-sub">учит ${esc(c.teacher)} · учеников ${c.pupils}${tired}</div>`,
+  ];
+}
+
 /// Набор ящика (§12.195): что игрок велел здесь держать.
 ///
 /// В карточке — **только имена выбранного словами** и дверь в окно. Выбранного
@@ -6641,17 +6851,40 @@ function alreadyHere(def, x, y) {
   return cat.study === i;
 }
 
+/// Кто из выбранных котов сядет за парту по клику в эту клетку — в порядке
+/// выбора, ровно так, как ядро разберёт приказы (§12.85, §12.287).
+///
+/// Мест — парты того же объекта (`ClassSnap.seats` из ядра), кликнутая
+/// первой: занята она — `teach_at` сажает за соседнюю. Кому парта ничего не
+/// даст, за неё не сядет, и места не займёт.
 function deskWelcomes(def, x, y) {
-  if (!def?.teaches || selectedUnits.length !== 1) return false;
+  if (!def?.teaches || !selectedUnits.length) return [];
   const i = (meta.skills ?? []).findIndex((s) => s.id === def.teaches);
-  const cat = (lastSnap?.entities ?? []).find((e) => e.id === selectedUnits[0]);
-  const skill = cat?.skills?.[i];
-  if (!skill || skill.xp >= skill.desk) return false;
+  const ents = lastSnap?.entities ?? [];
+  const seats = (lastSnap?.classes ?? []).find((c) =>
+    c.seats.some(([sx, sy]) => sx === x && sy === y),
+  )?.seats ?? [[x, y]];
   // Занятую парту ядро отклонит, и клик останется приказом: обещать за неё
   // учёбу — это соврать ровно там, где игрок и так удивится (§12.20).
-  return !(lastSnap?.entities ?? []).some(
-    (e) => e.id !== cat.id && atStudy(e) && e.x === x && e.y === y,
-  );
+  let free = seats.filter(
+    ([sx, sy]) =>
+      !ents.some(
+        (e) =>
+          !selectedUnits.includes(e.id) &&
+          atStudy(e) &&
+          e.x === sx &&
+          e.y === sy,
+      ),
+  ).length;
+  const out = [];
+  for (const id of selectedUnits) {
+    if (free <= 0) break;
+    const skill = ents.find((e) => e.id === id)?.skills?.[i];
+    if (!skill || skill.xp >= skill.desk) continue;
+    out.push(id);
+    free -= 1;
+  }
+  return out;
 }
 
 function skillLabel(id) {
@@ -6789,26 +7022,13 @@ function applyDrag() {
 // под курсором. Без этого рамка висела бы на экране до следующего движения мыши
 // и читалась как «что-то ещё выделено».
 function endDrag(apply, global) {
-  if (dragFrom && apply) {
-    // Клик по коту — это «покажи мне его», а не «застрой клетку под ним»:
-    // возвращаемся в курсор и выбираем кота. Отличает клик от разметки размер
-    // жеста: одна клетка — клик, две и больше — рамка, и застроить (или снести)
-    // клетку под котом по-прежнему можно, протянув через неё.
-    const rect = rectOf(dragFrom, dragTo);
-    if (dragUnit && rect.w === 1 && rect.h === 1) {
-      selectCursor();
-      // Тот же первый шаг, что и у клика курсором (§12.58): клетка показана, мир
-      // не тронут. Клетку выставляем **до** выбора кота — перерисовку оверлея
-      // зовёт `selectUnit`, и она должна увидеть уже обе половины выделения.
-      selectedCell = { x: rect.x, y: rect.y };
-      selectUnit(dragUnit);
-    } else {
-      applyDrag();
-    }
-  }
+  // В режиме стройки карта только строит и стирает: клик по коту застраивает
+  // клетку под ним, а не выбирает его. Режим виден целиком — стены опущены,
+  // поверх сетка, — и выбор кота посреди разметки читался бы как промах.
+  // Выбрать кота — выйти из «Постройки».
+  if (dragFrom && apply) applyDrag();
   dragFrom = null;
   dragTo = null;
-  dragUnit = null;
   hoverRect.clear();
   if (global) updateHover(global);
 }
@@ -6935,6 +7155,14 @@ function modeChrome() {
         tint: COLORS.build,
       };
     }
+    if (!toolInHand()) {
+      return {
+        key: "build",
+        label: "СТРОЙКА: выберите, что строить",
+        color: COLORS.build,
+        tint: null,
+      };
+    }
     if (buildTile < 0) {
       return { key: "erase", label: "СНОС", color: COLORS.erase, tint: null };
     }
@@ -6953,6 +7181,7 @@ function modeChrome() {
 // липкий (после мазка не сбрасывается), поэтому «я всё ещё в стройке» обязано
 // читаться до клика — периферийным зрением и там, куда игрок смотрит.
 function applyModeChrome() {
+  syncWallsDown();
   const m = modeChrome();
   stageEl.classList.remove("mode-cursor", "mode-build", "mode-erase");
   stageEl.classList.add(`mode-${m.key}`);
@@ -7020,7 +7249,7 @@ function askBuildMask(r) {
   const structure = build ? buildStruct : -1;
   // Объект и тайл взаимно исключают друг друга, и ядро спрашивают по-разному:
   // у тайла «можно ли сюда его», у объекта «встанет ли отсюда весь штамп».
-  const tile = build && structure < 0 ? buildTile : -1;
+  const tile = build && structure < 0 ? (buildTile ?? -1) : -1;
   const rect = r ? [r.x, r.y, r.w, r.h] : [0, 0, 0, 0];
   const key = `${tile}:${structure}:${buildRot}:${rect.join(",")}`;
   if (key === maskAsked) return;
@@ -7120,7 +7349,7 @@ function updateHover(global) {
   // отпустив кнопку здесь, игрок выберет кота, и цвет обязан сказать это до
   // клика, а не после.
   const overUnit =
-    r.w === 1 && r.h === 1 && (dragFrom ? dragUnit : t && unitAt(t.tx, t.ty));
+    mode === "cursor" && r.w === 1 && r.h === 1 && t && unitAt(t.tx, t.ty);
   const m = modeChrome();
   const col = overUnit ? COLORS.select : (m.tint ?? m.color);
   hoverRect
@@ -7157,7 +7386,7 @@ app.stage.on("pointerdown", (e) => {
     return;
   }
   const t = tileAt(e.global);
-  if (!t) return;
+  if (!t || !toolInHand()) return;
   // Объект ставится одним кликом: размер у него свой, и тянуть его рамкой
   // значило бы дать игроку выбрать то, что уже выбрано в рулсете (§12.162).
   if (buildStruct >= 0) {
@@ -7172,7 +7401,6 @@ app.stage.on("pointerdown", (e) => {
   }
   dragFrom = t;
   dragTo = t;
-  dragUnit = unitAt(t.tx, t.ty);
   updateHover(e.global);
 });
 app.stage.on("pointermove", (e) => {
@@ -7254,6 +7482,60 @@ const KEEPS_CELL = new Set([
   // («лаборатория свободна»).
   "cancelResearch",
 ]);
+
+// --- свет (прототип, `light.js`) ---------------------------------------------
+let lightUi = null;
+const STRESS_LABEL = { 0: "обычная", 1: "лампа на клетку", 10: "10 на клетку" };
+
+/// Подписи раздела «Свет» — только на изменении (§12.84): зовут их клик,
+/// ползунок и клавиша L, а не кадр.
+function syncLightUi() {
+  if (!lightUi) return;
+  const p = lighting.prefs();
+  const text = (el, html) => {
+    if (el.innerHTML !== html) el.innerHTML = html;
+  };
+  text(
+    lightUi.on,
+    `<span class="sw sw-cursor"></span><span>Свет: ${p.on ? "вкл" : "выкл"}</span>`,
+  );
+  text(
+    lightUi.mode,
+    `<span class="sw sw-cursor"></span><span>Режим: ${p.hdr ? "HDR" : "простой"}</span>`,
+  );
+  lightUi.mode.classList.toggle("snd-off", !lighting.canHdr);
+  text(
+    lightUi.stress,
+    `<span class="sw sw-cursor"></span><span>Нагрузка: ${STRESS_LABEL[p.stress]}</span>`,
+  );
+  for (const key of [
+    "shade",
+    "glow",
+    "soft",
+    "sat",
+    "exposure",
+    "bloom",
+    "bump",
+    "round",
+  ]) {
+    const u = lightUi[key];
+    if (u.range.value !== String(p[key])) u.range.value = String(p[key]);
+    u.val.textContent = String(p[key]);
+  }
+  lightUi.stats.classList.toggle("off", !p.on);
+}
+
+/// Цифры раздела — раз в секунду, вместе со счётчиком кадров в шапке.
+function syncLightStats() {
+  if (!lightUi) return;
+  const n = lighting.count();
+  const cost = lighting.takeCost().toFixed(2);
+  const bake = lighting.bakeCost().toFixed(1);
+  lightUi.stats.textContent =
+    n === "выкл"
+      ? "свет выключен"
+      : `источников ${n} · ${cost} мс на кадр · запекание ${bake} мс`;
+}
 
 // --- звук (§12.253) -----------------------------------------------------------
 let soundQuiet = true;
@@ -7351,6 +7633,17 @@ window.addEventListener("keydown", (e) => {
     toggleSound();
     return;
   }
+  // Прототип света: L — вкл/выкл, Shift+L — стресс (лампа на каждой клетке).
+  if (e.code === "KeyL") {
+    if (e.shiftKey) lighting.toggleStress();
+    else lighting.toggle();
+    syncLightUi();
+    return;
+  }
+  if (e.code === "KeyV") {
+    toggleView();
+    return;
+  }
   if (e.code === "KeyR" && buildStruct >= 0) {
     buildRot = (buildRot + 1) % 4;
     applyModeChrome();
@@ -7371,8 +7664,15 @@ window.addEventListener("keydown", (e) => {
     // Дальше Escape отменяет ровно одно — и начинает с самого навязчивого.
     // Режим разметки липкий (§12.62) и держит на прицеле каждый клик по карте,
     // поэтому выходит первым; выделение подождёт второго нажатия.
+    // Инструмент в руке кладётся первым нажатием, раздел «Постройка»
+    // сворачивается вторым — вместе с ним уходит и режим.
     if (mode !== "cursor") {
-      selectCursor();
+      if (toolInHand() && openSection === "Постройка") {
+        selectBuildIdle();
+      } else {
+        openOnly(null);
+        if (mode !== "cursor") selectCursor();
+      }
       return;
     }
     // Режима нет — снимаем выделение целиком: и клетку, и котов. Клика,
@@ -7528,6 +7828,10 @@ function openOnly(title) {
     // тем более что свечение по периметру сейчас выключено.
     if (mode !== "cursor") selectCursor();
   }
+  // Раскрытая «Постройка» и есть режим стройки: стены опускаются и карта
+  // перестаёт выбирать котов ещё до того, как взят инструмент, — режим виден
+  // с первого клика, а не со второго.
+  if (title === "Постройка" && openSection !== title) selectBuildIdle();
   openSection = title;
   for (const s of sections) {
     const on = s.title === title;
@@ -7580,7 +7884,14 @@ document.addEventListener(
     if (!(t instanceof Node) || app.canvas.contains(t)) return;
     const build = sections.find((s) => s.title === "Постройка");
     if (build && (build.head.contains(t) || build.body.contains(t))) return;
-    selectCursor();
+    // Тулбар режим кладёт сам — кликом: двери свёрнуты `folds`, заголовки
+    // разделов зовут `openOnly`. Свернуть «Постройку» здесь, на нажатии,
+    // значило бы уронить столбец под мышью: «Вылазки» уезжали вверх до
+    // отпускания кнопки, и клик не доходил ни до какой двери.
+    if (document.getElementById("toolbar")?.contains(t)) return;
+    // Раскрытая «Постройка» — это режим, поэтому уходит он вместе с ней.
+    if (openSection === "Постройка") openOnly(null);
+    else selectCursor();
   },
   true,
 );
@@ -7897,6 +8208,126 @@ function buildToolbar() {
     soundBusBtns.push(b);
   }
   syncSoundBtn();
+
+  // Свет (прототип, `light.js`) — свой раздел, как звук: вкл/выкл, три
+  // ползунка, нагрузка для замера и цифры, сколько свет стоит. Кнопки раздел
+  // не складывают: их жмут, чтобы увидеть разницу на карте.
+  const lit = mkSection(el, "Свет");
+  lightUi = {};
+  lightUi.on = mkTool("", () => {
+    lighting.toggle();
+    syncLightUi();
+  });
+  liveTitle(lightUi.on, "Включить или выключить освещение (клавиша L)");
+  lit.appendChild(lightUi.on);
+  lightUi.mode = mkTool("", () => {
+    if (!lighting.canHdr) return;
+    lighting.setHdr(!lighting.prefs().hdr);
+    syncLightUi();
+  });
+  liveTitle(
+    lightUi.mode,
+    lighting.canHdr
+      ? "HDR: свет считается без потолка в единицу и сводится тонмаппингом; простой — затемнение и высветление двумя слоями"
+      : "HDR недоступен: браузер не умеет рисовать во float-текстуру",
+  );
+  lit.appendChild(lightUi.mode);
+  for (const [key, label, max, tip, set] of [
+    [
+      "shade",
+      "Тень",
+      100,
+      "Насколько светло там, куда не достают лампы",
+      (v) => lighting.setShade(v),
+    ],
+    [
+      "glow",
+      "Лампы",
+      60,
+      "Насколько лампы высветляют пол под собой",
+      (v) => lighting.setGlow(v),
+    ],
+    [
+      "soft",
+      "Мягкость",
+      12,
+      "Размытие края тени от стен",
+      (v) => lighting.setSoft(v),
+    ],
+    [
+      "sat",
+      "Насыщенность",
+      100,
+      "Цвет света: слева спокойный белый, справа каждая клетка светится цветом своего типа",
+      (v) => lighting.setSat(v),
+    ],
+    [
+      "exposure",
+      "Экспозиция (HDR)",
+      200,
+      "Общая яркость кадра после сведения света; в простом режиме не действует",
+      (v) => lighting.setExposure(v),
+    ],
+    [
+      "bloom",
+      "Свечение (HDR)",
+      100,
+      "Ореол вокруг ярких ламп; в простом режиме не действует",
+      (v) => lighting.setBloom(v),
+    ],
+    [
+      "bump",
+      "Рельеф (HDR)",
+      100,
+      "Объём плоских текстур: швы плит, крап скалы и зерно бетона ловят свет ламп; в простом режиме не действует",
+      (v) => lighting.setBump(v),
+    ],
+    [
+      "round",
+      "Объём котов (HDR)",
+      100,
+      "Коты круглые, а не вырезаны из картона: край тела уходит в тень от лампы; в простом режиме не действует",
+      (v) => lighting.setRound(v),
+    ],
+  ]) {
+    const row = document.createElement("div");
+    row.className = "light-label";
+    row.innerHTML = `<span>${label}</span><span class="light-val"></span>`;
+    const range = document.createElement("input");
+    range.type = "range";
+    range.min = "0";
+    range.max = String(max);
+    range.className = "sound-vol";
+    range.addEventListener("input", () => {
+      set(Number(range.value));
+      syncLightUi();
+    });
+    liveTitle(range, tip);
+    lit.appendChild(row);
+    lit.appendChild(range);
+    lightUi[key] = { range, val: row.querySelector(".light-val") };
+  }
+  lightUi.stress = mkTool("", () => {
+    lighting.toggleStress();
+    syncLightUi();
+  });
+  liveTitle(
+    lightUi.stress,
+    "Лишние лампы для замера скорости: обычный свет → лампа на каждой клетке пола → десять на клетку (Shift+L)",
+  );
+  lit.appendChild(lightUi.stress);
+  const resetLight = mkTool(
+    '<span class="sw sw-cursor"></span><span>Сбросить настройки</span>',
+    () => {
+      lighting.reset();
+      syncLightUi();
+    },
+  );
+  lit.appendChild(resetLight);
+  lightUi.stats = document.createElement("div");
+  lightUi.stats.className = "light-stats";
+  lit.appendChild(lightUi.stats);
+  syncLightUi();
 
   // Партия (§12.45). Автосохранение идёт само и молча, поэтому здесь только
   // то, что игрок решает сам: начать заново, унести партию файлом, принести
@@ -10329,7 +10760,16 @@ function opensOf(topic, known = []) {
   const names = (xs, pick) =>
     (xs ?? []).filter(pick).map((x) => x.label || x.id);
   const groups = [
-    ["постройки", names(meta.palette, (t) => t.tech === id)],
+    // Объект со своей технологией (большая лаборатория, большая парта,
+    // §12.287) в палитре клеткой не стоит, и без второго списка его тема
+    // не обещала бы ничего.
+    [
+      "постройки",
+      [
+        ...names(meta.palette, (t) => t.tech === id),
+        ...names(meta.structures, (d) => d.tech === id),
+      ],
+    ],
     // Заказ за технологией (§12.260): «Полевая методика» обещает вылазку
     // «Калибровка анализатора». Ворота у заказа одни — `tech`, — так что обещание
     // исполняется ровно по названной причине.
@@ -12000,11 +12440,14 @@ function wikiOwnerOf(key) {
         .forEach((p) => opens.push(`tile:${p.id}`));
       (meta?.structures ?? [])
         .filter(
+          // Объект со своей технологией открывает она, а не его клетки
+          // (§12.287): у большой парты клетки те же, что у парты.
           (d) =>
             d.tech === id ||
-            (d.shapes?.[0] ?? []).some(
-              ([, , ti]) => pal[ti]?.internal && pal[ti]?.tech === id,
-            ),
+            (!d.tech &&
+              (d.shapes?.[0] ?? []).some(
+                ([, , ti]) => pal[ti]?.internal && pal[ti]?.tech === id,
+              )),
         )
         .forEach((d) => opens.push(`structure:${d.id}`));
       (meta?.missions ?? [])
@@ -12190,7 +12633,8 @@ function closeOtherWindows(keep) {
   // «Склад» или штаб, игрок ушёл из разметки, и держать инструмент в руке под
   // модалом незачем — карта под ним всё равно не отвечает. Кладём его тем же
   // `selectCursor`, что и `openOnly`: плашка режима уходит вместе с ним.
-  if (mode !== "cursor") selectCursor();
+  if (openSection === "Постройка") openOnly(null);
+  else if (mode !== "cursor") selectCursor();
   for (const [key, , close] of WINDOWS) {
     if (key !== keep) close();
   }
@@ -14712,6 +15156,21 @@ function selectCursor() {
   askBuildMask(null);
 }
 
+// Режим стройки без инструмента: раздел «Постройка» раскрыт, а тайл ещё не
+// взят. Карта в нём ничего не делает — ни строит, ни выбирает котов.
+function selectBuildIdle() {
+  mode = "build";
+  buildTile = null;
+  buildStruct = -1;
+  activate(null);
+  applyModeChrome();
+  askBuildMask(null);
+}
+
+function toolInHand() {
+  return mode === "build" && (buildStruct >= 0 || buildTile !== null);
+}
+
 // Времени выбор инструмента не касается: паузу ставит только игрок (§12.86).
 function selectBuild(i, btn) {
   mode = "build";
@@ -14790,6 +15249,8 @@ setSpeed(0);
 // строки модуль ещё раскладывает состояние, которое `stepUnits` читает
 // (`speed`), а первый кадр тикера придёт уже после.
 app.ticker.add(stepUnits);
+// Свет — после шага котов: пятно у кота едет за уже сдвинутым узлом.
+app.ticker.add((t) => lighting.frame(units, t.deltaMS, speed));
 
 // Любой модал ставит время на паузу, а закрытый возвращает тот темп, что был
 // до него (§12.254): окно читают и в нём решают, а мир за ним на ×10 уходит

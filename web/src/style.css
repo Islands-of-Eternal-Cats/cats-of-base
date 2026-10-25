@@ -2991,3 +2991,21 @@ main#stage.mode-cursor #mode-banner {
 .news-label:has(> .news-kind) {
   font-weight: 400;
 }
+
+/* Раздел «Свет» (прототип): подпись ползунка со значением справа. */
+.light-label {
+  display: flex;
+  justify-content: space-between;
+  margin: 4px 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.light-stats {
+  margin: 4px 8px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.light-stats.off {
+  opacity: 0.6;
+}

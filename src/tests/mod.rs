@@ -894,6 +894,13 @@ impl Sim {
             .unwrap_or(0)
     }
 
+    /// Положить коту груз в лапы без задачи — так его оставляет ходка, у
+    /// которой пропал адресат.
+    fn give_load(&mut self, unit: &str, item: usize, count: i32) {
+        let cat = self.entity_of(unit);
+        self.world.entity_mut(cat).insert(Carrying { item, count });
+    }
+
     /// Что именно кот несёт; `None` — лапы пусты.
     fn carrying_item_of(&mut self, unit: &str) -> Option<usize> {
         let mut q = self.world.query::<(&UnitId, Option<&Carrying>)>();
@@ -1636,6 +1643,9 @@ impl Sim {
             // Потолков сна тут нет: сон везде до полной, как было до §12.52, —
             // их включают тесты дремоты через `set_wake` и `set_floor_wake`.
             floor_wake: 0,
+            // Множителя класса тоже нет (§12.287): учитель тратит как за любой
+            // работой. Включает `set_class`.
+            class: 0,
         });
         let mut q = self.world.query_filtered::<Entity, With<UnitId>>();
         for cat in q.iter(&self.world).collect::<Vec<_>>() {
@@ -1655,6 +1665,12 @@ impl Sim {
         let mut needs = self.world.resource_mut::<NeedRules>();
         needs.walk = walk;
         needs.idle = idle;
+    }
+
+    /// Сколько процентов расхода учителю добавляет каждый ученик сверх первого
+    /// (§12.287); ноль выключает.
+    fn set_class(&mut self, percent: i32) {
+        self.world.resource_mut::<NeedRules>().class = percent;
     }
 
     /// Порог, ниже которого кот бросает начатое и уходит спать; ноль выключает.

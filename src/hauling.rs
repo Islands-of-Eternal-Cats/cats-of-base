@@ -731,14 +731,24 @@ pub(crate) fn assign_tidy(
     }
     let (map, tiles) = (&*map, &*rules);
     let stock = stock_grid(map, stacks.iter().map(|(_, p, s)| ((p.x, p.y), s.count)));
-    // Склада нет или он забит — уборки не будет вовсе. Без этой проверки коты
-    // ходили бы к кучам и возвращались ни с чем, тик за тиком.
-    if !any_store_room(map, &rules, &stock) {
-        return;
-    }
 
     // Гружёные коты: каждому — ближайший склад со свободным местом. Драться за
     // клетку им незачем, ёмкость проверяется ещё раз при сдаче.
+    //
+    // Склада под груз нет, а чертежу нужен **другой** материал — кот кладёт
+    // груз **под ноги**. Своему грузу площадки нет: подвоз раздаётся раньше
+    // уборки и взял бы гружёного первым. А за чужим материалом с полными лапами
+    // не сходить (§12.21) — кот дремал бы с грузом, пока стройку ведут другие.
+    // Куча на полу видна и уедет на склад, когда там освободится место
+    // (инвариант 8: из мира не пропадает). Работы для пустых лап нет — груз
+    // остаётся при коте: иначе каждая исправленная разметка на базе без склада
+    // сыпала бы лом по полу (`a_cancelled_site_leaves_the_load_on_the_cat`).
+    // Гружёные поэтому разбираются **до** проверки места на складе ниже.
+    let wanted: Vec<usize> = sites
+        .iter()
+        .flat_map(|bp| missing(&rules, bp))
+        .map(|(item, _)| item)
+        .collect();
     let mut empty: Vec<(&str, Entity, Option<&Carry>, Reach)> = Vec::new();
     for (cat_e, id, pos, load, carry) in &free_cats {
         let reach = Reach::all(map, &rules, (pos.x, pos.y));
@@ -755,7 +765,23 @@ pub(crate) fn assign_tidy(
                 },
                 Path { steps: path },
             ));
+        } else if wanted.iter().any(|&item| item != load.item) {
+            // Две кучи одного типа на клетке сольёт `settle_stacks`.
+            commands.spawn((
+                Position { x: pos.x, y: pos.y },
+                Stack {
+                    item: load.item,
+                    count: load.count,
+                },
+            ));
+            commands.entity(cat_e).remove::<Carrying>();
         }
+    }
+
+    // Склада нет или он забит — уборки не будет вовсе. Без этой проверки коты
+    // ходили бы к кучам и возвращались ни с чем, тик за тиком.
+    if !any_store_room(map, &rules, &stock) {
+        return;
     }
 
     // Сколько из каждой кучи уже обещано тем, кто к ней идёт, и сколько места

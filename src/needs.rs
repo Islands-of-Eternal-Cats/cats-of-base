@@ -32,6 +32,8 @@ use crate::components::*;
 use crate::map::BaseMap;
 use crate::movement::{Busy, JOB_NAP, JOB_REST};
 use crate::path::Reach;
+use crate::skills::class_sizes;
+use crate::slots::owners_of;
 
 /// Бодрости тратится за тик бодрствования, если рулсет не сказал иного.
 ///
@@ -109,6 +111,16 @@ fn tire_rate(needs: &NeedRules, stats: &StatRules, cat: Option<&Stats>, toil: To
         .index_of(STAT_GRIT)
         .map_or(0, |stat| stats.step(stat, cat));
     (base - step).max(1)
+}
+
+/// Во сколько процентов обычной ставки обходится урок учителю, у которого
+/// сидят `pupils` учеников (§12.287): каждый сверх первого добавляет `class`.
+///
+/// Одно выражение на `tire` и на снимок (строка «устаёт ×2» у места учителя).
+/// Меньше двух учеников — обычная ставка: урок одному стоит как любая работа.
+pub(crate) fn class_load(needs: &NeedRules, pupils: usize) -> i32 {
+    let extra = i32::try_from(pupils.saturating_sub(1)).unwrap_or(i32::MAX);
+    100 + needs.class.max(0).saturating_mul(extra)
 }
 
 /// Кот на нуле бодрости засыпает где стоит, отпустив задачу.
@@ -685,9 +697,16 @@ pub(crate) fn doze(
 /// `Without<Rest>` в фильтре нет намеренно: «лежит — не тратит» это строка
 /// лестницы, а не исключение из неё, и одной строкой она накрывает разом сон
 /// и дремоту.
+///
+/// **Учитель класса тратит дороже работы** (§12.287): итоговая ставка того,
+/// кто сидит на месте учителя, умножается на `class_load` по числу учеников,
+/// дошедших до своих парт. Сутки от этого не меняются — их считает `drain`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn tire(
     map: Res<BaseMap>,
     rules: Res<TileRules>,
+    structures: Res<StructureRules>,
+    placed: Query<&Structure>,
     food: Res<FoodRules>,
     needs: Res<NeedRules>,
     stats: Res<StatRules>,
@@ -717,6 +736,26 @@ pub(crate) fn tire(
         (With<UnitId>, Without<Away>),
     >,
 ) {
+    // Кто из учеников дошёл до своей парты (§12.287): по ним считается класс
+    // у каждого места учителя.
+    let seated: Vec<(i32, i32)> = cats
+        .iter()
+        .filter_map(|(pos, _, _, _, tasks)| {
+            let (_, path, _, _, _, study, ..) = tasks;
+            let study = study.filter(|s| !s.teacher)?;
+            (path.is_none() && (pos.x, pos.y) == study.spot).then_some(study.spot)
+        })
+        .collect();
+    let classes = if seated.is_empty() {
+        Vec::new()
+    } else {
+        class_sizes(
+            &map,
+            &rules,
+            &owners_of(&map, &structures, &placed),
+            &seated,
+        )
+    };
     for (pos, mut energy, fed, cat, tasks) in &mut cats {
         let (
             order,
@@ -757,8 +796,18 @@ pub(crate) fn tire(
             bed,
         );
         let starving = fed.is_some_and(|f| f.0 <= 0);
-        let rate = tire_rate(&needs, &stats, cat, Toil::of(&busy))
-            * if starving { food.starve.max(1) } else { 1 };
+        let toil = Toil::of(&busy);
+        let rate =
+            tire_rate(&needs, &stats, cat, toil) * if starving { food.starve.max(1) } else { 1 };
+        // Учитель на своём месте платит за весь класс (§12.287).
+        let load = match study {
+            Some(s) if s.teacher && toil == Toil::Working && (pos.x, pos.y) == s.spot => classes
+                .iter()
+                .find(|(at, _)| *at == s.spot)
+                .map_or(100, |&(_, n)| class_load(&needs, n)),
+            _ => 100,
+        };
+        let rate = rate * load / 100;
         energy.0 = (energy.0 - rate).max(0);
     }
 }

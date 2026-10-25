@@ -115,3 +115,122 @@ fn a_level_two_cat_does_not_teach() {
     sim.tick_n(5); // сесть успеет, а ученик за это время уровня не возьмёт
     assert!(sim.is_teaching("b"), "третий — учит");
 }
+
+/// Большая парта (§12.287): три парты в ряд, ряд столов и одно место учителя
+/// посередине под ними. Комната 7×4, штамп с (3, 1); по бокам и снизу проход.
+const HALL: &[&str] = &[
+    "#########",
+    "#.......#",
+    "#.......#",
+    "#.......#",
+    "#abc.de.#",
+    "#########",
+];
+
+/// Класс на троих. Пороги «Науки» задаёт тест: короткие — чтобы проверить
+/// рост, длинные — чтобы ученики сидели, пока меряют расход учителя.
+fn big_class(levels: &[i32]) -> (Sim, usize) {
+    let mut sim = sim_from(HALL);
+    let science = sim.set_skill("science", levels);
+    sim.set_taught(science, 3);
+    sim.set_teaches(DESK, science);
+    sim.set_solid(TABLE, true);
+    sim.tile_rule(LECTERN, |r| r.lectern = true);
+    let def = sim.set_structure(vec![
+        vec![Some(DESK), Some(DESK), Some(DESK)],
+        vec![Some(TABLE), Some(TABLE), Some(TABLE)],
+        vec![None, Some(LECTERN), None],
+    ]);
+    assert!(sim.place_structure(def as i32, 3, 1, 0), "штамп встал");
+    sim.tick_n(200); // коты строят все семь клеток
+    for x in 3..=5 {
+        assert_eq!(sim.tile(x, 1), DESK, "парта ({x}, 1) построена");
+    }
+    assert_eq!(sim.tile(4, 3), LECTERN, "место учителя построено");
+    (sim, science)
+}
+
+/// Один учитель учит весь класс: место учителя у объекта одно на три парты.
+#[test]
+fn one_teacher_teaches_a_whole_class() {
+    let (mut sim, science) = big_class(&[20, 100, 300]);
+    sim.set_xp("d", science, 300); // третий уровень
+    for pupil in ["a", "b", "c"] {
+        assert!(sim.teach(pupil, "science"), "{pupil} сел за парту");
+    }
+    sim.tick_n(400);
+    for pupil in ["a", "b", "c"] {
+        assert_eq!(sim.level_of(pupil, science), 1, "{pupil} выучился");
+    }
+    assert_eq!(sim.xp_of("d", science), 300, "учитель за учёбу не растёт");
+}
+
+/// К одному месту учителя садится один учитель, сколько бы учеников ни ждало
+/// (§12.287): до него на каждого ученика шёл бы свой учитель.
+#[test]
+fn a_class_gets_one_teacher() {
+    let (mut sim, science) = big_class(&[2000, 4000, 6000]);
+    sim.set_xp("d", science, 6000);
+    sim.set_xp("e", science, 6000);
+    for pupil in ["a", "b", "c"] {
+        assert!(sim.teach(pupil, "science"));
+    }
+    for _ in 0..40 {
+        sim.tick_n(1);
+        let teachers = ["d", "e"]
+            .into_iter()
+            .filter(|t| sim.is_teaching(t))
+            .count();
+        assert!(teachers <= 1, "учителей у одного места: {teachers}");
+    }
+    assert!(
+        sim.is_teaching("d") || sim.is_teaching("e"),
+        "но один — сел"
+    );
+}
+
+/// Сколько бодрости учитель тратит за десять тиков урока, когда за партами
+/// сидят `pupils` учеников.
+fn teacher_toll(pupils: &[&str]) -> i32 {
+    let (mut sim, science) = big_class(&[2000, 4000, 6000]);
+    sim.set_needs(100_000, 0, 1);
+    sim.set_class(50);
+    sim.set_xp("d", science, 6000);
+    for pupil in pupils {
+        assert!(sim.teach(pupil, "science"));
+    }
+    sim.tick_n(60); // все расселись, учитель на месте
+    assert_eq!(sim.pos_of("d"), (4, 3), "учитель на своём месте");
+    for pupil in pupils {
+        assert_eq!(sim.pos_of(pupil).1, 1, "{pupil} за партой");
+    }
+    let before = sim.energy_of("d");
+    sim.tick_n(10);
+    before - sim.energy_of("d")
+}
+
+/// Учитель устаёт сильнее с каждым учеником (§12.287): при `class: 50` урок
+/// троим стоит вдвое дороже урока одному.
+#[test]
+fn a_teacher_tires_faster_with_each_pupil() {
+    let one = teacher_toll(&["a"]);
+    let three = teacher_toll(&["a", "b", "c"]);
+    assert!(one > 0, "учитель вообще устаёт");
+    assert_eq!(three, one * 2, "трое — вдвое");
+}
+
+/// Двух котов послали в одну клетку большой парты (§12.287): второй садится
+/// за соседнюю парту того же объекта, а не получает простой приказ «иди».
+#[test]
+fn a_second_cat_sent_to_a_taken_desk_takes_the_next_seat() {
+    let (mut sim, _) = big_class(&[2000, 4000, 6000]);
+    assert!(sim.set_target("a", 3, 1));
+    assert!(sim.set_target("b", 3, 1));
+    assert!(sim.is_studying("a") && sim.is_studying("b"), "учатся оба");
+    let (da, db) = (sim.desk_of("a"), sim.desk_of("b"));
+    assert_eq!(da, Some((3, 1)), "a — за той, в которую ткнули");
+    assert!(
+        db.is_some_and(|(x, y)| y == 1 && (4..=5).contains(&x)),
+        "b — за соседней партой объекта: {db:?}"
+    );
+}

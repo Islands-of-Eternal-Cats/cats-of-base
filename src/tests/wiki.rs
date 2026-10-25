@@ -249,7 +249,9 @@ fn wiki_owner(rs: &Ruleset, key: &str) -> Option<String> {
             let t = rs.research.iter().find(|t| t.id == id)?;
             let mut opens: Vec<Option<String>> = Vec::new();
             // Внутренность объекта (§12.163) своей статьи не имеет — её открытие
-            // и есть открытие объекта, в который она входит.
+            // и есть открытие объекта, в который она входит. Но только объекта
+            // **без своей технологии** (§12.287): большую парту открывает
+            // «Большая парта», хотя клетки у неё те же, что у парты.
             let inner = |t: &str| {
                 rs.tiles
                     .iter()
@@ -265,7 +267,9 @@ fn wiki_owner(rs: &Ruleset, key: &str) -> Option<String> {
                 rs.structures
                     .iter()
                     .filter(|x| {
-                        x.tech == id || x.cells.iter().flatten().flatten().any(|c| inner(c))
+                        x.tech == id
+                            || (x.tech.is_empty()
+                                && x.cells.iter().flatten().flatten().any(|c| inner(c)))
                     })
                     .map(|x| Some(format!("structure:{}", x.id))),
             );
@@ -427,11 +431,24 @@ fn tech_gate(rs: &Ruleset, key: &str) -> Option<BTreeSet<String>> {
                 x.id == id && x.sighted.is_empty() && x.mastered.is_empty() && x.after.is_empty()
             })
             .and_then(|x| one(&x.tech)),
-        "structure" => rs
-            .structures
-            .iter()
-            .find(|x| x.id == id)
-            .and_then(|x| one(&x.tech)),
+        // Ворота объекта — его технология **и ворота всех клеток**, как у
+        // `Sim::structure_is_open` (§12.258): парту открывает «Наставничество»
+        // её клетки, большую парту — обе темы. Клетка с воротами не по науке
+        // делает их не только технологическими — тогда ответа нет.
+        "structure" => {
+            let x = rs.structures.iter().find(|x| x.id == id)?;
+            let mut gate: BTreeSet<String> = one(&x.tech).unwrap_or_default();
+            for cell in x.cells.iter().flatten().flatten() {
+                let Some(t) = rs.tiles.iter().find(|t| &t.id == cell) else {
+                    continue;
+                };
+                if !(t.sighted.is_empty() && t.mastered.is_empty() && t.after.is_empty()) {
+                    return None;
+                }
+                gate.extend(one(&t.tech).unwrap_or_default());
+            }
+            (!gate.is_empty()).then_some(gate)
+        }
         "recipe" => rs
             .recipes
             .iter()

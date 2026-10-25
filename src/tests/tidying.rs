@@ -404,6 +404,81 @@ fn a_pile_on_a_trade_post_is_tidied_first() {
     assert_eq!(sim.scrap_at(7, 1), 8, "в итоге на складе обе");
 }
 
+// --- груз, которому некуда деться ------------------------------------------
+
+/// Склад полон, в лапах у кота вещь, которую не ждёт ни одна площадка, а
+/// чертежу нужен другой материал: кот кладёт вещь под ноги и освобождается.
+/// Иначе он стоял бы с ней вечно — уборке её нести некуда, а за чужим
+/// материалом с полными лапами не сходить. Так в партии игрока кот с
+/// комбинезоном дремал, пока пол строил вернувшийся отряд.
+#[test]
+fn an_undeliverable_load_is_put_down() {
+    let mut sim = sim_from(&CORRIDOR);
+    sim.set_items(2);
+    sim.set_cost(0, 1);
+    sim.set_capacity(1, 2);
+    sim.force_tile(7, 1, 1);
+    sim.put_scrap(7, 1, 2); // склад забит
+    sim.give_load("a", 1, 1);
+    assert!(sim.add_blueprint(3, 2, 0), "чертежу нужен лом");
+
+    sim.tick_n(5);
+    assert_eq!(sim.carrying_of("a"), 0, "лапы свободны");
+    assert_eq!(sim.item_total(1), 1, "вещь лежит на полу, а не пропала");
+}
+
+/// Работы для пустых лап нет — груз остаётся при коте, даже если сдать его
+/// некуда: класть его на пол незачем, и лом не рассыпается по базе.
+#[test]
+fn an_undeliverable_load_stays_without_work() {
+    let mut sim = sim_from(&CORRIDOR);
+    sim.set_items(2);
+    sim.set_capacity(1, 2);
+    sim.force_tile(7, 1, 1);
+    sim.put_scrap(7, 1, 2); // склад забит
+    sim.give_load("a", 1, 1);
+
+    sim.tick_n(50);
+    assert_eq!(sim.carrying_of("a"), 1, "груз при коте");
+}
+
+/// Освободив лапы, тот же кот идёт за ломом к чертежу: стройку на базе с
+/// полным складом ведёт тот, кто дома, а не ждёт вернувшийся отряд.
+#[test]
+fn a_cat_with_an_undeliverable_load_still_builds() {
+    let mut sim = sim_from(&CORRIDOR);
+    sim.set_items(2);
+    sim.set_cost(0, 1);
+    sim.set_capacity(1, 2);
+    sim.force_tile(7, 1, 1);
+    sim.put_scrap(7, 1, 2); // склад забит
+    sim.put_scrap(5, 1, 1); // лом для пола
+    sim.give_load("a", 1, 1);
+    assert!(sim.add_blueprint(3, 2, 0), "пол на пустоту под коридором");
+
+    sim.tick_n(BUILD_TICKS + 200);
+    assert_eq!(sim.tile(3, 2), 0, "пол построен");
+    assert_eq!(sim.item_total(1), 1, "отложенная вещь цела");
+}
+
+/// Груз, который ждёт площадка, кот несёт туда, а не бросает: под ноги
+/// кладётся только то, чему на базе нет адресата вовсе.
+#[test]
+fn a_wanted_load_is_carried_not_dropped() {
+    let mut sim = sim_from(&CORRIDOR);
+    sim.set_items(2);
+    sim.set_cost_items(0, &[(1, 1)]);
+    sim.set_capacity(1, 2);
+    sim.force_tile(7, 1, 1);
+    sim.put_scrap(7, 1, 2); // склад забит
+    sim.give_load("a", 1, 1);
+    assert!(sim.add_blueprint(3, 2, 0));
+
+    sim.tick_n(3);
+    assert!(sim.has_haul("a"), "кот понёс груз на площадку");
+    assert_eq!(sim.carrying_of("a"), 1, "и из лап его не выпустил");
+}
+
 /// Внутри одной очереди правило прежнее (§12.14): из двух обычных куч кот
 /// берётся за ближнюю.
 #[test]
