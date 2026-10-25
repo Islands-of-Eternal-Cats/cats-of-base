@@ -642,12 +642,9 @@ pub(crate) struct Captive;
 #[derive(Component, Default)]
 pub(crate) struct Perks(pub(crate) Vec<String>);
 
-/// Перк «Носильщик»: удваивает объём лап.
-pub(crate) const PERK_HAULER: &str = "hauler";
-
 /// Что перки значат для механик (§12.256): подпись живёт в палитре `perks:`,
 /// а числа — здесь, по `id`. Пустой ресурс — перков с эффектом нет (так живут
-/// схемы тестов; «Носильщик» устроен иначе и читается `spawn_cat` по имени).
+/// схемы тестов).
 #[derive(Resource, Default)]
 pub(crate) struct PerkRules(pub(crate) Vec<PerkRule>);
 
@@ -656,9 +653,23 @@ pub(crate) struct PerkRule {
     pub(crate) id: String,
     /// На сколько процентов короче дорога вылазки у отряда с этим котом.
     pub(crate) road: i32,
+    /// Множитель лап («Носильщик», §12.17); ноль — лап перк не трогает.
+    pub(crate) carry: i32,
 }
 
 impl PerkRules {
+    /// Во сколько раз больше лап у кота с такими перками: лучший множитель,
+    /// не складываются — как и тропы. Без перков на лапы — единица.
+    pub(crate) fn carry_of(&self, perks: &[String]) -> i32 {
+        perks
+            .iter()
+            .filter_map(|id| self.0.iter().find(|r| &r.id == id))
+            .map(|r| r.carry)
+            .max()
+            .unwrap_or(0)
+            .max(1)
+    }
+
     /// Лучший вычет дороги по перкам кота; ноль — таких перков нет.
     pub(crate) fn road_of(&self, perks: Option<&Perks>) -> i32 {
         perks.map_or(0, |p| {

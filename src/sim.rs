@@ -1436,7 +1436,7 @@ fn spawn_cat(
             .collect()
     };
 
-    let hauler = perks.iter().any(|p| p == PERK_HAULER);
+    let paws = world.resource::<PerkRules>().carry_of(perks);
     // Дело заводится здесь и только здесь — по тому же доводу, по которому
     // здесь же собирается сам кот (инвариант 21): второе место сборки дало бы
     // кота без дела, а заметить это можно было бы только по пустой карточке.
@@ -1460,7 +1460,7 @@ fn spawn_cat(
         cat.insert(born);
     }
     if carry > 0 {
-        cat.insert(Carry(carry * if hauler { 2 } else { 1 }));
+        cat.insert(Carry(carry * paws));
     }
     if energy_max > 0 {
         cat.insert(Energy(energy_max));
@@ -2081,6 +2081,7 @@ impl Sim {
                 .map(|p| PerkRule {
                     id: p.id.clone(),
                     road: p.road,
+                    carry: p.carry,
                 })
                 .collect(),
         ));

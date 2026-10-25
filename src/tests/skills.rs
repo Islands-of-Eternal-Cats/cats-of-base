@@ -200,9 +200,13 @@ fn the_shipped_ruleset_grows_skills_and_deals_paws() {
     let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
     let build = sim.skill_index("build").expect("навык стройки в рулсете");
 
-    // «Носильщика» среди стартовых нет: он у кандидатов (Гвоздь, Кирпич).
+    // «Носильщика» среди стартовых нет: он один на партию — у Кирпича.
     assert_eq!(sim.carry_max_of("sp2"), 4, "у стартовых — базовые лапы");
     assert_eq!(sim.carry_max_of("sp3"), 4, "у стартовых — базовые лапы");
+    assert!(
+        sim.recruit_perks("nail").is_empty(),
+        "Гвоздь среднее во всём, перка у него нет"
+    );
 
     assert!(
         sim.plan_demolish_rect(6, 10, 3, 4),
@@ -214,6 +218,18 @@ fn the_shipped_ruleset_grows_skills_and_deals_paws() {
         crew.iter().any(|c| sim.xp_of(c, build) > 0),
         "на разборке гаража бригада набрала опыт"
     );
+}
+
+/// Множитель «Носильщика» живёт в рулсете (`carry` у перка) и доходит до лап
+/// новичка: Кирпич уносит вчетверо больше стартовых.
+#[test]
+fn the_shipped_ruleset_gives_brick_four_times_the_paws() {
+    let yaml = include_str!("../../assets/rulesets/core.yaml");
+    let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let brick = sim.open_recruit("brick");
+
+    assert!(sim.hire(brick), "Кирпич нанят");
+    assert_eq!(sim.carry_max_of("brick"), 16, "«Носильщик» — вчетверо");
 }
 
 // --- Что растёт прямо сейчас (§12.17) ---------------------------------------

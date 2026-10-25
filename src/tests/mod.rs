@@ -2114,6 +2114,7 @@ impl Sim {
         self.world.resource_mut::<PerkRules>().0.push(PerkRule {
             id: id.to_string(),
             road,
+            ..Default::default()
         });
     }
 
@@ -2935,6 +2936,34 @@ impl Sim {
             gear: Vec::new(),
         });
         rules.0.len() - 1
+    }
+
+    /// Снять с кандидата боевого рулсета все ворота найма — известность, пол
+    /// доверия и цену, — чтобы нанять его сразу; индекс в палитре `recruits:`.
+    fn open_recruit(&mut self, id: &str) -> usize {
+        let mut rules = self.world.resource_mut::<RecruitRules>();
+        let at = rules
+            .0
+            .iter()
+            .position(|r| r.id == id)
+            .expect("кандидат в рулсете");
+        let rule = &mut rules.0[at];
+        rule.requires = 0;
+        rule.needs.clear();
+        rule.cost.clear();
+        at
+    }
+
+    /// Перки кандидата так, как их выдаст `spawn_cat`.
+    fn recruit_perks(&self, id: &str) -> Vec<String> {
+        let rules = self.world.resource::<RecruitRules>();
+        rules
+            .0
+            .iter()
+            .find(|r| r.id == id)
+            .expect("кандидат в рулсете")
+            .perks
+            .clone()
     }
 
     /// Пол доверия у кандидата: `(фракция, сколько)` (§12.43).
