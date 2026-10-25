@@ -2475,6 +2475,8 @@ function renderSnapshot(snap) {
   const day = dayOf(snap.tick);
   tickEl.textContent = day ? `${day}, ${clockOf(snap.tick)}` : snap.tick;
   liveTitle(tickEl.parentElement, `тик ${snap.tick}`);
+  // День и ночь на базе — те же часы, что в шапке; без календаря всегда день.
+  if (meta?.day > 0) lighting.setTime((snap.tick % meta.day) / meta.day);
   drawScrap(snap.stacks);
   drawBlueprints(snap.blueprints);
   drawDeals(snap.deals);
@@ -7551,6 +7553,10 @@ function syncLightUi() {
   );
   lightUi.mode.classList.toggle("snd-off", !lighting.canHdr);
   text(
+    lightUi.cycle,
+    `<span class="sw sw-cursor"></span><span>День и ночь: ${p.cycle ? "вкл" : "выкл"}</span>`,
+  );
+  text(
     lightUi.stress,
     `<span class="sw sw-cursor"></span><span>Нагрузка: ${STRESS_LABEL[p.stress]}</span>`,
   );
@@ -8278,6 +8284,15 @@ function buildToolbar() {
       : "HDR недоступен: браузер не умеет рисовать во float-текстуру",
   );
   lit.appendChild(lightUi.mode);
+  lightUi.cycle = mkTool("", () => {
+    lighting.setCycle(!lighting.prefs().cycle);
+    syncLightUi();
+  });
+  liveTitle(
+    lightUi.cycle,
+    "Смена суток по часам партии: ночью там, куда не достают лампы, темнеет, в сумерках фон теплеет",
+  );
+  lit.appendChild(lightUi.cycle);
   for (const [key, label, max, tip, set] of [
     [
       "shade",

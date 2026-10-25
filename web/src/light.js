@@ -42,6 +42,29 @@ const LIGHT_RES = 0.5;
 /// «Тень» между двумя концами (0 — ночь, 100 — почти без тени).
 const SHADE_DARK = [16, 20, 32];
 const SHADE_LIGHT = [168, 176, 196];
+/// Сутки базы (только вид): ночью фон тени уходит к `NIGHT` — синеватому и
+/// темнее дневного, но не чёрному, база обязана читаться и ночью, — а лампы
+/// переходят на дежурный свет (`DUTY`). В сумерках фон проходит через тёплый
+/// `DUSK`. Часы — те же, что в шапке (`clockOf`):
+/// сутки растянуты на 24 часа, светло с `DAWN[1]` до `DUSK_AT[0]`, темно с
+/// `DUSK_AT[1]` до `DAWN[0]`, между ними плавный переход.
+const NIGHT = [8, 12, 34];
+const NIGHT_KEEP = 0.22;
+const DUSK = [200, 120, 80];
+const DUSK_WARM = 0.18;
+const DAWN = [5, 7];
+const DUSK_AT = [19, 21];
+/// Дежурный свет: ночью лампы те же и там же, но уже и тусклее — во сколько
+/// раз (`r` — радиус, `a` — яркость). Потолочные гаснут до точек, бра и
+/// приборы держатся ярче всех: по ним ночью и читается, где что стоит.
+/// Ночной свет запекается второй текстурой рядом с дневным, а кадр сводит
+/// их по часам — пересборки на каждом шаге суток нет.
+const DUTY = {
+  ceil: { r: 0.45, a: 0.65 },
+  sconce: { r: 0.6, a: 0.9 },
+  lamp: { r: 0.5, a: 0.85 },
+  cell: { r: 0.7, a: 0.3 },
+};
 /// Насколько свет **высветляет** пол сверх его собственной краски. `multiply`
 /// умеет только затемнять, а пол и так тёмный, — без этого прохода под лампой
 /// было бы ровно то же, что без света, и пятна читались бы одной тенью вокруг.
@@ -62,6 +85,8 @@ const DEFAULTS = {
   bloom: 35,
   // Рельеф плоских текстур (только HDR, `hdr.js`): сила, 0 — выключен.
   bump: 45,
+  // Смена дня и ночи по часам партии.
+  cycle: true,
   // Объём котов (только HDR): размытый силуэт — купол высоты, 0 — выключен.
   round: 60,
 };
@@ -309,9 +334,10 @@ function visibility(cells, W, H, cx, cy, radius, tile) {
         hit = d;
         // Вошёл через южную кромку клетки скалы — это лицо северной стены.
         const py = cy + dy * (d - step);
-        rim = dy < 0 && Math.floor(py) > Math.floor(cy + dy * d) && wallRise > 0
-          ? Math.min(wallRise / -dy, wallRise * 2)
-          : RIM;
+        rim =
+          dy < 0 && Math.floor(py) > Math.floor(cy + dy * d) && wallRise > 0
+            ? Math.min(wallRise / -dy, wallRise * 2)
+            : RIM;
       }
       if (hit >= 0 && d >= hit + rim) break;
     }
@@ -319,6 +345,24 @@ function visibility(cells, W, H, cx, cy, radius, tile) {
     pts.push((cx + dx * d) * tile, (cy + dy * d) * tile);
   }
   return pts;
+}
+
+/// Та же лампа в дежурном режиме. `base` — дневная, по ней узнают потолочную.
+function dutyOf(spec) {
+  const k =
+    spec === CEIL
+      ? DUTY.ceil
+      : spec === SCONCE
+        ? DUTY.sconce
+        : spec.fill
+          ? DUTY.cell
+          : DUTY.lamp;
+  return {
+    ...spec,
+    radius: spec.radius * k.r,
+    alpha: spec.alpha * k.a,
+    base: spec,
+  };
 }
 
 export function createLighting(app, tile) {
@@ -330,7 +374,11 @@ export function createLighting(app, tile) {
   const hdr = canHdr ? createHdrFilter() : null;
   // Свечение: запечённый свет, размытый широко и в четверть разрешения света.
   let bloomTarget = null;
-  const bloomSrc = new Sprite();
+  const bloomSrc = new Container(); // дневной и ночной свет в долях суток
+  const bloomDay = new Sprite();
+  const bloomNight = new Sprite();
+  bloomNight.blendMode = "add";
+  bloomSrc.addChild(bloomDay, bloomNight);
   bloomSrc.filters = [new BlurFilter({ strength: 14, quality: 4 })];
   /// Контейнер мировых слоёв, на который вешается HDR-фильтр, и сам мир —
   /// по нему считается, где карта лежит на экране (`attach`).
@@ -357,9 +405,11 @@ export function createLighting(app, tile) {
   const ambient = new Sprite(Texture.WHITE);
   const bakedSprite = new Sprite();
   bakedSprite.blendMode = "add";
+  const nightSprite = new Sprite(); // дежурный свет (`DUTY`), сводится с дневным
+  nightSprite.blendMode = "add";
   const lamps = new Container(); // живые (мерцающие) лампы: пересобираются в `rebuild`
   const cats = new Container(); // пул света котов: растёт, не убывает
-  scene.addChild(ambient, bakedSprite, lamps, cats);
+  scene.addChild(ambient, bakedSprite, nightSprite, lamps, cats);
   // Поле вокруг карты: стены у края рисуются чуть за её пределами, и свет,
   // покрывающий ровно карту, оставлял их выступ незатемнённым, а HDR-фильтр
   // его срезал. Текстуры света шире карты на клетку с каждой стороны, а всё,
@@ -377,6 +427,8 @@ export function createLighting(app, tile) {
   let glowTarget = null;
   let baked = null;
   let bakedSoft = null;
+  let bakedNight = null;
+  let nightSoft = null;
   const soften = new Sprite();
   // Размытие запечённого света: мягкий край тени, как от лампы, а не от точки.
   // Платится один раз на смену карты (или ползунка), а не каждым кадром.
@@ -404,6 +456,10 @@ export function createLighting(app, tile) {
   } catch {
     /* без хранилища — настройки по умолчанию */
   }
+  /// Доля дня (1 — день, 0 — ночь) — её ставит `setTime` по часам партии.
+  let daylight = 1;
+  let shadeTint = -1;
+  let shadeDay = -1;
   let enabled = prefs.on;
   applyShade();
   applyMode();
@@ -563,11 +619,49 @@ export function createLighting(app, tile) {
 
   function applyShade() {
     const k = prefs.shade / 100;
-    const [r, g, b] = SHADE_DARK.map((d, i) =>
-      Math.round(d + (SHADE_LIGHT[i] - d) * k),
+    const day = SHADE_DARK.map((d, i) => d + (SHADE_LIGHT[i] - d) * k);
+    // Доля дня шагами по 1/64: свечение пересобирается на каждом шаге.
+    const d = prefs.cycle ? Math.round(daylight * 64) / 64 : 1;
+    // Ночной фон держит долю дневного: ползунок «Тень» действует и ночью.
+    const night = NIGHT.map((n, i) => n + day[i] * NIGHT_KEEP);
+    // Тепло сумерек — горбом посередине перехода, днём и ночью его нет.
+    const warm = DUSK_WARM * 4 * d * (1 - d);
+    const tint = hexOf(
+      day.map((v, i) => {
+        const c = night[i] + (v - night[i]) * d;
+        return c + (DUSK[i] - c) * warm;
+      }),
     );
-    ambient.tint = (r << 16) | (g << 8) | b;
+    if (shadeTint === tint && shadeDay === d) return;
+    shadeTint = tint;
+    ambient.tint = tint;
+    if (shadeDay !== d) {
+      shadeDay = d;
+      bakedSprite.alpha = bloomDay.alpha = d;
+      nightSprite.alpha = bloomNight.alpha = 1 - d;
+      nightSprite.visible = bloomNight.visible = d < 1;
+      bakedSprite.visible = bloomDay.visible = d > 0;
+      rebloom();
+    }
     applyHdr();
+  }
+
+  /// Часы партии: `part` — доля суток (0 — полночь). Зовётся каждым снимком,
+  /// а фон пересчитывается, только когда цвет и правда сдвинулся.
+  function setTime(part) {
+    const h = part * 24;
+    const ramp = (a, b) => {
+      const t = Math.min(1, Math.max(0, (h - a) / (b - a)));
+      return t * t * (3 - 2 * t);
+    };
+    daylight = ramp(DAWN[0], DAWN[1]) * (1 - ramp(DUSK_AT[0], DUSK_AT[1]));
+    applyShade();
+  }
+
+  function setCycle(on) {
+    prefs.cycle = on;
+    applyShade();
+    save();
   }
   /// Стресс-режим: сколько ламп на клетку пола (0 — обычный свет) и по три на
   /// кота — проверить, где у света потолок, на карте, где ламп мало.
@@ -604,7 +698,7 @@ export function createLighting(app, tile) {
       .poly(visibility(map.cells, map.W, map.H, cx, cy, spec.radius, tile))
       .fill(0xffffff);
     const s = glowSprite(spec, cx * tile, cy * tile, tintOf(spec, prefs.sat));
-    if (spec === CEIL) s.alpha *= 1 - CEIL_FADE * boost();
+    if ((spec.base ?? spec) === CEIL) s.alpha *= 1 - CEIL_FADE * boost();
     s.mask = mask;
     node.addChild(mask, s);
     node.spec = spec;
@@ -627,6 +721,8 @@ export function createLighting(app, tile) {
       glowTarget?.destroy(true);
       baked?.destroy(true);
       bakedSoft?.destroy(true);
+      bakedNight?.destroy(true);
+      nightSoft?.destroy(true);
       bloomTarget?.destroy(true);
       target = RenderTexture.create({
         width: pw,
@@ -652,18 +748,31 @@ export function createLighting(app, tile) {
         resolution: LIGHT_RES,
         format: lightFormat,
       });
+      bakedNight = RenderTexture.create({
+        width: pw,
+        height: ph,
+        resolution: LIGHT_RES,
+        format: lightFormat,
+      });
+      nightSoft = RenderTexture.create({
+        width: pw,
+        height: ph,
+        resolution: LIGHT_RES,
+        format: lightFormat,
+      });
       bloomTarget = RenderTexture.create({
         width: pw,
         height: ph,
         resolution: LIGHT_RES / 4,
         format: lightFormat,
       });
-      bloomSrc.texture = bakedSoft;
+      bloomDay.texture = bakedSoft;
+      bloomNight.texture = nightSoft;
       hdr?.textures(target, bloomTarget);
-      soften.texture = baked;
       sprite.texture = target;
       glowLayer.texture = glowTarget;
       bakedSprite.texture = bakedSoft;
+      nightSprite.texture = nightSoft;
     }
     ambient.width = pw;
     ambient.height = ph;
@@ -713,6 +822,7 @@ export function createLighting(app, tile) {
               parseInt(String(def.color || "#ffffff").slice(1), 16);
             const k = boost();
             spec = {
+              fill: true,
               color,
               radius: CELL.radius + CELL_BOOST.radius * k,
               alpha:
@@ -728,27 +838,44 @@ export function createLighting(app, tile) {
 
     // Неподвижные — в запечённую текстуру, по одной и с разрушением следом;
     // мерцающие — живыми узлами в кадр.
-    let first = true;
+    // Ночной свет — те же места дежурными лампами (`DUTY`), второй текстурой.
+    // Мерцающие ночью не мерцают: живые узлы светят днём.
     bakedCount = 0;
-    for (const [spec, cx, cy] of spots) {
-      const node = shadedLamp(spec, map, cx, cy);
-      if (ANIMATE && (spec.flicker || spec.pulse)) {
-        lamps.addChild(node);
-        continue;
+    const duty = new Map();
+    for (const [into, night] of [
+      [baked, false],
+      [bakedNight, true],
+    ]) {
+      let first = true;
+      for (const [day, cx, cy] of spots) {
+        let spec = day;
+        if (night) {
+          spec = duty.get(day);
+          if (!spec) duty.set(day, (spec = dutyOf(day)));
+        }
+        const node = shadedLamp(spec, map, cx, cy);
+        if (!night && ANIMATE && (spec.flicker || spec.pulse)) {
+          lamps.addChild(node);
+          continue;
+        }
+        bakeShift.addChild(node);
+        app.renderer.render({
+          container: bakeRoot,
+          target: into,
+          clear: first,
+        });
+        bakeShift.removeChild(node);
+        first = false;
+        node.destroy({ children: true });
+        if (!night) bakedCount++;
       }
-      bakeShift.addChild(node);
-      app.renderer.render({ container: bakeRoot, target: baked, clear: first });
-      bakeShift.removeChild(node);
-      first = false;
-      node.destroy({ children: true });
-      bakedCount++;
+      if (first)
+        app.renderer.render({
+          container: new Container(),
+          target: into,
+          clear: true,
+        });
     }
-    if (first)
-      app.renderer.render({
-        container: new Container(),
-        target: baked,
-        clear: true,
-      });
     resoften();
     bakeMs = performance.now() - t0;
   }
@@ -833,7 +960,20 @@ export function createLighting(app, tile) {
   /// Размыть запечённое заново — без пересборки ламп: лучи и маски те же.
   function resoften() {
     if (!bakedSoft) return;
-    app.renderer.render({ container: soften, target: bakedSoft, clear: true });
+    for (const [from, to] of [
+      [baked, bakedSoft],
+      [bakedNight, nightSoft],
+    ]) {
+      soften.texture = from;
+      app.renderer.render({ container: soften, target: to, clear: true });
+    }
+    rebloom();
+  }
+
+  /// Свечение по свету текущего часа: дневной и дежурный в долях суток.
+  /// Зовётся на пересборке и когда сдвинулись часы (`applyShade`), не кадром.
+  function rebloom() {
+    if (!bloomTarget) return;
     app.renderer.render({
       container: bloomSrc,
       target: bloomTarget,
@@ -946,6 +1086,10 @@ export function createLighting(app, tile) {
     toggle,
     toggleStress,
     setShade,
+    setTime,
+    setCycle,
+    /// Доля дня сейчас: 1 — день, 0 — ночь (с учётом выключенной смены).
+    daylight: () => (prefs.cycle ? daylight : 1),
     setGlow,
     setSoft,
     setSat,
