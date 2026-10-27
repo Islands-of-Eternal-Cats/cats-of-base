@@ -1777,3 +1777,39 @@ fn a_busy_post_does_not_mute_the_salvage_rule() {
         "разбор пошёл, хотя пост занят продажей"
     );
 }
+
+/// Вещь, которую кот везёт на разбор, а ему велели её носить, он надевает из
+/// лап (§12.293): приписка игрока важнее разбора (§12.115), а разобранное не
+/// вернуть. Заказ разбора при этом стоит — ему просто не довезли эту штуку.
+#[test]
+fn an_outfit_beats_the_salvage_in_paws() {
+    let mut sim = sim_with_shop();
+    let cloth = 2;
+    sim.set_items(cloth + 1);
+    sim.set_force(PART, 1);
+    sim.set_slot(PART, "body");
+    let def = sim.set_recipe(100, &[(PART, 1)], &[(cloth, 2)], &[]);
+    sim.set_salvage(def);
+    sim.put_item(5, 1, PART, 1);
+    assert!(sim.start_craft(def, 1));
+
+    // Ждём, пока вещь поднимут и повезут на станок.
+    let mut porter = None;
+    for _ in 0..40 {
+        sim.tick_n(1);
+        porter = ["a", "b"]
+            .into_iter()
+            .find(|&u| sim.carrying_item_of(u) == Some(PART) && sim.has_haul(u));
+        if porter.is_some() {
+            break;
+        }
+    }
+    let porter = porter.expect("повезли на разбор");
+    assert!(sim.set_outfit(porter, PART, true));
+
+    sim.tick_n(1);
+    assert_eq!(sim.gear_of(porter), vec![PART], "надел из лап");
+    sim.tick_n(150);
+    assert_eq!(sim.item_total(cloth), 0, "разбирать было нечего");
+    assert_eq!(sim.gear_of(porter), vec![PART], "и вещь на нём");
+}

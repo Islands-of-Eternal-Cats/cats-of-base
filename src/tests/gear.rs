@@ -158,8 +158,9 @@ fn a_vanished_pile_just_frees_the_cat() {
     assert!(!sim.is_equipping("a"), "задача снята");
     assert!(sim.gear_of("a").is_empty(), "надеть было нечего");
 
-    let at = sim.pos_of("a"); // а вот теперь есть — прямо под ногами
-    sim.put_item(at.0, at.1, SUIT, 1);
+    // А вот теперь есть — снова на складе. Не под ногами: такую кучу увезёт
+    // уборка, и приписанный носильщик наденет её сам (§12.293).
+    sim.put_item(5, 1, SUIT, 1);
     sim.tick_n(5);
     assert_eq!(sim.gear_of("a"), vec![SUIT], "и кот свободно взялся заново");
 }
@@ -811,4 +812,47 @@ fn the_node_forecast_shows_what_the_outfit_will_give() {
         sim.node_forecast(6, 1, false),
         sim.node_forecast(6, 1, true)
     );
+}
+
+/// Комбинезон уже в лапах (§12.293): приписанный кот надевает его на месте, а
+/// не идёт за другим на склад.
+#[test]
+fn a_cat_dresses_from_its_paws() {
+    let mut sim = sim_with_store_and_gate();
+    sim.put_item(5, 1, SUIT, 1);
+    sim.give_load("a", SUIT, 1);
+    let at = sim.pos_of("a");
+
+    sim.tick_n(1);
+    assert_eq!(sim.gear_of("a"), vec![SUIT], "надел сразу");
+    assert_eq!(sim.carrying_of("a"), 0, "лапы пусты");
+    assert!(!sim.is_equipping("a"), "к складу не пошёл");
+    assert_eq!(sim.pos_of("a"), at);
+    assert_eq!(sim.item_at(5, 1, SUIT), 1, "складской остался лежать");
+}
+
+/// Носильщик на склад с приписанной вещью в лапах надевает её по дороге
+/// (§12.293): сдать, чтобы тут же забрать, — лишняя ходка. Остаток груза он
+/// несёт дальше.
+#[test]
+fn a_porter_to_the_storage_dresses_on_the_way() {
+    let mut sim = sim_with_store_and_gate();
+    sim.give_load("a", SUIT, 3);
+    sim.send_load("a", HaulTo::Store(None));
+
+    sim.tick_n(1);
+    assert_eq!(sim.gear_of("a"), vec![SUIT]);
+    assert_eq!(sim.carrying_of("a"), 2, "два комбинезона несёт дальше");
+}
+
+/// Груз, обещанный площадке, не надевают (§12.293): он чужой.
+#[test]
+fn a_porter_to_a_site_keeps_the_load() {
+    let mut sim = sim_with_store_and_gate();
+    sim.give_load("a", SUIT, 1);
+    let other = sim.entity_of("b");
+    sim.send_load("a", HaulTo::Site(other));
+
+    sim.tick_n(1);
+    assert!(sim.gear_of("a").is_empty(), "не надел");
 }

@@ -185,6 +185,7 @@ pub(crate) fn assign_equip(
             Option<&Path>,
             Option<&Squad>,
             Option<&Skills>,
+            Option<&Carrying>,
         ),
         (
             Without<Assignment>,
@@ -202,6 +203,25 @@ pub(crate) fn assign_equip(
         ),
     >,
     going: Query<&Equipping>,
+    // Носильщики на склад и на разбор (§12.293): их груз ничей или идёт под
+    // нож, и приписанную вещь из него кот надевает сразу. Склад — чтобы не
+    // сдавать и тут же возвращаться; разбор — потому что приписка игрока
+    // важнее разбора (§12.115: разбор уступает припискам снаряжения), а
+    // разобранную вещь не вернуть.
+    crafts: Query<&Craft>,
+    craft_rules: Res<CraftRules>,
+    porters: Query<
+        (
+            Entity,
+            &UnitId,
+            &Outfit,
+            Option<&Gear>,
+            &Carrying,
+            &Haul,
+            Option<&Skills>,
+        ),
+        Without<Away>,
+    >,
     stacks: Query<(Entity, &Position, &Stack)>,
     deals: Query<&Deal>,
     in_paws: Query<(&Haul, &Carrying)>,
@@ -209,10 +229,10 @@ pub(crate) fn assign_equip(
     topic_rules: Res<ResearchRules>,
 ) {
     // Кто чего недосчитался, в порядке `id`.
-    let mut naked: Vec<(&str, Entity, (i32, i32), Vec<usize>)> = cats
+    let mut naked: Vec<(&str, Entity, (i32, i32), Vec<usize>, Option<&Carrying>)> = cats
         .iter()
-        .filter(|(_, _, _, _, _, path, squad, _)| path.is_none() || squad.is_some())
-        .filter_map(|(cat_e, id, pos, gear, outfit, _, _, skills)| {
+        .filter(|(_, _, _, _, _, path, squad, _, _)| path.is_none() || squad.is_some())
+        .filter_map(|(cat_e, id, pos, gear, outfit, _, _, skills, load)| {
             // Ворота на надевание (§12.114) проверяет команда; здесь они
             // остаются подстраховкой — технологии не забываются (§12.18).
             let missing: Vec<usize> = outfit
@@ -229,13 +249,35 @@ pub(crate) fn assign_equip(
                 // здесь страховка для приписок из старого снимка.
                 .filter(|&item| items.skilled(item, &skill_rules, skills))
                 .collect();
-            (!missing.is_empty()).then_some((id.0.as_str(), cat_e, (pos.x, pos.y), missing))
+            (!missing.is_empty()).then_some((id.0.as_str(), cat_e, (pos.x, pos.y), missing, load))
         })
         .collect();
-    if naked.is_empty() {
+    // Носильщики на склад с приписанной вещью в лапах (§12.293) — свои ворота
+    // те же: надеваемо, слот не занят надетым, умеет.
+    let mut porting: Vec<(&str, Entity, usize, &Carrying, Option<&Gear>)> = porters
+        .iter()
+        .filter(|(.., haul, _)| match haul.to {
+            HaulTo::Store(_) => true,
+            HaulTo::Shop(c) => crafts
+                .get(c)
+                .is_ok_and(|c| craft_rules.0.get(c.def).is_some_and(|r| r.salvage)),
+            _ => false,
+        })
+        .filter(|&(_, _, outfit, gear, load, _, skills)| {
+            let item = load.item;
+            load.count > 0
+                && outfit.0.contains(&item)
+                && !gear.is_some_and(|g| g.items().any(|i| i == item || items.same_slot(i, item)))
+                && items.wearable(item, &techs)
+                && items.skilled(item, &skill_rules, skills)
+        })
+        .map(|(e, id, _, gear, load, _, _)| (id.0.as_str(), e, load.item, load, gear))
+        .collect();
+    if naked.is_empty() && porting.is_empty() {
         return;
     }
     naked.sort_unstable_by_key(|&(id, ..)| id);
+    porting.sort_unstable_by_key(|&(id, ..)| id);
 
     // Проданный комбинезон коту уже не принадлежит (§12.50): с заявки товаром
     // распоряжается сделка. Проверяем в раздатчике, а не только при надевании,
@@ -295,7 +337,40 @@ pub(crate) fn assign_equip(
         }
     }
 
-    for (_, cat_e, from, missing) in naked {
+    // **Из лап — сразу** (§12.293): приписанная вещь, которую кот уже несёт,
+    // надевается на месте, без похода к куче. Груз берётся только **ничей** —
+    // осевший у свободного кота или везомый на склад; везомое на площадку,
+    // станок, в лабораторию и покупателю обещано, его не трогают. Те же
+    // ворота, что у кучи: проданное не надевают (§12.50), обещанное теме-
+    // вскрытию — тоже, пока кучи его не покрывают (§12.133).
+    let paws_ok = |item: usize| !sold(item) && in_piles(item) >= promised(item).max(0);
+    let mut dressed: Vec<Entity> = Vec::new();
+    for &(_, cat_e, item, load, gear) in &porting {
+        if !paws_ok(item) {
+            continue;
+        }
+        dress_from_paws(&mut commands, &items, cat_e, item, load, gear);
+        if load.count <= 1 {
+            // Нести больше нечего — ходка снимается вместе с шагом. Заказ
+            // разбора при этом цел: ему просто не довезли эту штуку, и подвоз
+            // поищет другую.
+            commands.entity(cat_e).remove::<(Haul, Path, Stride)>();
+        }
+        dressed.push(cat_e);
+    }
+    for (_, cat_e, _, missing, load) in &naked {
+        let Some(load) = load else { continue };
+        if load.count > 0 && missing.contains(&load.item) && paws_ok(load.item) {
+            let gear = cats.get(*cat_e).ok().and_then(|c| c.3);
+            dress_from_paws(&mut commands, &items, *cat_e, load.item, load, gear);
+            dressed.push(*cat_e);
+        }
+    }
+
+    for (_, cat_e, from, missing, _) in naked {
+        if dressed.contains(&cat_e) {
+            continue; // за остальным — следующим тиком
+        }
         // Обход строим только когда есть за чем идти: голая база с непустым
         // шаблоном иначе гоняла бы BFS на каждого кота каждый тик.
         let anything = missing.iter().any(|&item| {
@@ -342,6 +417,30 @@ pub(crate) fn assign_equip(
         commands
             .entity(cat_e)
             .insert((Equipping { item, pile: pile_e }, Path { steps: path }));
+    }
+}
+
+/// Надеть вещь из лап (§12.293): штука уходит из груза на кота. Груз, ставший
+/// пустым, снимается — пустых лап с компонентом не бывает.
+fn dress_from_paws(
+    commands: &mut Commands,
+    items: &ItemRules,
+    cat_e: Entity,
+    item: usize,
+    load: &Carrying,
+    gear: Option<&Gear>,
+) {
+    let mut worn = gear.map(|g| g.0.clone()).unwrap_or_default();
+    worn.push(items.fresh(item));
+    let mut cat = commands.entity(cat_e);
+    cat.insert(Gear(worn));
+    if load.count > 1 {
+        cat.insert(Carrying {
+            item,
+            count: load.count - 1,
+        });
+    } else {
+        cat.remove::<Carrying>();
     }
 }
 

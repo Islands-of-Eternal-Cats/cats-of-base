@@ -1723,7 +1723,9 @@ note_seen → check_goals`.
    невиданное по `Seen` не назначить и в деле не показать, §12.131 · `unknown` ·
    `unskilled` — не умеет: `skills` у предмета, у пробоотборника «Наука» 1, §12.269 · `slot` — слот занят личной вещью, §12.293). В кучах, в лапах и на складе вещь живёт как лом. Приписанное коты добирают
    сами и **ногами** (`assign_equip` + `work_equip`), порядок раздачи — по `id` кота, куча
-   считает обещанное идущим (§12.15). Снятие приписки роняет надетое под ноги (инвариант 8).
+   считает обещанное идущим (§12.15). **Из лап — сразу** (§12.293): свободная ноша, везомое
+   на склад и **на разбор** надеваются на месте; ноша площадки, станка, лаборатории и
+   покупателя — нет. Снятие приписки роняет надетое под ноги (инвариант 8).
    ⚠️ **Личная вещь** (`personal`, §12.256) в `Outfit` не бывает никогда, снять её обычным
    образом нельзя, провал и износ её не трогают. Новичок приходит **со своим** (`gear` у
    кандидата и у `units:`): неличное заодно становится припиской. ⚠️ **Износ** (`wear`,
@@ -2034,7 +2036,7 @@ note_seen → check_goals`.
 
 ## Тесты
 
-969 тестов живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `jobs` · `demolition` ·
+973 теста живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `jobs` · `demolition` ·
 `hauling` · `tidying` · `skills` · `stats` · `study` · `research` · `needs` · `news` · `food` · `health` · `items` · `layers` · `missions` · `muster` ·
 `captivity` · `fame` · `factions` · `trade` · `terrain` · `timeline` · `gear` · `crafting` · `crowd` · `panel` ·
 `goals` · `record` · `relay` · `sampling` · `save` · `seen` · `structures` · `tutoring` · `bins` · `tech_tree` · `wiki`); общие хелперы и сборка мира —
@@ -2101,7 +2103,7 @@ let mut sim = sim_from(&["#####", "#a..#", "#####"]); // '#' пустота, '.'
   по знакомству с предметом (§12.131) — `seen` (видела ли база предмет хоть раз) и `item_index`; по таймлайну — `set_event`, `set_reveal`,
   `happened`, `note_revealed`, `note_requires`, `note_ready`, `without_timeline`; по снаряжению —
   `set_force`, `outfit_all` (приписать всем котам мимо ворот), `outfit_of`, `outfit_gate`,
-  `set_wear`, `wear_left`, `set_personal`, `set_slot`, `planned_force_of` и `node_forecast` (сила и доли узла по надетому и по приписанному, §12.293), `set_recruit_gear`, `gear_of`, `is_equipping`, `take_item`; по клетке — `set_solid`,
+  `set_wear`, `wear_left`, `set_personal`, `set_slot`, `send_load` (кот с грузом в ходку), `planned_force_of` и `node_forecast` (сила и доли узла по надетому и по приписанному, §12.293), `set_recruit_gear`, `gear_of`, `is_equipping`, `take_item`; по клетке — `set_solid`,
   `solid_tiles`, `capacity_of`, по зонированию (§12.157) — `set_quiet` · `set_noisy` ·
   `set_clean` · `set_dirty` и `zoning_clashes` (пары соседей на карте, которые не уживаются:
   читается ровно как само правило, поэтому годится и сквозному тесту, и сторожу на боевом

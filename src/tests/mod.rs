@@ -907,6 +907,12 @@ impl Sim {
     }
 
     /// Что именно кот несёт; `None` — лапы пусты.
+    /// Отправить кота с грузом в ходку (§12.293): `to` — куда он его несёт.
+    fn send_load(&mut self, unit: &str, to: HaulTo) {
+        let cat = self.entity_of(unit);
+        self.world.entity_mut(cat).insert(Haul { to, aim: None });
+    }
+
     fn carrying_item_of(&mut self, unit: &str) -> Option<usize> {
         let mut q = self.world.query::<(&UnitId, Option<&Carrying>)>();
         q.iter(&self.world)
