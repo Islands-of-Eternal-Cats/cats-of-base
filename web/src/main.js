@@ -485,16 +485,25 @@ onPanelClick(raidWinEl, ".crew-duty", (b) => {
     y: Number(b.dataset.y),
   });
 });
-// Фишка снаряжения (§12.268): приписка прямо из штаба, та же команда, что в
-// «Личном деле». Отказ — классом и словом в подсказке (§12.121).
-onPanelClick(raidWinEl, ".crew-gear", (b) => {
+// Слот снаряжения (§12.293): открывает список вещей для слота, повторный клик
+// закрывает. Это осмотр, а не команда — мимо `sendAction`.
+onPanelClick(raidWinEl, ".crew-slot", (b) => {
   if (b.classList.contains("off")) return;
+  const same = slotPick?.id === b.dataset.id && slotPick.slot === b.dataset.slot;
+  slotPick = same ? null : { id: b.dataset.id, slot: b.dataset.slot };
+  renderRaidWindow();
+});
+// Строка списка — приписка, та же команда, что «Носить»/«Снять» в «Личном
+// деле». Замену прежней вещи в слоте делает ядро (`Sim::set_outfit`).
+onPanelClick(raidWinEl, ".slot-pick", (b) => {
+  if (b.classList.contains("off") || !slotPick) return;
   sendAction({
     type: "setOutfit",
-    id: b.dataset.id,
+    id: slotPick.id,
     item: Number(b.dataset.item),
-    on: !b.dataset.in,
+    on: !b.dataset.off,
   });
+  closeSlotPop();
 });
 onPanelClick(raidWinEl, ".raid-go", (b) => {
   // Классом, а не `disabled` (§12.121). Причина отказа у заказа написана
@@ -552,6 +561,8 @@ onPanelClick(raidWinEl, ".raidwin-close", () => closeRaidWindow());
 // мимо него это почти всегда «хватит».
 raidWinEl.addEventListener("mousedown", (e) => {
   if (e.target === raidWinEl) closeRaidWindow();
+  // Клик мимо списка слота закрывает его; клик по слоту решает сам.
+  else if (!e.target.closest(".slot-pop, .crew-slot")) closeSlotPop();
 });
 
 const app = new Application();
@@ -4556,7 +4567,7 @@ function crewList(snap, x, y) {
     // Дежурство — вторая кнопка той же строки: радист приписан к **этому**
     // отряду (§12.285), а сядет за любую свободную рацию. Нет на базе ни одной
     // рации — дежурить негде, и кнопки нет вовсе (§12.60).
-    const kit = gearChips(e);
+    const kit = gearSlots(e);
     if (!radioOnBase()) return { band, id: e.id, html: pick + kit };
     const on = e.post_x === x && e.post_y === y;
     // Допуск считает ядро (`may_relay`, §12.291). Снять приписку можно всегда:
@@ -7720,6 +7731,8 @@ window.addEventListener("keydown", (e) => {
     // такое окно, «отменить» может значить только «закрыть его» (§12.71).
     // Список у них общий с `closeOtherWindows` — второй экземпляр уже однажды
     // разошёлся с первым и оставил «Покупку» без Escape.
+    // Список слота в штабе — поверх окна, значит закрывается раньше него.
+    if (closeSlotPop()) return;
     if (closeAnyWindow()) return;
     if (dragFrom) {
       endDrag(false);
@@ -11792,7 +11805,7 @@ const OUTFIT_WHY = {
   away: "Его нет на базе — переодеть некого",
   unseen: "Такой вещи база ещё не видела",
   unknown: "База ещё не поняла эту вещь",
-  collector: "Прибор сбора у него уже есть — второй ни к чему",
+  slot: "Слот занят личной вещью — её не снять",
 };
 
 // Отказ `unskilled` (§12.269): какое умение нужно вещи — из `meta`, а не
@@ -11840,48 +11853,159 @@ function gearState(e, i) {
     : "носит · сходит сам";
 }
 
-// Фишки снаряжения в строке кота штаба: кнопка на каждую надеваемую вещь,
-// клик — та же приписка, что «Носить»/«Снять» в «Личном деле» (`setOutfit`).
-// Стоит здесь потому, что в штабе видна цена решения — сила кота и прогноз
-// заказа рядом (§12.80), а одевать отряд по коту через дело — пять окон на
-// одно решение.
-//
-// Набор фишек **один на все строки** — открытые вещи палитры (`gear_open`), — и
-// поэтому колонки фишек стоят ровно под друг другом. Личная вещь (§12.256)
-// фишки не получает: она не выбор ни для кого, а у хозяина о ней уже говорит
-// строка поля («сбор образцов»). Состояний три: надето (ярко), приписано и
-// ещё не взято (обводка; красная — взять негде), не носит (тускло).
-function gearChips(e) {
+// Слоты на коте (§12.293): одежда и то, что в лапах. Какая вещь в какой слот,
+// говорит рулсет (`slot` у предмета); здесь только порядок и слово.
+const SLOTS = [
+  { id: "body", label: "Одежда" },
+  { id: "hand", label: "В лапах" },
+];
+
+// Контур пустого слота: силуэт рубашки и лапы. Не глиф вещи — тот назвал бы
+// предмет, которого база, может быть, ещё не видела (§12.131).
+const SLOT_ICON = {
+  body:
+    '<svg class="slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3 4 6l2 4 2-1v11h8V9l2 1 2-4-5-3c-.6 1.6-1.8 2.5-3 2.5S9.6 4.6 9 3z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+  hand:
+    '<svg class="slot-icon" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="16" rx="4.5" ry="3.8"/><circle cx="6" cy="10" r="1.8"/><circle cx="10" cy="6.5" r="1.8"/><circle cx="14" cy="6.5" r="1.8"/><circle cx="18" cy="10" r="1.8"/></g></svg>',
+};
+
+// Слоты, которые вообще бывают в этой игре: у какой-нибудь вещи палитры такой
+// есть. Пустой слот показываем всегда — игрок видит, что сюда что-то ляжет, —
+// но слот, которого рулсет не знает вовсе, был бы обещанием без механики.
+function slotsInPlay() {
   const items = meta.items ?? [];
-  const open = lastSnap?.gear_open ?? [];
-  const chips = [];
-  items.forEach((def, i) => {
-    if (def.personal || !wearable(def) || !open[i]) return;
-    const worn = (e.gear ?? []).includes(i);
-    const want = (e.outfit ?? []).includes(i);
+  return SLOTS.filter((s) => items.some((d) => d.slot === s.id));
+}
+
+// Что сейчас в слоте у кота: надетое, иначе приписанное. Приписок в одном
+// слоте больше одной не бывает (`Sim::set_outfit` заменяет), надетого — тоже.
+function slotItem(e, slot) {
+  const inSlot = (i) => (meta.items ?? [])[i]?.slot === slot;
+  const worn = (e.gear ?? []).find(inSlot);
+  if (worn !== undefined) return worn;
+  const want = (e.outfit ?? []).find(inSlot);
+  return want === undefined ? -1 : want;
+}
+
+// Слоты снаряжения в строке кота штаба (§12.293): клик открывает список вещей
+// для слота. Здесь, а не только в «Личном деле», потому что в штабе видна цена
+// решения — сила кота и прогноз заказа рядом (§12.80).
+function gearSlots(e) {
+  const slots = slotsInPlay();
+  if (!slots.length) return "";
+  const html = slots.map(({ id, label }) => {
+    const i = slotItem(e, id);
+    const def = i >= 0 ? meta.items[i] : null;
+    const worn = i >= 0 && (e.gear ?? []).includes(i);
+    const want = i >= 0 && (e.outfit ?? []).includes(i);
     const short = want && !worn && (e.outfit_short ?? []).includes(i);
-    const gate = (e.outfit_gates ?? [])[i] ?? "";
-    // Снять можно всегда, кроме кота в поле: запертая отмена оставила бы
-    // приписку несбрасываемой. Ворота считает ядро, тег называет вид.
-    const why = gate === "unskilled" ? skillNeedWhy(def) : OUTFIT_WHY[gate];
-    const act = want
-      ? "Клик — снять: надетое кот положит под ноги"
-      : "Клик — носить: кот сам сходит за вещью";
-    const tip = `${def.label || def.id}: ${gearState(e, i)}. ${why || act}`;
+    const lock = !!def?.personal;
+    const open = slotPick?.id === e.id && slotPick.slot === id;
+    const what = def ? `${def.label || def.id} — ${gearState(e, i)}` : "пусто";
+    const tip = e.away
+      ? `${label}: ${what}. ${OUTFIT_WHY.away}`
+      : `${label}: ${what}. Клик — выбрать`;
     const cls = [
-      "tool crew-gear",
-      worn ? "worn" : want ? "want" : "",
+      "tool crew-slot",
+      !def ? "empty" : worn ? "worn" : "want",
       short ? "short" : "",
-      why ? "off" : "",
+      lock ? "lock" : "",
+      open ? "open" : "",
+      e.away ? "off" : "",
     ]
       .filter(Boolean)
       .join(" ");
-    chips.push(
-      `<button class="${cls}" data-id="${esc(e.id)}" data-item="${i}"` +
-        `${want ? ' data-in="1"' : ""} data-tip="${esc(tip)}">${itemGlyph(i)}</button>`,
+    return (
+      `<button class="${cls}" data-id="${esc(e.id)}" data-slot="${id}" data-tip="${esc(tip)}">` +
+      (def ? itemGlyph(i) : SLOT_ICON[id]) +
+      "</button>"
     );
   });
-  return chips.length ? `<span class="crew-kit">${chips.join("")}</span>` : "";
+  return `<span class="crew-kit">${html.join("")}</span>`;
+}
+
+// Открытый список слота: чей и какой. Один на окно — второй клик по другому
+// слоту его переставляет, повторный по тому же закрывает.
+let slotPick = null;
+
+// Список вещей для слота (§12.293). Узел **один и постоянный** (`raidUi.pop`):
+// строка кота переписывается кадром, и список внутри неё жил бы один кадр —
+// клик по нему умирал бы (§12.84). Строки внутри переписываются только на
+// изменении (`setHtml`), а ловятся делегированием (`onPanelClick`).
+function syncSlotPop() {
+  const pop = raidUi?.pop;
+  if (!pop) return;
+  const e = slotPick && (lastSnap?.entities ?? []).find((c) => c.id === slotPick.id);
+  const anchor =
+    e &&
+    raidWinEl.querySelector(
+      `.crew-slot[data-id="${CSS.escape(e.id)}"][data-slot="${slotPick.slot}"]`,
+    );
+  if (!e || !anchor) {
+    slotPick = null;
+    pop.hidden = true;
+    return;
+  }
+  const slot = SLOTS.find((s) => s.id === slotPick.slot);
+  const cur = slotItem(e, slot.id);
+  const curDef = cur >= 0 ? meta.items[cur] : null;
+  const open = lastSnap?.gear_open ?? [];
+  const rows = [];
+  if (curDef?.personal) {
+    rows.push(
+      `<div class="slot-row lock">${itemGlyph(cur)}<span class="slot-name">${esc(curDef.label || curDef.id)}</span>` +
+        '<span class="slot-meta">личное — не снимается</span></div>',
+    );
+  } else if (curDef) {
+    rows.push(
+      `<button class="tool slot-pick" data-item="${cur}" data-off="1"` +
+        ' data-tip="Снять приписку: надетое кот положит под ноги">' +
+        `<span class="slot-name">Снять</span><span class="slot-meta">${esc(curDef.label || curDef.id)}</span></button>`,
+    );
+  }
+  (meta.items ?? []).forEach((def, i) => {
+    if (def.slot !== slot.id || def.personal || !open[i] || i === cur) return;
+    const gate = (e.outfit_gates ?? [])[i] ?? "";
+    const why = gate === "unskilled" ? skillNeedWhy(def) : OUTFIT_WHY[gate];
+    const st = (lastSnap?.stock ?? [])[i];
+    const have = (st?.stored ?? 0) + (st?.loose ?? 0);
+    const gives = [
+      (def.force ?? 0) > 0 ? `+${def.force} сила` : "",
+      (def.collects ?? 0) > 0 ? "сбор образцов" : "",
+    ].filter(Boolean);
+    rows.push(
+      `<button class="tool slot-pick${why ? " off" : ""}" data-item="${i}"` +
+        ` data-tip="${esc(why || (curDef ? `Заменит: ${curDef.label || curDef.id} ляжет под ноги` : "Кот сам сходит за вещью"))}">` +
+        `${itemGlyph(i)}<span class="slot-name">${esc(def.label || def.id)}</span>` +
+        `<span class="slot-meta">${gives.join(" · ")}${gives.length ? " · " : ""}` +
+        `<span class="${have ? "" : "bad"}">${have ? `на базе ${have}` : "нет на базе"}</span></span></button>`,
+    );
+  });
+  if (rows.length === (curDef ? 1 : 0)) {
+    // Отказ без причины недопустим (§12.53): пустой список называет, почему.
+    rows.push(
+      `<div class="slot-row empty">${curDef ? "Другого для этого слота база ещё не видела" : "База ещё не видела ничего, что носят в этом слоте"}</div>`,
+    );
+  }
+  setHtml(
+    pop,
+    `<div class="slot-head">${esc(e.id)} · ${slot.label}</div>` + rows.join(""),
+  );
+  pop.hidden = false;
+  // Позиция — от кнопки слота, каждым кадром: колонка состава прокручивается,
+  // а строки переставляются узлами.
+  const r = anchor.getBoundingClientRect();
+  const left = `${Math.round(r.right + 6)}px`;
+  const top = `${Math.round(Math.min(r.top, innerHeight - pop.offsetHeight - 8))}px`;
+  if (pop.style.left !== left) pop.style.left = left;
+  if (pop.style.top !== top) pop.style.top = top;
+}
+
+function closeSlotPop() {
+  if (!slotPick) return false;
+  slotPick = null;
+  if (raidUi?.pop) raidUi.pop.hidden = true;
+  return true;
 }
 
 function syncDossierGear(ui, e) {
@@ -14086,6 +14210,7 @@ function closeRaidWindow() {
   readNews("rule", ruleDefsAt("raid"));
   raidWinOpen = false;
   raidWinAt = null;
+  slotPick = null;
   raidUi = null;
   raidWinEl.hidden = true;
   raidWinEl.innerHTML = "";
@@ -14143,9 +14268,11 @@ function buildRaidWindow() {
     '<div class="raid-cards"></div>' +
     "</div>" +
     "</div>" +
+    '<div class="slot-pop" hidden></div>' +
     "</div>";
   const q = (sel) => raidWinEl.querySelector(sel);
   raidUi = {
+    pop: q(".slot-pop"),
     at: `${raidWinAt.x},${raidWinAt.y}`,
     title: q(".raidwin-title"),
     tabs: q(".raidwin-tabs"),
@@ -14378,6 +14505,7 @@ function renderRaidWindow() {
 
   setHtml(raidUi.sum, summaryHtml(raid, node));
   syncCrewRows(node);
+  syncSlotPop();
 
   // Правило узла — строкой **над** списком, а не первой карточкой в нём.
   // Порядок заказов это лестница сложности (индекс в палитре = ступень), и

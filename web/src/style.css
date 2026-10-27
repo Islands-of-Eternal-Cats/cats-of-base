@@ -884,44 +884,105 @@ main#stage.mode-cursor #mode-banner {
   filter: grayscale(1);
   opacity: 0.55;
 }
-/* Фишки снаряжения в строке кота (§12.268): колонка маленьких кнопок между
-   строкой и рацией. Надето — ярко, приписано и не взято — обводкой (красной,
-   если взять негде), не носит — тускло и серо, как незанятая рация. */
+/* Слоты снаряжения в строке кота (§12.293): колонка из двух кнопок между
+   строкой и рацией. Пусто — пунктир и контур слота, надето — глиф в рамке
+   акцента, приписано и не взято — пунктир (красный, если взять негде). */
 .crew-kit {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 3px;
+  gap: 4px;
   flex: 0 0 auto;
 }
-.crew-gear {
+.crew-slot {
   flex: 0 0 auto;
-  padding: 3px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  justify-content: center;
+  align-items: center;
   line-height: 0;
-  filter: grayscale(1);
-  opacity: 0.45;
 }
-.crew-gear svg,
-.crew-gear .chip {
-  width: 16px;
-  height: 16px;
+.crew-slot svg,
+.crew-slot .chip {
+  width: 18px;
+  height: 18px;
 }
-.crew-gear.worn {
-  filter: none;
-  opacity: 1;
+.crew-slot.empty {
+  border-style: dashed;
+  color: var(--muted);
+  opacity: 0.6;
+}
+.crew-slot.worn {
   border-color: var(--accent);
 }
-.crew-gear.want {
-  filter: none;
-  opacity: 0.8;
+.crew-slot.want {
   border-style: dashed;
   border-color: var(--accent);
+  opacity: 0.8;
 }
-.crew-gear.short {
+.crew-slot.short {
   border-color: var(--bad);
 }
-.crew-gear.off {
-  opacity: 0.25;
+.crew-slot.lock {
+  border-color: var(--muted);
+}
+.crew-slot.open {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.crew-slot.off {
+  opacity: 0.35;
+}
+/* Список вещей для слота: всплывает справа от кнопки, поверх окна штаба. */
+.slot-pop {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+  max-width: 320px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.slot-pop[hidden] {
+  display: none;
+}
+.slot-head {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.slot-pop .slot-pick,
+.slot-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  font-size: 12px;
+  text-align: left;
+}
+.slot-pop svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+.slot-name {
+  flex: 0 0 auto;
+}
+.slot-meta {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.slot-row.empty,
+.slot-row.lock {
+  color: var(--muted);
 }
 /* Не умеет «Связь» (§12.291): место держим, значок прячем. */
 .crew-duty.void {

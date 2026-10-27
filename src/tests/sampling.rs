@@ -221,6 +221,9 @@ fn a_collector_does_not_take_a_second_one() {
     let sampler = 3;
     sim.set_item_traits(COLLECTOR, 10, true, false);
     sim.set_item_traits(sampler, 10, false, false);
+    // Правило держит слот (§12.293): оба прибора — «в лапах».
+    sim.set_slot(COLLECTOR, "hand");
+    sim.set_slot(sampler, "hand");
     sim.outfit_all(&[sampler]);
     sim.put_gear("a", &[COLLECTOR]);
     sim.put_item(3, 1, sampler, 1);

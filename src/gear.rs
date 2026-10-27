@@ -39,7 +39,10 @@ use crate::path::Reach;
 /// * `unknown` — база вещь не поняла (§12.114) — ворота на команде, как у правил (§12.93);
 /// * `unskilled` — кот не умеет пользоваться вещью (`skills` у предмета, §12.269):
 ///   пробоотборник — прибор учёного;
-/// * `collector` — у кота уже есть прибор сбора: второй ему ни к чему (§12.256).
+/// * `slot` — слот вещи занят **личной** вещью (§12.293): её не снять, значит и
+///   не заменить. Прочее в слоте не отказ — новая приписка его заменяет
+///   (`Sim::set_outfit`). Отсюда же прежнее правило «второй прибор сбора ни к
+///   чему» (§12.256): анализатор и пробоотборник делят слот «в лапах».
 ///
 /// Снятие спрашивает только первые два: запертая отмена оставила бы приписку
 /// несбрасываемой (довод §12.93).
@@ -61,7 +64,6 @@ pub(crate) fn outfit_gate(
     on: bool,
     away: bool,
     gear: Option<&Gear>,
-    outfit: Option<&Outfit>,
     skills: Option<&Skills>,
 ) -> &'static str {
     if items.personal(item) {
@@ -82,12 +84,13 @@ pub(crate) fn outfit_gate(
     if !items.skilled(item, skill_rules, skills) {
         return "unskilled";
     }
-    // Прибор сбора уже приписан или надет (например, личный анализатор).
-    let collector = items.collects(item)
-        && (gear.is_some_and(|g| g.items().any(|i| i != item && items.collects(i)))
-            || outfit.is_some_and(|o| o.0.iter().any(|&i| i != item && items.collects(i))));
-    if collector {
-        return "collector";
+    // Слот держит личная вещь — снять её нельзя, значит и заменить (§12.293).
+    // Прочее в слоте ворот не спрашивает: приписку заменяет фасад.
+    if gear.is_some_and(|g| {
+        g.items()
+            .any(|i| items.personal(i) && items.same_slot(i, item))
+    }) {
+        return "slot";
     }
     ""
 }
@@ -191,10 +194,11 @@ pub(crate) fn assign_equip(
                 .iter()
                 .copied()
                 .filter(|&item| !gear.is_some_and(|g| g.has(item)) && items.wearable(item, &techs))
-                // Второй прибор сбора коту ни к чему (§12.256): сбор идёт один
-                // на отряд, и пробоотборник на Антенне с её анализатором —
-                // вещь, отнятая у того, кому её не хватило.
-                .filter(|&item| !(items.collects(item) && items.collects_any(gear)))
+                // Слот занят надетым (§12.293): в нём одна вещь. Приписку меняет
+                // фасад вместе с надетым, так что здесь это страховка — для
+                // личной вещи (анализатор Антенны против пробоотборника,
+                // §12.256) и приписок из старого снимка.
+                .filter(|&item| !gear.is_some_and(|g| g.items().any(|i| items.same_slot(i, item))))
                 // Не умеет — не берёт (§12.269). Приписку проверила команда;
                 // здесь страховка для приписок из старого снимка.
                 .filter(|&item| items.skilled(item, &skill_rules, skills))

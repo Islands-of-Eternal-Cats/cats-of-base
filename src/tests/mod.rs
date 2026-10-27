@@ -834,6 +834,9 @@ impl Sim {
                 grants: Vec::new(),
                 collected: String::new(),
                 personal: false,
+                // Слотов тоже нет (§12.293): вещи не спорят друг с другом —
+                // слот ставит `set_slot`.
+                slot: String::new(),
                 // Умения на прибор тоже не нужно (§12.269).
                 skills: Default::default(),
                 // Ворот на надевание в синтетическом мире тоже нет (§12.114):
@@ -2108,6 +2111,15 @@ impl Sim {
         rules.0[item].collected = collected.then_some(0);
     }
 
+    /// Слот вещи на коте (§12.293): в нём одна вещь.
+    fn set_slot(&mut self, item: usize, slot: &str) {
+        let mut rules = self.world.resource_mut::<ItemRules>();
+        if rules.0.len() <= item {
+            rules.0.resize(item + 1, ItemRule::default());
+        }
+        rules.0[item].slot = slot.to_string();
+    }
+
     /// Прибор собирает весь запас на отряд (§12.266), как анализатор Антенны.
     fn set_sweeps(&mut self, item: usize) {
         self.world.resource_mut::<ItemRules>().0[item].sweeps = true;
@@ -2195,7 +2207,6 @@ impl Sim {
             on,
             self.world.get::<Away>(cat).is_some(),
             self.world.get::<Gear>(cat),
-            self.world.get::<Outfit>(cat),
             self.world.get::<Skills>(cat),
         )
     }

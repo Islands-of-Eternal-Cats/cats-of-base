@@ -2062,6 +2062,7 @@ impl Sim {
                     collected: ability_index(&i.collected),
                     personal: i.personal,
                     wear: i.wear,
+                    slot: i.slot.clone(),
                     skills: i
                         .skills
                         .iter()
@@ -5264,21 +5265,45 @@ impl Sim {
             on,
             self.world.get::<Away>(cat_e).is_some(),
             self.world.get::<Gear>(cat_e),
-            self.world.get::<Outfit>(cat_e),
             self.world.get::<Skills>(cat_e),
         );
         if !gate.is_empty() {
             return false;
         }
-        let mut outfit = self.world.get::<Outfit>(cat_e).cloned().unwrap_or_default();
-        if on {
-            if outfit.0.contains(&item) {
-                return true;
-            }
-            outfit.0.push(item);
-            self.world.entity_mut(cat_e).insert(outfit);
+        if !on {
+            self.unoutfit(cat_e, item);
             return true;
         }
+        // В слоте одна вещь (§12.293): новая приписка заменяет прежнюю — и
+        // приписку, и надетое (оно ляжет под ноги). Отказывать было бы хуже:
+        // игрок выбрал вещь в слот, и «сперва снимите старую» — второй клик
+        // без второго решения.
+        let rivals: Vec<usize> = {
+            let items = self.world.resource::<ItemRules>();
+            let outfit = self.world.get::<Outfit>(cat_e);
+            let gear = self.world.get::<Gear>(cat_e);
+            outfit
+                .into_iter()
+                .flat_map(|o| o.0.iter().copied())
+                .chain(gear.into_iter().flat_map(|g| g.items()))
+                .filter(|&i| items.same_slot(i, item))
+                .collect()
+        };
+        for rival in rivals {
+            self.unoutfit(cat_e, rival);
+        }
+        let mut outfit = self.world.get::<Outfit>(cat_e).cloned().unwrap_or_default();
+        if !outfit.0.contains(&item) {
+            outfit.0.push(item);
+            self.world.entity_mut(cat_e).insert(outfit);
+        }
+        true
+    }
+
+    /// Снять приписку вещи (§12.268): идущий за ней больше не идёт, надетое —
+    /// под ноги. Повторный вызов ничего не делает.
+    fn unoutfit(&mut self, cat_e: Entity, item: usize) {
+        let mut outfit = self.world.get::<Outfit>(cat_e).cloned().unwrap_or_default();
         outfit.0.retain(|&i| i != item);
         match outfit.0.is_empty() {
             true => self.world.entity_mut(cat_e).remove::<Outfit>(),
@@ -5309,7 +5334,6 @@ impl Sim {
                 self.drop_stack(x, y, item, 1);
             }
         }
-        true
     }
 
     /// Приписать кота к узлу связи (§12.60): пока идёт вылазка этого узла, он
@@ -6072,7 +6096,6 @@ impl Sim {
                     outfit_gates: (0..items.0.len())
                         .map(|i| {
                             let on = !outfit.contains(&i);
-                            let o = Outfit(outfit.clone());
                             crate::gear::outfit_gate(
                                 items,
                                 techs,
@@ -6082,7 +6105,6 @@ impl Sim {
                                 on,
                                 away.is_some(),
                                 gear,
-                                Some(&o),
                                 skills,
                             )
                             .to_string()

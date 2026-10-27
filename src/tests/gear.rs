@@ -413,17 +413,71 @@ fn a_cat_away_keeps_its_outfit() {
     assert_eq!(sim.outfit_of("a"), vec![SUIT]);
 }
 
-/// Второй прибор сбора коту ни к чему (§12.256): ворота называют причину.
+/// Слот, занятый личной вещью, не заменить (§12.293): её не снять, и ворота
+/// называют причину. Отсюда же «второй прибор сбора ни к чему» (§12.256) —
+/// анализатор и пробоотборник делят слот «в лапах».
 #[test]
-fn a_collector_cannot_be_given_a_second_sampler() {
+fn a_personal_item_locks_its_slot() {
     let mut sim = sim_with_store_and_gate();
-    sim.set_item_traits(2, 10, false, false);
+    sim.set_item_traits(2, 10, true, false);
     sim.set_item_traits(3, 10, false, false);
+    sim.set_slot(2, "hand");
+    sim.set_slot(3, "hand");
     sim.put_gear("a", &[2]);
     sim.put_item(5, 1, 3, 1); // пробоотборник база видела
     sim.tick_n(1);
-    assert_eq!(sim.outfit_gate("a", 3, true), "collector");
+    assert_eq!(sim.outfit_gate("a", 3, true), "slot");
     assert!(!sim.set_outfit("a", 3, true));
+    assert_eq!(sim.outfit_gate("b", 3, true), "", "у соседа слот свободен");
+}
+
+/// В слоте одна вещь (§12.293): новая приписка заменяет прежнюю, а надетое
+/// ложится под ноги — материал не исчезает (инвариант 8).
+#[test]
+fn a_new_item_replaces_the_one_in_its_slot() {
+    let mut sim = sim_with_store_and_gate();
+    let coat = 3;
+    sim.set_force(coat, 2);
+    sim.set_slot(SUIT, "body");
+    sim.set_slot(coat, "body");
+    sim.put_item(5, 1, SUIT, 3);
+    sim.put_item(5, 1, coat, 1);
+    sim.tick_n(15);
+    assert_eq!(sim.gear_of("a"), vec![SUIT], "сперва одет в комбинезон");
+
+    assert_eq!(sim.outfit_gate("a", coat, true), "");
+    assert!(sim.set_outfit("a", coat, true));
+    assert_eq!(
+        sim.outfit_of("a"),
+        vec![coat],
+        "приписка заменена, а не дополнена"
+    );
+    assert!(sim.gear_of("a").is_empty(), "комбинезон снят");
+    let (x, y) = sim.pos_of("a");
+    assert_eq!(sim.item_at(x, y, SUIT), 1, "и лежит под ногами");
+
+    sim.tick_n(15);
+    assert_eq!(sim.gear_of("a"), vec![coat], "за новой вещью сходил сам");
+}
+
+/// Вещи разных слотов друг другу не мешают (§12.293): одежда и прибор в лапах
+/// носятся вместе.
+#[test]
+fn items_of_different_slots_are_worn_together() {
+    let mut sim = sim_with_store_and_gate();
+    let sampler = 3;
+    sim.set_item_traits(sampler, 10, false, false);
+    sim.set_slot(SUIT, "body");
+    sim.set_slot(sampler, "hand");
+    sim.put_item(5, 1, SUIT, 3);
+    sim.put_item(5, 1, sampler, 1);
+    sim.tick_n(1);
+    assert!(sim.set_outfit("a", sampler, true));
+    assert_eq!(sim.outfit_of("a"), vec![SUIT, sampler]);
+    sim.tick_n(30);
+    let mut worn = sim.gear_of("a");
+    worn.sort_unstable();
+    assert_eq!(worn, vec![SUIT, sampler]);
 }
 
 /// Пробоотборник — прибор учёного (§12.269): коту без «Науки» его не
@@ -663,4 +717,33 @@ fn the_shipped_antenna_keeps_her_analyzer() {
     assert!(sim.outfit_of("antenna").is_empty());
     assert!(!sim.set_outfit("antenna", analyzer, false), "не снимается");
     assert_eq!(sim.gear_of("antenna"), vec![analyzer]);
+}
+
+/// Слоты на боевом рулсете (§12.293): у каждой надеваемой вещи слот есть и он
+/// из двух известных виду (`body`, `hand`), а приборы сбора делят **один** —
+/// на этом стоит правило «второй прибор ни к чему» (§12.256). Вещь без слота
+/// ни с чем не спорит, и кот надел бы два комбинезона разом.
+#[test]
+fn the_shipped_ruleset_puts_every_wearable_in_a_slot() {
+    let sim = Sim::new(CORE).expect("рулсет");
+    let items = sim.world.resource::<ItemRules>();
+    let mut hand = None;
+    for (i, r) in items.0.iter().enumerate() {
+        if !items.equippable(i) {
+            assert!(r.slot.is_empty(), "предмет {i}: слот у ненадеваемого");
+            continue;
+        }
+        assert!(
+            r.slot == "body" || r.slot == "hand",
+            "предмет {i}: слот «{}» вид не знает",
+            r.slot
+        );
+        if r.collects > 0 {
+            assert_eq!(
+                *hand.get_or_insert(r.slot.clone()),
+                r.slot,
+                "приборы сбора в разных слотах"
+            );
+        }
+    }
 }

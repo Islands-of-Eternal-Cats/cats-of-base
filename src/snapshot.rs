@@ -883,7 +883,7 @@ pub(crate) struct EntitySnap {
     /// здесь не бывает никогда.
     pub(crate) outfit: Vec<usize>,
     /// Почему нельзя переключить приписку — тег на **каждый** предмет палитры
-    /// (`gear::outfit_gate`): `personal` · `away` · `unknown` · `collector`,
+    /// (`gear::outfit_gate`): `personal` · `away` · `unseen` · `unknown` · `unskilled` · `slot`,
     /// пустая строка — можно. Слово по тегу подбирает вид (§12.196).
     pub(crate) outfit_gates: Vec<String>,
     /// Приписанное, но не надетое, за которым некуда сходить — ни одной кучи
