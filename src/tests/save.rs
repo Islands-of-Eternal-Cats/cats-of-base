@@ -185,7 +185,7 @@ fn every_component_is_either_saved_or_skipped() {
         .world
         .components()
         .iter_registered()
-        .map(|info| info.name().to_string())
+        .map(|(_, info)| info.name().to_string())
         .filter(|name| name.starts_with("sp_sim::"))
         .map(|name| short_name(&name).to_string())
         .collect();
