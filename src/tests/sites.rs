@@ -873,3 +873,73 @@ fn the_shipped_ruleset_lets_the_first_squad_answer_a_fresh_blight() {
         crew.len(),
     );
 }
+
+// --- дальность на карте (§12.292) -----------------------------------------
+
+/// Карта штаба не врёт про дальность (§12.292): путь от базы до участка — до
+/// `at` и дальше вдоль `road` — в масштабе `pace` сходится с дорогой участка в
+/// одну сторону. Ядро координат не читает, поэтому разойтись им ничто не
+/// мешает, кроме этого сторожа: сдвинутый кружок молча сделал бы «Свалку»
+/// на экране дальше «Логова», а значок отряда шёл бы к ней медленнее.
+///
+/// Разбирает **сам YAML**, а не мир `Sim::new`, по доводу сторожа дерева
+/// (§12.134): конструктор дорогу с участка на заказ уже перенёс, и
+/// продублированная в заказе дорога в нём не видна.
+#[test]
+fn the_shipped_ruleset_draws_roads_to_scale() {
+    let rs: crate::ruleset::Ruleset =
+        serde_yaml::from_str(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let pace = rs.outskirts.pace;
+    assert!(pace > 0, "у карты нет масштаба — сторожить нечего");
+    let home = rs.outskirts.home;
+    let dist = |a: [f32; 2], b: [f32; 2]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
+
+    for s in rs.sites.iter().filter(|s| s.travel > 0) {
+        let mut len = dist(home, s.at);
+        let mut from = s.at;
+        for &p in &s.road {
+            len += dist(from, p);
+            from = p;
+        }
+        let drawn = len * pace as f32;
+        let road = s.travel as f32 / 2.0;
+        assert!(
+            (drawn - road).abs() <= pace as f32 * 0.1,
+            "«{}»: на карте {drawn:.0} тиков в одну сторону, а дорога {road:.0}",
+            s.label
+        );
+    }
+    for m in rs.missions.iter().filter(|m| !m.site.is_empty()) {
+        let site = rs
+            .sites
+            .iter()
+            .find(|s| s.id == m.site)
+            .expect("участок заказа");
+        assert!(
+            site.travel > 0,
+            "у «{}» есть заказ «{}», а дороги до него нет",
+            site.label,
+            m.label
+        );
+        assert_eq!(
+            m.travel, 0,
+            "«{}» пишет свою дорогу, а её пишет участок «{}»",
+            m.label, site.label
+        );
+    }
+}
+
+/// Дорога заказа на участке приходит с участка (§12.292) — и в правила, и в
+/// палитру `meta`, которую читает вид: разные числа там значили бы срок в
+/// штабе, не совпадающий с тем, что отряд проходит.
+#[test]
+fn the_shipped_ruleset_takes_mission_roads_from_sites() {
+    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let rules = sim.world.resource::<MissionRules>();
+    for (i, m) in sim.missions.iter().enumerate() {
+        if let Some(site) = sim.sites.iter().find(|s| s.id == m.site) {
+            assert_eq!(m.travel, site.travel, "палитра: «{}»", m.label);
+            assert_eq!(rules.0[i].travel, site.travel, "правила: «{}»", m.label);
+        }
+    }
+}

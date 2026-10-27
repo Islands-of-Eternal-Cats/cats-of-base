@@ -264,6 +264,8 @@ fn sim_from(rows: &[&str]) -> Sim {
         // Палитры карты пусты, как и всё остальное: у схемы `sim_from` карты
         // внешнего мира нет (§12.198), её заводят `set_site` и `set_blight_kind`.
         sites: Vec::new(),
+        // Карты у схемы нет (§12.292): ни базы на ней, ни масштаба.
+        outskirts: Default::default(),
         blights: Vec::new(),
         recruits: Vec::new(),
         research: Vec::new(),
@@ -3038,6 +3040,21 @@ impl Sim {
             return None;
         }
         Some(crate::missions::phase(travel, span, left).tag())
+    }
+
+    /// Докуда отряд дошёл по пути к месту, в тысячных (§12.292) — тем же
+    /// выражением, каким значок ставит снимок. `None` — миссии нет или отряд
+    /// ещё не ушёл.
+    fn mission_way(&mut self) -> Option<i32> {
+        let mut q = self.world.query::<&Mission>();
+        let (span, left, travel) = q
+            .iter(&self.world)
+            .next()
+            .map(|m| (m.span, m.left, m.travel))?;
+        if span == 0 {
+            return None;
+        }
+        Some(crate::missions::way(travel, span, left))
     }
 
     /// Место брифинга миссии; `None` — миссии нет.

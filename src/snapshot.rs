@@ -6,8 +6,8 @@
 use serde::Serialize;
 
 use crate::ruleset::{
-    AbilityDef, BlightDef, FactionDef, GoalDef, ItemDef, MissionDef, PerkDef, RecipeDef,
-    RecruitDef, ResearchDef, SiteDef, SkillDef, StatDef, TileDef,
+    AbilityDef, BlightDef, FactionDef, GoalDef, ItemDef, MissionDef, OutskirtsDef, PerkDef,
+    RecipeDef, RecruitDef, ResearchDef, SiteDef, SkillDef, StatDef, TileDef,
 };
 
 #[derive(Serialize)]
@@ -29,6 +29,8 @@ pub(crate) struct MapMeta {
     /// один раз, как все палитры, — в снимке от участка остаётся только
     /// состояние очага на нём. Пусто = карты в этом рулсете нет.
     pub(crate) sites: Vec<SiteDef>,
+    /// База на карте и масштаб карты (§12.292): откуда вид ведёт путь отряда.
+    pub(crate) outskirts: OutskirtsDef,
     pub(crate) blights: Vec<BlightDef>,
     /// Палитра возможностей отряда (§12.260): в снимке от них остаются индексы
     /// (`lacks` у узла, `abilities` у кота), слово — отсюда.
@@ -1178,6 +1180,9 @@ pub(crate) struct MissionSnap {
     ///
     /// Тегом, а не словом: подписи — дело вида (§12.46).
     pub(crate) phase: &'static str,
+    /// Докуда дошли по пути к месту, в тысячных (§12.292, `missions::way`):
+    /// по ней значок отряда стоит на карте штаба. Ноль — отряд ещё на базе.
+    pub(crate) way: i32,
     /// Кто-то из отряда спит, и вылазка ждёт его (§12.51, §12.23). Уходит
     /// наружу отдельно от `job` в карточке кота: сбор ничем не ограничен по
     /// времени, и «собираются у шлюза» под неподвижным отрядом читается как
