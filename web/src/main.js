@@ -11745,11 +11745,7 @@ function buildDossier(roster) {
   list.appendChild(ui.gearHead);
   ui.gear = [];
   (meta.items ?? []).forEach((def, i) => {
-    const equippable =
-      (def.force ?? 0) > 0 ||
-      (def.collects ?? 0) > 0 ||
-      (def.grants ?? []).length > 0;
-    if (!equippable) return;
+    if (!wearable(def)) return;
     const row = document.createElement("div");
     row.className = "dos-skill";
     const live = document.createElement("div");
@@ -11815,6 +11811,16 @@ function wearLeft(e, item) {
   return k < 0 ? 0 : ((e.gear_left ?? [])[k] ?? 0);
 }
 
+// Надевается ли вещь вообще — по свойствам из `meta`: сила, сбор, возможность.
+// Одно выражение на «Личное дело» и фишки штаба.
+function wearable(def) {
+  return (
+    (def.force ?? 0) > 0 ||
+    (def.collects ?? 0) > 0 ||
+    (def.grants ?? []).length > 0
+  );
+}
+
 // Состояние приписанной вещи словом (§12.268) — **одно выражение** на строку
 // «Личного дела» и на фишку в штабе: разойдись они, и одна сказала бы «сходит
 // сам» там, где другая говорит «нет на базе».
@@ -11850,7 +11856,7 @@ function gearChips(e) {
   const open = lastSnap?.gear_open ?? [];
   const chips = [];
   items.forEach((def, i) => {
-    if (def.personal || !open[i]) return;
+    if (def.personal || !wearable(def) || !open[i]) return;
     const worn = (e.gear ?? []).includes(i);
     const want = (e.outfit ?? []).includes(i);
     const short = want && !worn && (e.outfit_short ?? []).includes(i);
