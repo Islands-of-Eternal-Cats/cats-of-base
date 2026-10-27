@@ -2860,6 +2860,9 @@ main#stage.mode-cursor #mode-banner {
   font-weight: 700;
   text-anchor: middle;
 }
+.rule-tag {
+  cursor: pointer;
+}
 .rule-tag.paused {
   opacity: 0.45;
 }

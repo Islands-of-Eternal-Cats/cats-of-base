@@ -9915,6 +9915,10 @@ function syncRaidMap() {
       box.setAttribute("x", String(-w / 2));
     }
     rule.classList.toggle("paused", rs.length > 0 && rs.every((r) => !r.on));
+    // Адреса столов — на самой плашке: клик по ней переводит окно на отряд
+    // правила (§12.295), а считать их второй раз в обработчике незачем.
+    const rnodes = rs.map((r) => `${nodes[r.n - 1].x},${nodes[r.n - 1].y}`).join(";");
+    if (rule.dataset.nodes !== rnodes) rule.dataset.nodes = rnodes;
     liveTitle(
       rule,
       rs
@@ -14462,6 +14466,18 @@ function buildSiteGraph(holder) {
   // стоит в колонке справа. Закрытие окна остаётся вторыми воротами — для
   // участка, на который игрок не кликал, но чью карточку видел.
   marks.forEach((g, i) => {
+    // Плашка правила «↻N» (§12.295) — дорога к отряду, который сюда ходит:
+    // окно переходит на его вкладку. Это осмотр, как сама вкладка, поэтому
+    // мимо `sendAction`. Правил на участке бывает несколько («↻1,2») — тогда
+    // клик листает их по кругу от открытого отряда. Выбор участка при этом
+    // остаётся: событие всплывает до кружка ниже.
+    g.querySelector(".map-rule").onmousedown = (e) => {
+      const list = (e.currentTarget.dataset.nodes || "").split(";").filter(Boolean);
+      if (!list.length) return;
+      const now = raidWinAt ? `${raidWinAt.x},${raidWinAt.y}` : "";
+      const [x, y] = list[(list.indexOf(now) + 1) % list.length].split(",").map(Number);
+      raidWinAt = { x, y };
+    };
     g.onmousedown = () => {
       mapPick = i;
       readNews(
