@@ -926,6 +926,7 @@ main#stage.mode-cursor #mode-banner {
 }
 .crew-slot.lock {
   border-color: var(--muted);
+  cursor: default;
 }
 .crew-slot.open {
   box-shadow: 0 0 0 2px var(--accent);

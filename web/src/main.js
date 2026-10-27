@@ -488,7 +488,7 @@ onPanelClick(raidWinEl, ".crew-duty", (b) => {
 // Слот снаряжения (§12.293): открывает список вещей для слота, повторный клик
 // закрывает. Это осмотр, а не команда — мимо `sendAction`.
 onPanelClick(raidWinEl, ".crew-slot", (b) => {
-  if (b.classList.contains("off")) return;
+  if (b.classList.contains("off") || b.classList.contains("lock")) return;
   const same = slotPick?.id === b.dataset.id && slotPick.slot === b.dataset.slot;
   slotPick = same ? null : { id: b.dataset.id, slot: b.dataset.slot };
   renderRaidWindow();
@@ -11942,9 +11942,13 @@ function gearSlots(e) {
     const lock = !!def?.personal;
     const open = slotPick?.id === e.id && slotPick.slot === id;
     const what = def ? `${def.label || def.id} — ${gearState(e, i)}` : "пусто";
-    const tip = e.away
-      ? `${label}: ${what}. ${OUTFIT_WHY.away}`
-      : `${label}: ${what}. Клик — выбрать`;
+    // Личная вещь (§12.256) держит слот насовсем: выбирать нечего, и клик по
+    // такому слоту не открывает ничего — подсказка только называет вещь.
+    const tip = lock
+      ? `${label}: ${def.label || def.id} — личная вещь, слот не меняется`
+      : e.away
+        ? `${label}: ${what}. ${OUTFIT_WHY.away}`
+        : `${label}: ${what}. Клик — выбрать`;
     const cls = [
       "tool crew-slot",
       !def ? "empty" : worn ? "worn" : "want",
