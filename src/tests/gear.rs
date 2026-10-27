@@ -845,13 +845,28 @@ fn a_porter_to_the_storage_dresses_on_the_way() {
     assert_eq!(sim.carrying_of("a"), 2, "два комбинезона несёт дальше");
 }
 
-/// Груз, обещанный площадке, не надевают (§12.293): он чужой.
+/// Свою вещь кот площадке не уступает (§12.293): площадке всё равно, какую
+/// штуку привезут, она дождётся другой.
 #[test]
-fn a_porter_to_a_site_keeps_the_load() {
+fn a_porter_to_a_site_keeps_its_own_outfit() {
     let mut sim = sim_with_store_and_gate();
     sim.give_load("a", SUIT, 1);
     let other = sim.entity_of("b");
     sim.send_load("a", HaulTo::Site(other));
+
+    sim.tick_n(1);
+    assert_eq!(sim.gear_of("a"), vec![SUIT], "надел из лап");
+    assert!(!sim.has_haul("a"), "ходка на площадку снята");
+}
+
+/// Покупателю — уступает (§12.293): сделку не отменить, и забронированный
+/// товар держит пост (§12.44, §12.50).
+#[test]
+fn a_porter_to_a_buyer_gives_the_load_away() {
+    let mut sim = sim_with_store_and_gate();
+    sim.give_load("a", SUIT, 1);
+    let other = sim.entity_of("b");
+    sim.send_load("a", HaulTo::Sale(other));
 
     sim.tick_n(1);
     assert!(sim.gear_of("a").is_empty(), "не надел");
