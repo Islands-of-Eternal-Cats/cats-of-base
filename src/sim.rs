@@ -6149,6 +6149,9 @@ impl Sim {
                     // опытный это боец или одетый новичок, а разойтись с
                     // подписью она теперь не может.
                     raid_force: raid_skill + gear_force + 1,
+                    raid_force_next: raid_skill
+                        + crate::gear::planned_force(items, gear, &outfit)
+                        + 1,
                     raid_skill,
                     gear_force,
                     abilities: bits(items.grants_of_gear(gear)),

@@ -747,3 +747,42 @@ fn the_shipped_ruleset_puts_every_wearable_in_a_slot() {
         }
     }
 }
+
+/// Штаб пишет «станет» (§12.293): сила по приписанному считается до того, как
+/// кот за ним сходил, и сходится с надетым, когда дошёл. Замена в слоте силу
+/// отнимает, а личная вещь остаётся в счёте.
+#[test]
+fn planned_force_counts_the_outfit_before_it_is_worn() {
+    let mut sim = sim_with_store_and_gate();
+    let coat = 3;
+    let kit = 4;
+    sim.set_force(coat, 3);
+    sim.set_force(kit, 2);
+    sim.set_slot(SUIT, "body");
+    sim.set_slot(coat, "body");
+    sim.set_item_traits(kit, 10, true, false);
+    sim.set_force(kit, 2);
+    sim.set_slot(kit, "hand");
+    sim.put_gear("a", &[kit]);
+    sim.put_item(5, 1, SUIT, 3);
+    sim.put_item(5, 1, coat, 1);
+
+    assert_eq!(
+        sim.planned_force_of("a"),
+        1 + 2,
+        "комбинезон приписан, личная вещь в счёте"
+    );
+    sim.tick_n(15);
+    assert_eq!(
+        sim.planned_force_of("a"),
+        1 + 2,
+        "надел — «станет» сошлось с надетым"
+    );
+
+    assert!(sim.set_outfit("a", coat, true));
+    assert_eq!(
+        sim.planned_force_of("a"),
+        3 + 2,
+        "замена в слоте: старая вещь не в счёте"
+    );
+}

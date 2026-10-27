@@ -2034,7 +2034,7 @@ note_seen → check_goals`.
 
 ## Тесты
 
-967 тестов живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `jobs` · `demolition` ·
+968 тестов живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `jobs` · `demolition` ·
 `hauling` · `tidying` · `skills` · `stats` · `study` · `research` · `needs` · `news` · `food` · `health` · `items` · `layers` · `missions` · `muster` ·
 `captivity` · `fame` · `factions` · `trade` · `terrain` · `timeline` · `gear` · `crafting` · `crowd` · `panel` ·
 `goals` · `record` · `relay` · `sampling` · `save` · `seen` · `structures` · `tutoring` · `bins` · `tech_tree` · `wiki`); общие хелперы и сборка мира —
@@ -2101,7 +2101,7 @@ let mut sim = sim_from(&["#####", "#a..#", "#####"]); // '#' пустота, '.'
   по знакомству с предметом (§12.131) — `seen` (видела ли база предмет хоть раз) и `item_index`; по таймлайну — `set_event`, `set_reveal`,
   `happened`, `note_revealed`, `note_requires`, `note_ready`, `without_timeline`; по снаряжению —
   `set_force`, `outfit_all` (приписать всем котам мимо ворот), `outfit_of`, `outfit_gate`,
-  `set_wear`, `wear_left`, `set_personal`, `set_slot` (§12.293), `set_recruit_gear`, `gear_of`, `is_equipping`, `take_item`; по клетке — `set_solid`,
+  `set_wear`, `wear_left`, `set_personal`, `set_slot` и `planned_force_of` (сила по приписанному, §12.293), `set_recruit_gear`, `gear_of`, `is_equipping`, `take_item`; по клетке — `set_solid`,
   `solid_tiles`, `capacity_of`, по зонированию (§12.157) — `set_quiet` · `set_noisy` ·
   `set_clean` · `set_dirty` и `zoning_clashes` (пары соседей на карте, которые не уживаются:
   читается ровно как само правило, поэтому годится и сквозному тесту, и сторожу на боевом

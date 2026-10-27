@@ -95,6 +95,32 @@ pub(crate) fn outfit_gate(
     ""
 }
 
+/// Что будет на коте, когда он доберёт приписанное (§12.293): надетое, которое
+/// приписка не вытесняет из слота, плюс сама приписка. Личная вещь остаётся
+/// всегда — её слот приписка занять не может (`outfit_gate`).
+pub(crate) fn planned_gear(items: &ItemRules, gear: Option<&Gear>, outfit: &[usize]) -> Vec<usize> {
+    let mut out: Vec<usize> = gear
+        .into_iter()
+        .flat_map(|g| g.items())
+        .filter(|&w| !outfit.iter().any(|&o| items.same_slot(o, w)))
+        .collect();
+    for &o in outfit {
+        if !out.contains(&o) {
+            out.push(o);
+        }
+    }
+    out
+}
+
+/// Сила вещей, которые будут на коте, когда он доберёт приписанное (§12.293).
+/// Тем же `force_of`, что сила надетого (`force_of_gear`), — инвариант 14.
+pub(crate) fn planned_force(items: &ItemRules, gear: Option<&Gear>, outfit: &[usize]) -> i32 {
+    planned_gear(items, gear, outfit)
+        .into_iter()
+        .map(|i| items.force_of(i))
+        .sum()
+}
+
 /// На сколько выходов изнашивается вещь за вылазку с долей `share` (§12.268).
 ///
 /// Та же доля, что у добычи и ран (инвариант 14), — новой арифметики исхода нет:

@@ -2111,6 +2111,18 @@ impl Sim {
         rules.0[item].collected = collected.then_some(0);
     }
 
+    /// Сила надетого, когда кот доберёт приписанное (§12.293) — тем же
+    /// выражением, что снимок кладёт в `raid_force_next`.
+    fn planned_force_of(&mut self, unit: &str) -> i32 {
+        let cat = self.entity_of(unit);
+        let outfit = self.outfit_of(unit);
+        crate::gear::planned_force(
+            self.world.resource::<ItemRules>(),
+            self.world.get::<Gear>(cat),
+            &outfit,
+        )
+    }
+
     /// Слот вещи на коте (§12.293): в нём одна вещь.
     fn set_slot(&mut self, item: usize, slot: &str) {
         let mut rules = self.world.resource_mut::<ItemRules>();

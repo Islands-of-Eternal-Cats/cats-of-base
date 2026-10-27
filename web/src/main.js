@@ -4648,9 +4648,24 @@ function crewList(snap, x, y) {
 // отряда считается одним выражением на прогноз и на уход (инвариант 14), а
 // какой параметр делает проводника — знание ядра, а не JS.
 function fieldLine(e, led, node, guide) {
-  const parts = [
-    `<b data-tip="${esc(forceSplit(e))}">+${e.raid_force ?? 0}</b> сила`,
-  ];
+  // Приписано, но ещё не надето (§12.293): что кот наденет, и какой станет его
+  // сила, когда доберёт. «Станет» считает ядро (`raid_force_next`) тем же
+  // выражением, что нынешнюю силу, — здесь только подпись. Взять негде —
+  // об этом говорит своя красная строка ниже, здесь такие вещи не повторяем.
+  const short = e.outfit_short ?? [];
+  const pending = (e.outfit ?? []).filter(
+    (i) => !(e.gear ?? []).includes(i) && !short.includes(i),
+  );
+  const now = e.raid_force ?? 0;
+  const next = e.raid_force_next ?? now;
+  const force =
+    next !== now && !e.away
+      ? `<b data-tip="${esc(forceSplit(e))}">+${now}</b> → ` +
+        `<b class="${next > now ? "cut" : "bad"}" data-tip="${esc(
+          `Станет, когда наденет приписанное${pending.length ? `: ${pending.map(itemLabel).join(", ")}` : ""}`,
+        )}">+${next}</b> сила`
+      : `<b data-tip="${esc(forceSplit(e))}">+${now}</b> сила`;
+  const parts = [force];
   // Проводник помечается в двух видах, и оба нужны: кто ведёт **сейчас** (это
   // говорит ядро — `node.guide`, там же разрешается ничья) и кто поведёт, если
   // его взять. Второе и есть ответ на «кого добавить»: опасность делится на
@@ -4745,9 +4760,13 @@ function fieldLine(e, led, node, guide) {
   // форме» видно занятием в той же строке. Сырые значения параметров живут в
   // карточке кота (§12.42) — там они отвечают на другой вопрос, про потолки
   // навыков, и там число уместно.
+  if (pending.length && !node?.busy && !e.away) {
+    parts.push(
+      `<span class="toil">наденет: ${pending.map((i) => esc(itemLabel(i))).join(", ")}</span>`,
+    );
+  }
   // Приписанное, за чем некуда сходить (§12.268): причина словом, а не голый
   // кот в отряде (§12.53). Чинится вылазкой, покупкой или мастерской.
-  const short = e.outfit_short ?? [];
   if (short.length && !node?.busy) {
     parts.push(
       `<b class="bad">нет на базе: ${short.map((i) => esc(itemLabel(i))).join(", ")}</b>`,
