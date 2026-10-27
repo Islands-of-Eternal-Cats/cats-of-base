@@ -9633,11 +9633,15 @@ function raidGate(i, node) {
 // Латать это флагом «выбирал ли руками» не пришлось ровно потому, что «авто» —
 // это отдельное состояние выбора, а не его отсутствие.
 let mapPick = -1;
-// Радиус кружка и шаг сетки в единицах SVG. Числа условные: `at` у участка —
-// подача, а не механика (§12.198), и расстояние между кружками ни на что не
-// влияет.
+// Радиус кружка и шаг сетки в единицах SVG. `at` у участка — подача, а не
+// механика (§12.198), но с §12.292 карта держит масштаб: единица полотна —
+// `outskirts.pace` тиков пути, и шаг у обеих осей один.
 const SITE_R = 22;
 const SITE_STEP = 78;
+// Путь от базы к каждому участку в координатах полотна (§12.292): база, `at`
+// и изгибы дороги. Собирается вместе с графом (`buildSiteGraph`), читается
+// значками отрядов (`syncRaidTrips`).
+let siteTrails = [];
 
 // Какой участок выбран прямо сейчас: названный игроком или, пока он не называл,
 // самый запущенный очаг. Одно выражение на карту, на кнопку заказа и на
@@ -9715,6 +9719,71 @@ function siteOfRaid(i) {
   return -1;
 }
 
+// Точка на ломаной на доле `f` её длины (0…1): там стоит значок отряда.
+function pointAlong(trail, f) {
+  const seg = trail.slice(1).map((p, k) => Math.hypot(p[0] - trail[k][0], p[1] - trail[k][1]));
+  let left = Math.max(0, Math.min(1, f)) * seg.reduce((a, b) => a + b, 0);
+  for (let k = 0; k < seg.length; k++) {
+    if (left <= seg[k] || k === seg.length - 1) {
+      const t = seg[k] > 0 ? Math.min(1, left / seg[k]) : 0;
+      const [a, b] = [trail[k], trail[k + 1]];
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    }
+    left -= seg[k];
+  }
+  return trail[0];
+}
+
+// Значки ушедших отрядов на карте штаба (§12.292): кружок с номером отряда на
+// пути от базы к участку и пунктир самого пути. Где стоять, считает ядро
+// (`MissionSnap::way`, тем же разложением срока, что и стадия, — инвариант 14);
+// здесь только длина ломаной. Узлы живут по отряду и правятся на месте, как
+// всё в штабе (§12.118): пересборка съедала бы клик по соседнему кружку.
+function syncRaidTrips() {
+  const layer = raidUi?.mapCol?.querySelector(".map-trips");
+  if (!layer) return;
+  const seen = new Set();
+  missionsOut.forEach((m) => {
+    const trail = siteTrails[m.site];
+    // Пунктир пути виден уже на сборе: цель занята с заявки, а не с ухода.
+    if (m.site < 0 || !trail) return;
+    const key = `${m.x},${m.y}`;
+    seen.add(key);
+    let g = layer.querySelector(`[data-key="${key}"]`);
+    if (!g) {
+      g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("class", "map-trip");
+      g.dataset.key = key;
+      g.innerHTML =
+        `<polyline class="map-trip-path"/>` +
+        `<g class="map-trip-mark squad-tag"><rect x="-9" y="-9" width="18" height="18" rx="4"/><text y="4"></text></g>`;
+      layer.appendChild(g);
+    }
+    const path = trail.map((p) => p.join(",")).join(" ");
+    const line = g.querySelector(".map-trip-path");
+    if (line.getAttribute("points") !== path) line.setAttribute("points", path);
+    const n = nodes.findIndex((o) => o.x === m.x && o.y === m.y) + 1;
+    const label = g.querySelector("text");
+    if (label.textContent !== String(n)) label.textContent = String(n);
+    const [x, y] = pointAlong(trail, (m.way ?? 0) / 1000);
+    const at = `translate(${x.toFixed(1)},${y.toFixed(1)})`;
+    const mark = g.querySelector(".map-trip-mark");
+    if (mark.getAttribute("transform") !== at) mark.setAttribute("transform", at);
+    // Дошедший до точки отряд значком на пути не рисуется: он стоит в кружке,
+    // где уже есть плашка «сюда назначен», и две плашки с одним номером
+    // читались бы двумя отрядами. У участка-дороги конец пути — не кружок,
+    // там значок остаётся.
+    // Отряд ещё на базе (собирается или только вышел) не рисуется тоже: где он,
+    // и так ясно, а цель уже названа плашкой у кружка и пунктиром пути.
+    const there = m.way >= 1000 && trail.length === 2;
+    const show = there || !(m.way > 0) ? "none" : "";
+    if (mark.style.display !== show) mark.style.display = show;
+    const what = (meta?.missions ?? [])[m.def]?.label ?? "";
+    liveTitle(mark, `Отряд ${n} — ${RAID_PHASE[m.phase] ?? "сбор"}: ${what}`);
+  });
+  for (const g of [...layer.children]) if (!seen.has(g.dataset.key)) g.remove();
+}
+
 // Перекрасить карту под нынешний снимок. Узлы уже стоят (`buildSiteGraph`),
 // меняются только заливка, ступень, метка отряда и подпись под графом.
 function syncRaidMap() {
@@ -9724,8 +9793,8 @@ function syncRaidMap() {
   if (mapPick >= raidUi.marks.length) mapPick = -1;
   const pick = pickedSite();
   // Кто куда идёт: цель вылазки заморожена в заявке (§12.22), и по ней участок
-  // метится именем отряда. Своих на карте не видно — половина ответа на «где
-  // мы» пропадает.
+  // метится пунктирным кольцом, а сам отряд стоит значком на пути
+  // (`syncRaidTrips`, §12.292).
   // Стадию называет ядро (`MissionSnap::phase`, §12.168): «сюда идёт» про
   // отряд на дороге домой — неправда, которую игрок видит по срокам. А
   // возвращающийся на карте не метится вовсе: участок он уже покинул, и
@@ -9734,7 +9803,7 @@ function syncRaidMap() {
   missionsOut.forEach((m) => {
     if (m.site >= 0 && m.phase !== "back") {
       const n = nodes.findIndex((o) => o.x === m.x && o.y === m.y);
-      going.set(m.site, { who: `Отряд ${n + 1}`, phase: m.phase });
+      going.set(m.site, { who: `Отряд ${n + 1}`, n: n + 1, phase: m.phase });
     }
   });
 
@@ -9755,6 +9824,16 @@ function syncRaidMap() {
     g.classList.toggle("on", i === pick);
     g.classList.toggle("hot", lit);
     g.classList.toggle("mine", going.has(i));
+    // Участок занят отрядом — номером отряда на плашке у кружка (§12.292),
+    // с самой заявки, а не с ухода: занят он уже тогда, и второй отряд туда не
+    // пойдёт (двух вылазок по одному заказу не бывает). Плашка той же формы,
+    // что значок отряда на пути, — круг в центре остаётся счётом заказов.
+    const claim = g.querySelector(".map-claim");
+    const mark = going.has(i) ? String(going.get(i).n) : "";
+    claim.style.display = mark ? "" : "none";
+    const tag = claim.querySelector("text");
+    if (tag.textContent !== mark) tag.textContent = mark;
+    liveTitle(claim, mark ? `${going.get(i).who} уже назначен сюда` : "");
     const here = defs.filter((k) => shownRaid(k) && raidAtSite(k, i));
     g.classList.toggle(
       "fresh",
@@ -9767,15 +9846,14 @@ function syncRaidMap() {
     const stage = g.querySelector(".map-stage");
     const shown = lit ? String(st.stage) : n;
     if (stage.textContent !== shown) stage.textContent = shown;
-    const squad = g.querySelector(".map-squad");
-    const who = going.get(i)?.who ?? "";
-    if (squad.textContent !== who) squad.textContent = who;
     // Чем гуще заливка, тем ближе предел. Доля, а не три цвета: ступеней у
     // породы бывает сколько угодно, и словарь цветов под них не заведёшь.
     g.querySelector(".map-ring").style.opacity = lit
       ? String(0.25 + 0.6 * (st.stage / Math.max(1, st.top)))
       : "";
   });
+
+  syncRaidTrips();
 
   // Подпись под графом — вся из ядра: что растёт, докуда доросло и что будет
   // дальше (§12.198).
@@ -14096,14 +14174,29 @@ function buildRaidWindow() {
 function buildSiteGraph(holder) {
   const all = meta?.sites ?? [];
   if (!holder || !all.length) return [];
-  const xs = all.map((s) => (s.at ?? [0, 0])[0]);
-  const ys = all.map((s) => (s.at ?? [0, 0])[1]);
-  const w = (Math.max(...xs) - Math.min(...xs)) * SITE_STEP + SITE_R * 6;
-  const h = (Math.max(...ys) - Math.min(...ys)) * SITE_STEP + SITE_R * 6;
-  const px = (i) =>
-    ((all[i].at ?? [0, 0])[0] - Math.min(...xs)) * SITE_STEP + SITE_R * 3;
-  const py = (i) =>
-    ((all[i].at ?? [0, 0])[1] - Math.min(...ys)) * SITE_STEP + SITE_R * 3;
+  // Рамка полотна — по всем точкам карты: участкам, изгибам дорог и базе
+  // (§12.292). Масштаб честный (сторож `the_shipped_ruleset_draws_roads_to_scale`),
+  // поэтому шаг сетки один на всю карту и растягивать её по осям нельзя.
+  const home = meta?.outskirts?.home ?? [0, 0];
+  const pts = [home, ...all.flatMap((s) => [s.at ?? [0, 0], ...(s.road ?? [])])];
+  const minX = Math.min(...pts.map((p) => p[0]));
+  const minY = Math.min(...pts.map((p) => p[1]));
+  const w = (Math.max(...pts.map((p) => p[0])) - minX) * SITE_STEP + SITE_R * 6;
+  const h = (Math.max(...pts.map((p) => p[1])) - minY) * SITE_STEP + SITE_R * 6;
+  const P = (p) => [(p[0] - minX) * SITE_STEP + SITE_R * 3, (p[1] - minY) * SITE_STEP + SITE_R * 3];
+  const px = (i) => P(all[i].at ?? [0, 0])[0];
+  const py = (i) => P(all[i].at ?? [0, 0])[1];
+  // Путь отряда к участку — от базы до `at` и дальше вдоль дороги (§12.292).
+  // Назад отряд идёт им же, поэтому одного списка точек хватает на обе стадии.
+  siteTrails = all.map((s) => [home, s.at ?? [0, 0], ...(s.road ?? [])].map(P));
+  const [hx, hy] = P(home);
+  const roads = all
+    .map((s, i) =>
+      (s.road ?? []).length
+        ? `<polyline class="map-road" points="${siteTrails[i].slice(1).map((p) => p.join(",")).join(" ")}"/>`
+        : "",
+    )
+    .join("");
 
   // Рёбра — по списку соседей **из снимка** (`sites[i].links`): он уже
   // симметричный, потому что разворачивает связь ядро (§12.198). Считать
@@ -14117,12 +14210,16 @@ function buildSiteGraph(holder) {
   );
   holder.innerHTML =
     `<svg class="map-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">` +
+    roads +
     edges
       .map(
         ([a, b]) =>
           `<line class="map-link" x1="${px(a)}" y1="${py(a)}" x2="${px(b)}" y2="${py(b)}"/>`,
       )
       .join("") +
+    `<g class="map-home" transform="translate(${hx},${hy})">` +
+    `<path d="M-11 2 L0 -9 L11 2 L11 11 L-11 11 Z"/>` +
+    `<text class="map-name" y="${SITE_R + 6}">База</text></g>` +
     all
       .map(
         (s, i) =>
@@ -14130,10 +14227,12 @@ function buildSiteGraph(holder) {
           `<circle class="map-ring" r="${SITE_R}"/>` +
           `<text class="map-stage" y="6"></text>` +
           `<text class="map-name" y="${SITE_R + 18}">${esc(s.label || s.id)}</text>` +
-          `<text class="map-squad" y="${SITE_R + 32}"></text>` +
+          `<g class="map-claim squad-tag" transform="translate(${SITE_R * 0.95},${-SITE_R * 0.95})" style="display:none">` +
+          `<rect x="-9" y="-9" width="18" height="18" rx="4"/><text y="4"></text></g>` +
           "</g>",
       )
       .join("") +
+    `<g class="map-trips"></g>` +
     "</svg>";
   const marks = [...holder.querySelectorAll(".map-site")];
   // Клик по кружку — **выбор цели, а не отправка** (§12.75, §12.199): он

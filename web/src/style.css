@@ -2686,9 +2686,9 @@ main#stage.mode-cursor #mode-banner {
   width: 100%;
   max-height: 42vh;
 }
-/* Ребро — это «куда очаг может пойти», а не дорога: `travel` у заказа с длиной
-   отрезка не связан вовсе (§12.198). Поэтому линия тонкая и приглушённая: она
-   называет соседство, а не путь. */
+/* Ребро — это «куда очаг может пойти», а не дорога: дорогу мерят от базы
+   (§12.292), а ребро связывает соседей (§12.198). Поэтому линия тонкая и
+   приглушённая: она называет соседство, а не путь. */
 .map-link {
   stroke: var(--line);
   stroke-width: 2;
@@ -2726,15 +2726,49 @@ main#stage.mode-cursor #mode-banner {
   text-anchor: middle;
   pointer-events: none;
 }
-/* Куда идёт отряд — именем под участком (§12.199). Своим цветом, а не цветом
-   очага: это про нас, а не про угрозу. */
-.map-squad {
+/* База на карте (§12.292) — откуда отряды выходят и куда меряется дорога. */
+.map-home path {
+  fill: var(--panel);
+  stroke: var(--text);
+  stroke-width: 2;
+}
+/* Участок-дорога (§12.292): караван ведут вдоль неё, и длина её — часть срока.
+   Шире и плотнее ребра соседства: это путь, а не «куда может пойти очаг». */
+.map-road {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.8;
+}
+/* Ушедший отряд (§12.292): пунктир его пути и кружок с номером там, где он
+   сейчас. Своим цветом, а не цветом очага: это про нас, а не про угрозу. */
+.map-trip-path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 4;
+  opacity: 0.7;
+  pointer-events: none;
+}
+/* Отряд на карте — **квадратная** плашка с номером (§12.292): и на пути, и у
+   участка, куда он назначен. Круг с числом в центре участка — счёт заказов
+   (§12.245), и отряд той же формы читался бы ещё одним заказом. */
+.squad-tag rect {
   fill: var(--accent);
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+.squad-tag text {
+  fill: var(--panel);
   font-size: 11px;
+  font-weight: 700;
   text-anchor: middle;
   pointer-events: none;
 }
 .map-site.mine .map-ring {
+  stroke: var(--accent);
   stroke-dasharray: 4 3;
 }
 /* Непрочитанный заказ на участке красит число в кружке акцентом (§12.245) —

@@ -249,6 +249,43 @@ fn a_raid_without_work_never_reports_working() {
     assert_eq!(seen, vec!["travel", "back"], "работать на месте нечего");
 }
 
+/// Значок отряда на карте (§12.292) идёт от базы к месту за первую половину
+/// дороги, стоит на месте всю работу и тем же путём возвращается. Доля
+/// считается тем же разложением срока, что и стадия, — поэтому «на месте»
+/// наступает ровно с «работают», а у шлюза отряд оказывается к возвращению.
+#[test]
+fn a_raid_reports_how_far_it_has_gone() {
+    let rows = &["########", "#a.....#", "########"];
+    let (mut sim, m) = sim_with_gate(rows, (6, 1), 1, 40);
+    sim.set_mission_work(m, 40);
+    assert!(sim.launch(m, squad(&["a"])));
+    assert_eq!(sim.mission_way(), None, "до ухода пути нет");
+    while !sim.is_away("a") {
+        sim.tick_n(1);
+    }
+    assert_eq!(sim.mission_way(), Some(0), "только вышли");
+
+    let mut last = 0;
+    while sim.mission_phase() == Some("travel") {
+        let way = sim.mission_way().unwrap();
+        assert!(way >= last, "туда доля только растёт");
+        last = way;
+        sim.tick_n(1);
+    }
+    while sim.mission_phase() == Some("work") {
+        assert_eq!(sim.mission_way(), Some(1000), "работают на месте");
+        sim.tick_n(1);
+    }
+    let mut last = 1000;
+    while sim.mission_left().is_some_and(|left| left > 0) {
+        let way = sim.mission_way().unwrap();
+        assert!(way <= last, "назад доля только убывает");
+        last = way;
+        sim.tick_n(1);
+    }
+    assert!(last <= 50, "к возвращению отряд у шлюза: {last}");
+}
+
 /// Занятость отрядом — это фильтры: пропущенный `Without<Squad>` тихо уводит
 /// бойца на стройку, и отряд не соберётся никогда (инвариант занятости).
 #[test]

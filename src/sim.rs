@@ -36,7 +36,7 @@ use crate::jobs::{BUILD_WORK, Plan, may_build, site_clutter};
 use crate::map::{BaseMap, rect_cells};
 use crate::missions::{
     Crew, crew_danger, crew_force, crew_traits, duration, exit_cells, faction_is_met, gather_squad,
-    guide_cut, guide_of, guide_value, node_cells, node_count, outcome, phase, sway, travel,
+    guide_cut, guide_of, guide_value, node_cells, node_count, outcome, phase, sway, travel, way,
 };
 use crate::movement::note_clutter;
 use crate::movement::{Busy, is_stuck};
@@ -44,8 +44,9 @@ use crate::needs::class_load;
 use crate::path::{Reach, find_path};
 use crate::relay::road_boost;
 use crate::ruleset::{
-    AbilityDef, BlightDef, EventDef, FactionDef, GoalDef, ItemDef, MissionDef, PerkDef, RecipeDef,
-    RecruitDef, ResearchDef, Ruleset, SLOT, SiteDef, SkillDef, StatDef, TileDef,
+    AbilityDef, BlightDef, EventDef, FactionDef, GoalDef, ItemDef, MissionDef, OutskirtsDef,
+    PerkDef, RecipeDef, RecruitDef, ResearchDef, Ruleset, SLOT, SiteDef, SkillDef, StatDef,
+    TileDef,
 };
 use crate::save::{FORMAT, SaveFile, capture, fingerprint, note, restore};
 use crate::schedule::build_schedule;
@@ -80,6 +81,8 @@ pub struct Sim {
     /// их здесь, а не только в ресурсах, по той же причине, что и остальные
     /// палитры, — `map_meta` отдаёт их виду один раз, целиком из рулсета.
     pub(crate) sites: Vec<SiteDef>,
+    /// База на карте и масштаб карты (§12.292) — только для вида.
+    pub(crate) outskirts: OutskirtsDef,
     /// Палитра возможностей отряда (§12.260): едет виду ради слова.
     pub(crate) abilities: Vec<AbilityDef>,
     pub(crate) blights: Vec<BlightDef>,
@@ -1514,8 +1517,12 @@ impl Sim {
     pub fn new(ruleset_yaml: &str) -> Result<Sim, JsValue> {
         console_error_panic_hook::set_once();
 
-        let rs: Ruleset = serde_yaml::from_str(ruleset_yaml)
+        let mut rs: Ruleset = serde_yaml::from_str(ruleset_yaml)
             .map_err(|e| JsValue::from_str(&format!("ruleset parse error: {e}")))?;
+        // Дорогу заказа на участке пишет участок (§12.292): переносим её до
+        // того, как заказ прочтут правила и палитра `meta`, — иначе вид и ядро
+        // увидели бы разные числа.
+        rs.take_roads_from_sites();
 
         let (w, h) = (rs.grid.width, rs.grid.height);
         let tile_index = |id: &str| rs.tiles.iter().position(|t| t.id == id).map(|i| i as i16);
@@ -2309,6 +2316,7 @@ impl Sim {
             missions: rs.missions,
             abilities: rs.abilities,
             sites: rs.sites,
+            outskirts: rs.outskirts,
             blights: rs.blights,
             recruits: rs.recruits,
             research: rs.research,
@@ -2363,6 +2371,7 @@ impl Sim {
             palette: self.palette.clone(),
             structures: self.structures.clone(),
             sites: self.sites.clone(),
+            outskirts: self.outskirts.clone(),
             blights: self.blights.clone(),
             abilities: self.abilities.clone(),
             items: self.items.clone(),
@@ -6371,6 +6380,11 @@ impl Sim {
                     phase: match (rule, mine().any(|&(_, _, away, ..)| away)) {
                         (Some(_), true) => phase(road, span, m.left).tag(),
                         _ => "",
+                    },
+                    // Где отряд на карте (§12.292) — тем же разложением срока.
+                    way: match (rule, mine().any(|&(_, _, away, ..)| away)) {
+                        (Some(_), true) => way(road, span, m.left),
+                        _ => 0,
                     },
                     // Ждать отряд может только на базе: за шлюзом не спят.
                     resting: mine().any(|&(.., resting, _, _, _)| resting),
