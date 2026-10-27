@@ -9633,6 +9633,23 @@ function raidGate(i, node) {
   };
 }
 
+// Добыча «станет» (§12.293): что изменится, когда отряд наденет приписанное, —
+// обычно образцы от пробоотборников. Числа считает ядро (`loots_next`, тот же
+// `loot_count`); здесь только пары, которые разошлись с нынешними.
+function lootNextRow(node, i, g) {
+  if (g.busy) return "";
+  const now = new Map((node?.loots?.[i] ?? []).map(([k, n]) => [k, n]));
+  const diff = (node?.loots_next?.[i] ?? []).filter(
+    ([k, n]) => (now.get(k) ?? 0) !== n,
+  );
+  if (!diff.length) return "";
+  return (
+    '<div class="cat-sub raid-next" data-tip="Когда отряд наденет приписанное">станет: ' +
+    diff.map(([k, n]) => `${itemGlyph(k)} ${esc(itemLabel(k))} ${n}`).join(" · ") +
+    "</div>"
+  );
+}
+
 // --- карта в штабе (§12.198, §12.199) --------------------------------------
 //
 // **Карта живёт в штабе, а не своим окном.** После §12.198 заказ и есть место:
@@ -14579,6 +14596,11 @@ function summaryHtml(raid, node) {
   // делает».
   return (
     `<div class="raidwin-force"><b>${away ? raid.strength : (node.force ?? 0)}</b>` +
+    // «Станет» (§12.293): коты ещё не сходили за приписанным. Считает ядро
+    // (`NodeSnap::force_next`) тем же выражением, что силу по надетому.
+    (!away && (node.force_next ?? node.force) !== node.force
+      ? `<b class="next" data-tip="Станет, когда отряд наденет приписанное. Уйдёт отряд в том, что на нём сейчас">→ ${node.force_next}</b>`
+      : "") +
     "<span>сила отряда</span></div>" +
     '<div class="raidwin-sumtext">' +
     // Проводник, который сам сейчас не выйдет, помечен красным тут же
@@ -15031,12 +15053,32 @@ function raidCard(i, node) {
       : hit
         ? ` · очаг ступени ${sites[aim]?.stage ?? 1}`
         : "";
+  // «Станет» (§12.293): исход, когда отряд доберёт приписанное снаряжение. Ядро
+  // считает его тем же `outcome` (`shares_next`, `fails_next`); молчим, если
+  // он тот же. У цели зачистки своего «станет» нет — там прогноз по цели.
+  const nextShare = node.shares_next?.[i] ?? share;
+  const nextFailed = !!(node.fails_next?.[i] ?? failed);
+  const nextForce = node.force_next ?? node.force ?? 0;
+  const changes =
+    !g.busy && !empty && !hit && (nextShare !== share || nextFailed !== failed);
+  const nextWord = nextFailed
+    ? '<span class="bad">провал</span>'
+    : nextShare >= 100
+      ? '<span class="good">вся добыча</span>'
+      : `<span class="warn">добыча ${nextShare} %</span>`;
+  const forceText =
+    nextForce !== (node.force ?? 0) && !g.busy && !empty && !hit
+      ? `сила ${node.force ?? 0} (станет ${nextForce})`
+      : `сила ${node.force ?? 0}`;
   rows.push(
     `<div class="raidwin-verdict">${verdict}` +
+      (changes
+        ? ` <span class="raid-next" data-tip="Когда отряд наденет приписанное. Уйдёт он в том, что на нём сейчас">→ станет ${nextWord}</span>`
+        : "") +
       `<i>${
         empty || g.busy
           ? `сложность ${danger}`
-          : `сила ${node.force ?? 0} против сложности ${danger}${cut}`
+          : `${forceText} против сложности ${danger}${cut}`
       }</i></div>`,
   );
 
@@ -15153,6 +15195,7 @@ function raidCard(i, node) {
       node?.gathers?.[i],
     ),
     missionSidesRow(def, raids[i]?.drops ?? []),
+    lootNextRow(node, i, g),
   ]) {
     if (row) rows.push(row);
   }

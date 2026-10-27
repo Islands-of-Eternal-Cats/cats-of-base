@@ -2123,6 +2123,13 @@ impl Sim {
         )
     }
 
+    /// Прогноз узла «сейчас» и «станет» (§12.293): сила и доли по заказам —
+    /// теми же выражениями, что снимок кладёт в `NodeSnap`.
+    fn node_forecast(&mut self, x: i32, y: i32, planned: bool) -> (i32, Vec<i32>) {
+        let force = self.node_forces_by(x, y, planned).iter().sum();
+        (force, self.node_outcomes_by(x, y, planned).0)
+    }
+
     /// Слот вещи на коте (§12.293): в нём одна вещь.
     fn set_slot(&mut self, item: usize, slot: &str) {
         let mut rules = self.world.resource_mut::<ItemRules>();

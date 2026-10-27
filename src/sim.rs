@@ -3238,6 +3238,48 @@ impl Sim {
 
     /// Тропы и прибор сбора у этих котов (§12.256) — тем же `crew_traits`,
     /// каким `run_missions` заморозит их на уходе.
+    /// Что будет на коте, когда он доберёт приписанное (§12.293), — в форме
+    /// `Gear`, чтобы прогноз «станет» шёл **теми же** выражениями, что и прогноз
+    /// по надетому (инвариант 14): `force_of_gear`, `crew_traits`, `outcome`.
+    /// Износ здесь не важен — прогноз его не читает.
+    fn gear_as_planned(&self, e: Entity) -> Option<Gear> {
+        let outfit = self.world.get::<Outfit>(e).map_or(&[][..], |o| &o.0[..]);
+        let planned = crate::gear::planned_gear(
+            self.world.resource::<ItemRules>(),
+            self.world.get::<Gear>(e),
+            outfit,
+        );
+        (!planned.is_empty()).then(|| {
+            Gear(
+                planned
+                    .into_iter()
+                    .map(|item| Worn { item, left: 0 })
+                    .collect(),
+            )
+        })
+    }
+
+    /// Надетое или будущее (§12.293): одна развилка на все прогнозы узла.
+    fn gear_for(&self, e: Entity, planned: bool) -> Option<Gear> {
+        if planned {
+            self.gear_as_planned(e)
+        } else {
+            self.world.get::<Gear>(e).cloned()
+        }
+    }
+
+    /// `traits_of` по будущему снаряжению (§12.293).
+    fn traits_planned(&self, cats: &[Entity]) -> Crew {
+        let gears: Vec<Option<Gear>> = cats.iter().map(|&e| self.gear_as_planned(e)).collect();
+        crew_traits(
+            self.world.resource::<ItemRules>(),
+            self.world.resource::<PerkRules>(),
+            cats.iter()
+                .zip(&gears)
+                .map(|(&e, g)| (self.world.get::<Perks>(e), g.as_ref())),
+        )
+    }
+
     fn traits_of(&self, cats: &[Entity]) -> Crew {
         crew_traits(
             self.world.resource::<ItemRules>(),
@@ -3282,6 +3324,11 @@ impl Sim {
     /// идущей вылазки, — второй экземпляр в JS однажды пообещал бы игроку не ту
     /// силу, с которой отряд уйдёт (инвариант 14).
     fn node_forces(&mut self, x: i32, y: i32) -> Vec<i32> {
+        self.node_forces_by(x, y, false)
+    }
+
+    /// Вклады в силу по надетому или по будущему снаряжению (§12.293).
+    pub(crate) fn node_forces_by(&mut self, x: i32, y: i32, planned: bool) -> Vec<i32> {
         let roster = self.roster_of(x, y);
         let crew = self.node_crew(&roster);
         let raid = self.world.resource::<SkillRules>().index_of(SKILL_RAID);
@@ -3290,7 +3337,7 @@ impl Sim {
         crew.iter()
             .map(|&(e, _)| {
                 1 + raid.map_or(0, |s| level_of(skill_rules, self.world.get::<Skills>(e), s))
-                    + items.force_of_gear(self.world.get::<Gear>(e))
+                    + items.force_of_gear(self.gear_for(e, planned).as_ref())
             })
             .collect()
     }
@@ -3300,7 +3347,17 @@ impl Sim {
     /// на возвращении. Связь в силу здесь не входит намеренно: она копится за
     /// время вылазки и на уходе равна нулю (§12.60).
     fn node_outcomes(&mut self, x: i32, y: i32) -> (Vec<i32>, Vec<bool>) {
-        let forces = self.node_forces(x, y);
+        self.node_outcomes_by(x, y, false)
+    }
+
+    /// Прогноз исхода по надетому или по будущему снаряжению (§12.293).
+    pub(crate) fn node_outcomes_by(
+        &mut self,
+        x: i32,
+        y: i32,
+        planned: bool,
+    ) -> (Vec<i32>, Vec<bool>) {
+        let forces = self.node_forces_by(x, y, planned);
         let dangers = self.node_dangers(x, y);
         // Свёртка вкладов — по заказу, а не по отряду (§12.113): на разведке
         // сила это лучший, а не сумма, и заказы стоят в одном списке.
@@ -6735,6 +6792,9 @@ impl Sim {
                 .map(|(x, y)| {
                     let forces = self.node_forces(x, y);
                     let (shares, fails) = self.node_outcomes(x, y);
+                    // «Станет», когда отряд доберёт приписанное (§12.293).
+                    let forces_next = self.node_forces_by(x, y, true);
+                    let (shares_next, fails_next) = self.node_outcomes_by(x, y, true);
                     // Почему правило стоит (§12.116). Два разных ответа, и
                     // считает их ядро теми же выражениями, что и сам
                     // `run_auto_raids`: «состав не в сборе» чинится временем,
@@ -6754,8 +6814,9 @@ impl Sim {
                             .into_iter()
                             .map(|(e, _)| e)
                             .collect();
-                        self.traits_of(&ready)
+                        (self.traits_of(&ready), self.traits_planned(&ready))
                     };
+                    let (node_traits, next_traits) = node_traits;
                     let active = self.abilities_active();
                     NodeSnap {
                         x,
@@ -6781,6 +6842,35 @@ impl Sim {
                         forces,
                         shares,
                         fails,
+                        force_next: forces_next.iter().sum(),
+                        shares_next,
+                        fails_next,
+                        loots_next: {
+                            let items = self.world.resource::<ItemRules>();
+                            self.world
+                                .resource::<MissionRules>()
+                                .0
+                                .iter()
+                                .map(|r| {
+                                    let crew = next_traits.fielded(r.abilities, active);
+                                    r.loot
+                                        .iter()
+                                        .map(|&(i, n)| {
+                                            (
+                                                i,
+                                                crate::missions::loot_count(
+                                                    items,
+                                                    crew,
+                                                    i,
+                                                    n,
+                                                    r.squad_max,
+                                                ),
+                                            )
+                                        })
+                                        .collect()
+                                })
+                                .collect()
+                        },
                         guide: self.node_guide(x, y),
                         trails: node_traits.road_cut,
                         // Сбор в шапке отряда — каким он выйдет на обычный

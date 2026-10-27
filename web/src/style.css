@@ -1889,6 +1889,20 @@ main#stage.mode-cursor #mode-banner {
   color: #86c06a;
   font-weight: 600;
 }
+/* «Станет» (§12.293): прогноз, когда отряд наденет приписанное, — рядом с
+   нынешним, тоном ожидания. */
+.raidwin-force b.next {
+  color: var(--warn);
+  font-size: 15px;
+}
+.raid-next {
+  color: var(--warn);
+}
+.raid-next svg {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+}
 /* «Наденет: …» (§12.293): приписано, кот ещё не сходил — ожидание, не отказ. */
 .crew-field .toil {
   color: var(--warn);

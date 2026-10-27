@@ -786,3 +786,29 @@ fn planned_force_counts_the_outfit_before_it_is_worn() {
         "замена в слоте: старая вещь не в счёте"
     );
 }
+
+/// Прогноз отряда «станет» (§12.293): пока кот не сходил за приписанным
+/// комбинезоном, сила и доля по надетому меньше, чем по приписанному; когда
+/// оделся — сходятся. Уходит отряд в надетом, поэтому основной прогноз не
+/// подменяется будущим.
+#[test]
+fn the_node_forecast_shows_what_the_outfit_will_give() {
+    let mut sim = sim_with_store_and_gate();
+    sim.set_slot(SUIT, "body");
+    sim.set_force(SUIT, 2);
+    let m = sim.set_risky_mission(1, 50, 3, 0, &[]);
+    assert!(sim.enlist("a", 6, 1));
+    sim.put_item(5, 1, SUIT, 1);
+
+    let (now, shares) = sim.node_forecast(6, 1, false);
+    let (next, shares_next) = sim.node_forecast(6, 1, true);
+    assert_eq!((now, next), (1, 3), "сила по надетому и по приписанному");
+    assert!(shares_next[m] > shares[m], "доля по приписанному больше");
+
+    sim.tick_n(15);
+    assert_eq!(sim.gear_of("a"), vec![SUIT]);
+    assert_eq!(
+        sim.node_forecast(6, 1, false),
+        sim.node_forecast(6, 1, true)
+    );
+}
