@@ -2847,6 +2847,22 @@ main#stage.mode-cursor #mode-banner {
   text-anchor: middle;
   pointer-events: none;
 }
+/* Правило автовылазки на участке (§12.294): полая плашка — повторяющееся
+   решение, в отличие от залитой «назначен». На паузе — тусклая. */
+.rule-tag rect {
+  fill: var(--panel);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.rule-tag text {
+  fill: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+.rule-tag.paused {
+  opacity: 0.45;
+}
 .map-site.mine .map-ring {
   stroke: var(--accent);
   stroke-dasharray: 4 3;

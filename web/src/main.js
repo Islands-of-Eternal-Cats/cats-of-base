@@ -9860,6 +9860,18 @@ function syncRaidMap() {
     }
   });
 
+  // Куда ходят правила автовылазки (§12.294): участок заказа правила, по
+  // отряду. Правило живёт на столе и переживает вылазку (§12.175), поэтому
+  // метка стоит и пока отряд в поле. Зачистка места заранее не знает — цель
+  // ей выбирают при отправке (§12.199), — и на карте не метится.
+  const ruled = new Map();
+  nodes.forEach((o, k) => {
+    const site = (o.auto ?? -1) >= 0 ? siteIndexOf(meta.missions[o.auto]?.site) : -1;
+    if (site == null || site < 0) return;
+    if (!ruled.has(site)) ruled.set(site, []);
+    ruled.get(site).push({ n: k + 1, on: !!o.auto_on, def: o.auto });
+  });
+
   // Сколько заказов на участке — числом **в центре кружка** (§12.245): колонка
   // показывает заказы только выбранного участка, и без счёта на карте игрок
   // на старте не знал, куда вообще смотреть — все кружки одинаково пусты.
@@ -9887,6 +9899,32 @@ function syncRaidMap() {
     const tag = claim.querySelector("text");
     if (tag.textContent !== mark) tag.textContent = mark;
     liveTitle(claim, mark ? `${going.get(i).who} уже назначен сюда` : "");
+    // Правило автовылазки — полой плашкой в другом углу (§12.294): «назначен»
+    // — разовое решение и залито, правило — повторяющееся и контуром. На паузе
+    // (§12.77) плашка тусклая: правило помнится, но отряд по нему не уходит.
+    const rule = g.querySelector(".map-rule");
+    const rs = ruled.get(i) ?? [];
+    const rtext = rs.length ? `↻${rs.map((r) => r.n).join(",")}` : "";
+    rule.style.display = rtext ? "" : "none";
+    const rt = rule.querySelector("text");
+    if (rt.textContent !== rtext) {
+      rt.textContent = rtext;
+      const w = 10 + 7 * rtext.length;
+      const box = rule.querySelector("rect");
+      box.setAttribute("width", String(w));
+      box.setAttribute("x", String(-w / 2));
+    }
+    rule.classList.toggle("paused", rs.length > 0 && rs.every((r) => !r.on));
+    liveTitle(
+      rule,
+      rs
+        .map(
+          (r) =>
+            `Отряд ${r.n} ходит сюда сам: «${meta.missions[r.def]?.label || ""}»` +
+            (r.on ? "" : " — на паузе"),
+        )
+        .join(" · "),
+    );
     const here = defs.filter((k) => shownRaid(k) && raidAtSite(k, i));
     g.classList.toggle(
       "fresh",
@@ -14406,6 +14444,8 @@ function buildSiteGraph(holder) {
           `<text class="map-name" y="${SITE_R + 18}">${esc(s.label || s.id)}</text>` +
           `<g class="map-claim squad-tag" transform="translate(${SITE_R * 0.95},${-SITE_R * 0.95})" style="display:none">` +
           `<rect x="-9" y="-9" width="18" height="18" rx="4"/><text y="4"></text></g>` +
+          `<g class="map-rule rule-tag" transform="translate(${-SITE_R * 0.95},${-SITE_R * 0.95})" style="display:none">` +
+          `<rect y="-9" height="18" rx="4"/><text y="4"></text></g>` +
           "</g>",
       )
       .join("") +
