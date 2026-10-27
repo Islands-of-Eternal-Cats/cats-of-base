@@ -2215,7 +2215,9 @@ impl ItemRules {
         })
     }
 
-    /// Прибор ли это сбора образцов (§12.256).
+    /// Прибор ли это сбора образцов (§12.256). С §12.293 правило «второй
+    /// прибор ни к чему» держит слот, и спрашивают это только сторожа.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn collects(&self, item: usize) -> bool {
         self.0.get(item).is_some_and(|r| r.collects > 0)
     }

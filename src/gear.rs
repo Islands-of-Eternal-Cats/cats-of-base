@@ -95,6 +95,195 @@ pub(crate) fn outfit_gate(
     ""
 }
 
+/// Чего из приписки на коте нет и что он **может** надеть (§12.293): вещь
+/// понята, слот не держит надетое, кот умеет ею пользоваться. Одно выражение
+/// на раздатчик (`assign_equip`) и на раздачу запаса (`outfit_plan`).
+pub(crate) fn missing_of(
+    items: &ItemRules,
+    techs: &Techs,
+    skill_rules: &SkillRules,
+    gear: Option<&Gear>,
+    outfit: &[usize],
+    skills: Option<&Skills>,
+) -> Vec<usize> {
+    outfit
+        .iter()
+        .copied()
+        .filter(|&item| !gear.is_some_and(|g| g.has(item)) && items.wearable(item, techs))
+        // Слот занят надетым (§12.293): в нём одна вещь. Приписку меняет фасад
+        // вместе с надетым, так что здесь это страховка — для личной вещи
+        // (анализатор Антенны против пробоотборника, §12.256) и приписок из
+        // старого снимка.
+        .filter(|&item| !gear.is_some_and(|g| g.items().any(|i| items.same_slot(i, item))))
+        // Не умеет — не берёт (§12.269). Приписку проверила команда; здесь
+        // страховка для приписок из старого снимка.
+        .filter(|&item| items.skilled(item, skill_rules, skills))
+        .collect()
+}
+
+/// Сколько каждой вещи можно надеть из куч (§12.293) — **одно выражение** на
+/// раздатчик и на прогноз «станет». Проданное не надевают вовсе (§12.50):
+/// с заявки товаром распоряжается сделка. Заведённой теме-вскрытию уступают
+/// то, что ей ещё не довезли (§12.133); везомое ей в лапах уже в счёт.
+pub(crate) struct Spare {
+    in_piles: Vec<i32>,
+    promised: Vec<i32>,
+    sold: Vec<bool>,
+}
+
+impl Spare {
+    pub(crate) fn new<'a>(
+        n: usize,
+        stacks: impl Iterator<Item = &'a Stack>,
+        booked: &[(usize, i32)],
+        owed: impl Iterator<Item = (usize, i32)>,
+        lab_paws: impl Iterator<Item = (usize, i32)>,
+    ) -> Spare {
+        let mut spare = Spare {
+            in_piles: vec![0; n],
+            promised: vec![0; n],
+            sold: vec![false; n],
+        };
+        for s in stacks {
+            if let Some(c) = spare.in_piles.get_mut(s.item) {
+                *c += s.count;
+            }
+        }
+        for &(item, _) in booked {
+            if let Some(b) = spare.sold.get_mut(item) {
+                *b = true;
+            }
+        }
+        for (item, n) in owed {
+            if let Some(p) = spare.promised.get_mut(item) {
+                *p += n;
+            }
+        }
+        for (item, n) in lab_paws {
+            if let Some(p) = spare.promised.get_mut(item) {
+                *p -= n;
+            }
+        }
+        spare
+    }
+
+    fn promised(&self, item: usize) -> i32 {
+        self.promised.get(item).copied().unwrap_or(0).max(0)
+    }
+
+    fn sold(&self, item: usize) -> bool {
+        self.sold.get(item).copied().unwrap_or(false)
+    }
+
+    /// Сколько штук из куч свободно для одевания.
+    pub(crate) fn count(&self, item: usize) -> i32 {
+        if self.sold(item) {
+            return 0;
+        }
+        (self.in_piles.get(item).copied().unwrap_or(0) - self.promised(item)).max(0)
+    }
+
+    /// Можно ли надеть штуку из лап: кучи и так покрывают обещанное теме.
+    pub(crate) fn paws_ok(&self, item: usize) -> bool {
+        !self.sold(item) && self.in_piles.get(item).copied().unwrap_or(0) >= self.promised(item)
+    }
+}
+
+/// Кто из приписанных что получит (§12.293): свободный запас раздаётся котам
+/// **по `id`** — тем же порядком, каким его раздаёт `assign_equip`, — а своя
+/// свободная ноша идёт своему коту первой. Что досталось, едет в «станет»;
+/// чего не хватило — в «нет на базе» (`outfit_short`). Запас пересчитывается
+/// каждый тик: пропала вещь — следующий кадр говорит правду.
+#[derive(Default)]
+pub(crate) struct OutfitPlan(Vec<Planned>);
+
+/// Строка раздачи: кот, что получит, чего не хватит.
+struct Planned {
+    cat: Entity,
+    id: String,
+    got: Vec<usize>,
+    short: Vec<usize>,
+}
+
+/// Кот для раздачи: что носит, что велено, своя ли у него ноша.
+pub(crate) struct Wanting<'a> {
+    pub(crate) cat: Entity,
+    pub(crate) id: &'a str,
+    pub(crate) gear: Option<&'a Gear>,
+    pub(crate) outfit: &'a [usize],
+    pub(crate) skills: Option<&'a Skills>,
+    /// Ноша, которую кот не уступает (см. `assign_equip`): тип и сколько.
+    pub(crate) own_load: Option<(usize, i32)>,
+}
+
+impl OutfitPlan {
+    pub(crate) fn new(
+        items: &ItemRules,
+        techs: &Techs,
+        skill_rules: &SkillRules,
+        spare: &Spare,
+        mut cats: Vec<Wanting>,
+    ) -> OutfitPlan {
+        cats.sort_unstable_by_key(|c| c.id);
+        let mut left: Vec<i32> = (0..items.0.len()).map(|i| spare.count(i)).collect();
+        let mut out = Vec::new();
+        for c in cats {
+            let mut load = c.own_load;
+            let mut got = Vec::new();
+            let mut short = Vec::new();
+            for item in missing_of(items, techs, skill_rules, c.gear, c.outfit, c.skills) {
+                if let Some((i, n)) = load.as_mut()
+                    && *i == item
+                    && *n > 0
+                    && spare.paws_ok(item)
+                {
+                    *n -= 1;
+                    got.push(item);
+                } else if let Some(k) = left.get_mut(item)
+                    && *k > 0
+                {
+                    *k -= 1;
+                    got.push(item);
+                } else {
+                    short.push(item);
+                }
+            }
+            out.push(Planned {
+                cat: c.cat,
+                id: c.id.to_string(),
+                got,
+                short,
+            });
+        }
+        OutfitPlan(out)
+    }
+
+    /// Что кот получит из приписанного, но ещё не надел.
+    pub(crate) fn coming(&self, cat: Entity) -> &[usize] {
+        self.0
+            .iter()
+            .find(|p| p.cat == cat)
+            .map_or(&[][..], |p| &p.got[..])
+    }
+
+    /// То же по имени кота — снимок обходит котов без `Entity`.
+    pub(crate) fn coming_of(&self, id: &str) -> &[usize] {
+        self.0
+            .iter()
+            .find(|p| p.id == id)
+            .map_or(&[][..], |p| &p.got[..])
+    }
+
+    /// Чего коту не хватит: запас разобран теми, кто раньше по `id`, или его
+    /// нет вовсе.
+    pub(crate) fn short_of(&self, id: &str) -> &[usize] {
+        self.0
+            .iter()
+            .find(|p| p.id == id)
+            .map_or(&[][..], |p| &p.short[..])
+    }
+}
+
 /// Что будет на коте, когда он доберёт приписанное (§12.293): надетое, которое
 /// приписка не вытесняет из слота, плюс сама приписка. Личная вещь остаётся
 /// всегда — её слот приписка занять не может (`outfit_gate`).
@@ -232,20 +421,7 @@ pub(crate) fn assign_equip(
         .filter_map(|(cat_e, id, pos, gear, outfit, _, _, skills, load)| {
             // Ворота на надевание (§12.114) проверяет команда; здесь они
             // остаются подстраховкой — технологии не забываются (§12.18).
-            let missing: Vec<usize> = outfit
-                .0
-                .iter()
-                .copied()
-                .filter(|&item| !gear.is_some_and(|g| g.has(item)) && items.wearable(item, &techs))
-                // Слот занят надетым (§12.293): в нём одна вещь. Приписку меняет
-                // фасад вместе с надетым, так что здесь это страховка — для
-                // личной вещи (анализатор Антенны против пробоотборника,
-                // §12.256) и приписок из старого снимка.
-                .filter(|&item| !gear.is_some_and(|g| g.items().any(|i| items.same_slot(i, item))))
-                // Не умеет — не берёт (§12.269). Приписку проверила команда;
-                // здесь страховка для приписок из старого снимка.
-                .filter(|&item| items.skilled(item, &skill_rules, skills))
-                .collect();
+            let missing = missing_of(&items, &techs, &skill_rules, gear, &outfit.0, skills);
             (!missing.is_empty()).then_some((id.0.as_str(), cat_e, (pos.x, pos.y), missing, load))
         })
         .collect();
@@ -256,7 +432,7 @@ pub(crate) fn assign_equip(
         // Покупателю и лаборатории — уступает: сделку не отменить, и бронь
         // держит пост (§12.44, §12.50); тема-вскрытие оплачена и важнее
         // снаряжения (§12.133).
-        .filter(|(.., haul, _)| !matches!(haul.to, HaulTo::Sale(_) | HaulTo::Lab(_)))
+        .filter(|(.., haul, _)| own_load(Some(haul)))
         .filter(|&(_, _, outfit, gear, load, _, skills)| {
             let item = load.item;
             load.count > 0
@@ -276,51 +452,17 @@ pub(crate) fn assign_equip(
     // Проданный комбинезон коту уже не принадлежит (§12.50): с заявки товаром
     // распоряжается сделка. Проверяем в раздатчике, а не только при надевании,
     // иначе кот ходил бы к обещанной куче и возвращался ни с чем.
-    let booked = crate::trade::booked(deals.iter(), in_paws.iter());
-    let sold = |item: usize| booked.iter().any(|&(s, _)| s == item);
-
+    // Проданное (§12.50) и обещанное заведённой теме-вскрытию (§12.133)
+    // считает `Spare` — одно выражение с прогнозом «станет».
+    //
     // **Заведённая тема-вскрытие важнее шаблона** (§12.133): образец, который
     // ей ещё везут, шаблон не разбирает. Без этого «ждёт образец» длилось бы
     // вечно на базе, где кто-то всегда не одет, — а комбинезонов привозят по
-    // одному.
-    //
-    // Уступка ровно одна, и **незаведённой** теме не уступает ничего. Соблазн
-    // придержать «последний экземпляр, у которого есть неизученная тема»
-    // отвергнут: кот ушёл бы на вылазку раздетым, отряд стал бы слабее, а
-    // причина лежала бы в чужой механике — скрытый штраф вместо слова (§12.53).
-    // Тот же спор §12.115 уже решил в эту сторону: разбор уступает шаблону.
-    let mut owed: Vec<(usize, i32)> = Vec::new();
-    for topic in &topics {
-        for (item, need) in topic_missing(&topic_rules, topic) {
-            match owed.iter_mut().find(|(i, _)| *i == item) {
-                Some((_, n)) => *n += need,
-                None => owed.push((item, need)),
-            }
-        }
-    }
-    // Уже везомое лабораториям из недостачи вычтено самой `topic_missing`
-    // только по `delivered`; груз в лапах ещё не сдан, поэтому вычитаем его
-    // здесь — иначе один комбинезон числился бы обещанным дважды.
-    for (haul, load) in &in_paws {
-        if let HaulTo::Lab(_) = haul.to
-            && let Some(slot) = owed.iter_mut().find(|(i, _)| *i == load.item)
-        {
-            slot.1 -= load.count;
-        }
-    }
-    let promised = |item: usize| {
-        owed.iter()
-            .find(|&&(i, _)| i == item)
-            .map_or(0, |&(_, n)| n)
-    };
-    let in_piles = |item: usize| -> i32 {
-        stacks
-            .iter()
-            .filter(|(_, _, s)| s.item == item)
-            .map(|(_, _, s)| s.count)
-            .sum()
-    };
-    let free = |item: usize| !sold(item) && in_piles(item) > promised(item).max(0);
+    // одному. Уступка ровно одна, и **незаведённой** теме не уступает ничего:
+    // придержать «последний экземпляр» значило бы скрытый штраф вместо слова
+    // (§12.53); тот же спор §12.115 решил в эту сторону — разбор уступает.
+    let spare = equip_spare(&items, &stacks, &deals, &in_paws, &topics, &topic_rules);
+    let free = |item: usize| spare.count(item) > 0;
 
     // Сколько в каждой куче уже обещано тем, кто к ней идёт.
     let mut taken: Vec<(Entity, i32)> = Vec::new();
@@ -337,7 +479,7 @@ pub(crate) fn assign_equip(
     // лаборатории (см. `porters`). Те же ворота, что у кучи: проданное не
     // надевают (§12.50), обещанное теме-вскрытию — тоже, пока кучи его не
     // покрывают (§12.133).
-    let paws_ok = |item: usize| !sold(item) && in_piles(item) >= promised(item).max(0);
+    let paws_ok = |item: usize| spare.paws_ok(item);
     let mut dressed: Vec<Entity> = Vec::new();
     for &(_, cat_e, item, load, gear) in &porting {
         if !paws_ok(item) {
@@ -412,6 +554,35 @@ pub(crate) fn assign_equip(
             .entity(cat_e)
             .insert((Equipping { item, pile: pile_e }, Path { steps: path }));
     }
+}
+
+/// Свободный для одевания запас по запросам раздатчика (§12.293).
+fn equip_spare(
+    items: &ItemRules,
+    stacks: &Query<(Entity, &Position, &Stack)>,
+    deals: &Query<&Deal>,
+    in_paws: &Query<(&Haul, &Carrying)>,
+    topics: &Query<&Research>,
+    topic_rules: &ResearchRules,
+) -> Spare {
+    let booked = crate::trade::booked(deals.iter(), in_paws.iter());
+    Spare::new(
+        items.0.len(),
+        stacks.iter().map(|(_, _, s)| s),
+        &booked,
+        topics.iter().flat_map(|t| topic_missing(topic_rules, t)),
+        in_paws
+            .iter()
+            .filter(|(h, _)| matches!(h.to, HaulTo::Lab(_)))
+            .map(|(_, c)| (c.item, c.count)),
+    )
+}
+
+/// Свободна ли ноша кота для приписки (§12.293): своя вещь не уступается
+/// складу, площадке и станку; покупателю (§12.50) и лаборатории (§12.133) —
+/// уступается.
+pub(crate) fn own_load(haul: Option<&Haul>) -> bool {
+    !haul.is_some_and(|h| matches!(h.to, HaulTo::Sale(_) | HaulTo::Lab(_)))
 }
 
 /// Надеть вещь из лап (§12.293): штука уходит из груза на кота. Груз, ставший

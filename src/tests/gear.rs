@@ -871,3 +871,46 @@ fn a_porter_to_a_buyer_gives_the_load_away() {
     sim.tick_n(1);
     assert!(sim.gear_of("a").is_empty(), "не надел");
 }
+
+/// Запас раздаётся по `id` (§12.293): два комбинезона на троих приписанных —
+/// «станет» обещает их первым двум, а третьему пишет «не хватает». Тем же
+/// порядком их и раздаст `assign_equip`.
+#[test]
+fn the_plan_shares_out_the_stock_by_id() {
+    let mut sim = sim_with_store_and_gate();
+    sim.put_item(5, 1, SUIT, 2);
+
+    assert_eq!(sim.planned_force_of("a"), 1);
+    assert_eq!(sim.planned_force_of("b"), 1);
+    assert_eq!(sim.planned_force_of("c"), 0, "третьему не хватит");
+    assert!(sim.outfit_short_of("a").is_empty());
+    assert_eq!(sim.outfit_short_of("c"), vec![SUIT]);
+
+    sim.tick_n(30);
+    assert_eq!(sim.gear_of("a"), vec![SUIT]);
+    assert_eq!(sim.gear_of("b"), vec![SUIT]);
+    assert!(sim.gear_of("c").is_empty(), "раздали ровно как обещали");
+}
+
+/// Вещь пропала (§12.293) — следующий же расчёт говорит правду: «станет» её
+/// больше не обещает, а «не хватает» называет.
+#[test]
+fn the_plan_follows_the_stock_away() {
+    let mut sim = sim_with_store_and_gate();
+    sim.put_item(5, 1, SUIT, 1);
+    assert_eq!(sim.planned_force_of("a"), 1);
+
+    sim.take_item(5, 1, SUIT);
+    assert_eq!(sim.planned_force_of("a"), 0, "обещать больше нечего");
+    assert_eq!(sim.outfit_short_of("a"), vec![SUIT]);
+}
+
+/// Своя ноша идёт своему коту первой (§12.293): комбинезон в лапах у `c`
+/// достаётся ему, а не уходит в общий счёт к `a`.
+#[test]
+fn the_plan_gives_a_cat_its_own_load_first() {
+    let mut sim = sim_with_store_and_gate();
+    sim.give_load("c", SUIT, 1);
+    assert_eq!(sim.planned_force_of("c"), 1, "своё — себе");
+    assert_eq!(sim.planned_force_of("a"), 0, "на складе нет ни одного");
+}

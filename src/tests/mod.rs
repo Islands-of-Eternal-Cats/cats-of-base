@@ -2121,19 +2121,26 @@ impl Sim {
     /// выражением, что снимок кладёт в `raid_force_next`.
     fn planned_force_of(&mut self, unit: &str) -> i32 {
         let cat = self.entity_of(unit);
-        let outfit = self.outfit_of(unit);
+        let plan = self.outfit_plan();
         crate::gear::planned_force(
             self.world.resource::<ItemRules>(),
             self.world.get::<Gear>(cat),
-            &outfit,
+            plan.coming(cat),
         )
+    }
+
+    /// Чего коту не хватит из приписанного (§12.293) — ровно как `outfit_short`
+    /// в снимке.
+    fn outfit_short_of(&mut self, unit: &str) -> Vec<usize> {
+        self.outfit_plan().short_of(unit).to_vec()
     }
 
     /// Прогноз узла «сейчас» и «станет» (§12.293): сила и доли по заказам —
     /// теми же выражениями, что снимок кладёт в `NodeSnap`.
     fn node_forecast(&mut self, x: i32, y: i32, planned: bool) -> (i32, Vec<i32>) {
-        let force = self.node_forces_by(x, y, planned).iter().sum();
-        (force, self.node_outcomes_by(x, y, planned).0)
+        let plan = planned.then(|| self.outfit_plan());
+        let force = self.node_forces_by(x, y, plan.as_ref()).iter().sum();
+        (force, self.node_outcomes_by(x, y, plan.as_ref()).0)
     }
 
     /// Слот вещи на коте (§12.293): в нём одна вещь.

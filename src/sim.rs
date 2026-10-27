@@ -30,6 +30,7 @@ use wasm_bindgen::prelude::*;
 use bevy_ecs::system::RunSystemOnce;
 
 use crate::components::*;
+use crate::gear::OutfitPlan;
 use crate::goals::{WorldFacts, built_counts, progress_of};
 use crate::hauling::{plan_spend, stored_counts};
 use crate::jobs::{BUILD_WORK, Plan, may_build, site_clutter};
@@ -3242,12 +3243,13 @@ impl Sim {
     /// `Gear`, чтобы прогноз «станет» шёл **теми же** выражениями, что и прогноз
     /// по надетому (инвариант 14): `force_of_gear`, `crew_traits`, `outcome`.
     /// Износ здесь не важен — прогноз его не читает.
-    fn gear_as_planned(&self, e: Entity) -> Option<Gear> {
-        let outfit = self.world.get::<Outfit>(e).map_or(&[][..], |o| &o.0[..]);
+    fn gear_as_planned(&self, e: Entity, plan: &OutfitPlan) -> Option<Gear> {
+        // Только то, что коту **достанется** (§12.293): приписанное, на которое
+        // не хватило запаса, «станет» не обещает.
         let planned = crate::gear::planned_gear(
             self.world.resource::<ItemRules>(),
             self.world.get::<Gear>(e),
-            outfit,
+            plan.coming(e),
         );
         (!planned.is_empty()).then(|| {
             Gear(
@@ -3260,17 +3262,76 @@ impl Sim {
     }
 
     /// Надетое или будущее (§12.293): одна развилка на все прогнозы узла.
-    fn gear_for(&self, e: Entity, planned: bool) -> Option<Gear> {
-        if planned {
-            self.gear_as_planned(e)
-        } else {
-            self.world.get::<Gear>(e).cloned()
+    fn gear_for(&self, e: Entity, plan: Option<&OutfitPlan>) -> Option<Gear> {
+        match plan {
+            Some(plan) => self.gear_as_planned(e, plan),
+            None => self.world.get::<Gear>(e).cloned(),
         }
     }
 
+    /// Раздача свободного запаса по приписанным (§12.293) — `gear::OutfitPlan`
+    /// по тем же данным, что видит `assign_equip`. Считается один раз на снимок.
+    pub(crate) fn outfit_plan(&mut self) -> OutfitPlan {
+        let spare = {
+            let mut stacks = self.world.query::<&Stack>();
+            let mut deals = self.world.query::<&Deal>();
+            let mut paws = self.world.query::<(&Haul, &Carrying)>();
+            let mut topics = self.world.query::<&Research>();
+            let booked = crate::trade::booked(deals.iter(&self.world), paws.iter(&self.world));
+            let rules = self.world.resource::<ResearchRules>();
+            crate::gear::Spare::new(
+                self.world.resource::<ItemRules>().0.len(),
+                stacks.iter(&self.world),
+                &booked,
+                topics
+                    .iter(&self.world)
+                    .flat_map(|t| topic_missing(rules, t))
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+                paws.iter(&self.world)
+                    .filter(|(h, _)| matches!(h.to, HaulTo::Lab(_)))
+                    .map(|(_, c)| (c.item, c.count)),
+            )
+        };
+        let mut q = self.world.query_filtered::<(
+            Entity,
+            &UnitId,
+            Option<&Gear>,
+            &Outfit,
+            Option<&Skills>,
+            Option<&Carrying>,
+            Option<&Haul>,
+        ), Without<Away>>();
+        let cats: Vec<crate::gear::Wanting> = q
+            .iter(&self.world)
+            .map(
+                |(cat, id, gear, outfit, skills, load, haul)| crate::gear::Wanting {
+                    cat,
+                    id: &id.0,
+                    gear,
+                    outfit: &outfit.0,
+                    skills,
+                    own_load: load
+                        .filter(|_| crate::gear::own_load(haul))
+                        .map(|c| (c.item, c.count)),
+                },
+            )
+            .collect();
+        OutfitPlan::new(
+            self.world.resource::<ItemRules>(),
+            self.world.resource::<Techs>(),
+            self.world.resource::<SkillRules>(),
+            &spare,
+            cats,
+        )
+    }
+
     /// `traits_of` по будущему снаряжению (§12.293).
-    fn traits_planned(&self, cats: &[Entity]) -> Crew {
-        let gears: Vec<Option<Gear>> = cats.iter().map(|&e| self.gear_as_planned(e)).collect();
+    fn traits_planned(&self, cats: &[Entity], plan: &OutfitPlan) -> Crew {
+        let gears: Vec<Option<Gear>> = cats
+            .iter()
+            .map(|&e| self.gear_as_planned(e, plan))
+            .collect();
         crew_traits(
             self.world.resource::<ItemRules>(),
             self.world.resource::<PerkRules>(),
@@ -3324,11 +3385,11 @@ impl Sim {
     /// идущей вылазки, — второй экземпляр в JS однажды пообещал бы игроку не ту
     /// силу, с которой отряд уйдёт (инвариант 14).
     fn node_forces(&mut self, x: i32, y: i32) -> Vec<i32> {
-        self.node_forces_by(x, y, false)
+        self.node_forces_by(x, y, None)
     }
 
     /// Вклады в силу по надетому или по будущему снаряжению (§12.293).
-    pub(crate) fn node_forces_by(&mut self, x: i32, y: i32, planned: bool) -> Vec<i32> {
+    pub(crate) fn node_forces_by(&mut self, x: i32, y: i32, plan: Option<&OutfitPlan>) -> Vec<i32> {
         let roster = self.roster_of(x, y);
         let crew = self.node_crew(&roster);
         let raid = self.world.resource::<SkillRules>().index_of(SKILL_RAID);
@@ -3337,7 +3398,7 @@ impl Sim {
         crew.iter()
             .map(|&(e, _)| {
                 1 + raid.map_or(0, |s| level_of(skill_rules, self.world.get::<Skills>(e), s))
-                    + items.force_of_gear(self.gear_for(e, planned).as_ref())
+                    + items.force_of_gear(self.gear_for(e, plan).as_ref())
             })
             .collect()
     }
@@ -3347,7 +3408,7 @@ impl Sim {
     /// на возвращении. Связь в силу здесь не входит намеренно: она копится за
     /// время вылазки и на уходе равна нулю (§12.60).
     fn node_outcomes(&mut self, x: i32, y: i32) -> (Vec<i32>, Vec<bool>) {
-        self.node_outcomes_by(x, y, false)
+        self.node_outcomes_by(x, y, None)
     }
 
     /// Прогноз исхода по надетому или по будущему снаряжению (§12.293).
@@ -3355,9 +3416,9 @@ impl Sim {
         &mut self,
         x: i32,
         y: i32,
-        planned: bool,
+        plan: Option<&OutfitPlan>,
     ) -> (Vec<i32>, Vec<bool>) {
-        let forces = self.node_forces_by(x, y, planned);
+        let forces = self.node_forces_by(x, y, plan);
         let dangers = self.node_dangers(x, y);
         // Свёртка вкладов — по заказу, а не по отряду (§12.113): на разведке
         // сила это лучший, а не сумма, и заказы стоят в одном списке.
@@ -4281,79 +4342,26 @@ impl Sim {
 
     /// Кто из состава не может надеть приписанное (§12.268), по `id` (§12.270).
     ///
-    /// Вещь в приписке, которой на коте нет, а на базе (кучи на складе и на
-    /// полу минус бронь продажи) не хватает на всех таких котов этого отряда.
-    /// Кот, уже идущий за вещью (`Equipping`), в счёт не идёт — он её получит.
-    /// Фильтры приписки те же, что у `assign_equip`: невыполнимую приписку
-    /// (не понята, не умеет, второй прибор сбора) кот и не пытается добрать,
-    /// и ждать её правилу незачем.
+    /// С §12.293 — по той же раздаче запаса, что «станет» и «нет на базе» в
+    /// штабе (`outfit_plan`): кот, которому из свободного запаса (склад и пол
+    /// минус бронь продажи и долг теме-вскрытию, плюс своя ноша) ничего не
+    /// досталось. Кот, уже идущий за вещью (`Equipping`), в счёт не идёт — он её
+    /// получит. Невыполнимую приписку (не понята, не умеет, слот держит личная
+    /// вещь) раздача не считает вовсе, и ждать её правилу незачем.
     ///
     /// Держит только **правило автовылазки**: кнопка игрока решение принимает
     /// разово и видит голых котов в штабе, а правило гоняло бы их без
     /// комбинезонов на каждом круге.
     pub(crate) fn undressed_of(&mut self, x: i32, y: i32) -> Vec<String> {
-        let mut q = self.world.query::<(
-            &UnitId,
-            &Enlisted,
-            Option<&Gear>,
-            Option<&Outfit>,
-            Option<&Skills>,
-            Option<&Equipping>,
-        )>();
-        let mut deals = self.world.query::<&Deal>();
-        let mut paws = self.world.query::<(&Haul, &Carrying)>();
-        let mut piles = self.world.query::<&Stack>();
-        let world = &self.world;
-        let items = world.resource::<ItemRules>();
-        let techs = world.resource::<Techs>();
-        let skill_rules = world.resource::<SkillRules>();
-        let short: Vec<(String, Vec<usize>)> = q
-            .iter(world)
-            .filter(|(_, spot, ..)| spot.spot == (x, y))
-            .filter(|(.., going)| going.is_none())
-            .filter_map(|(id, _, gear, outfit, skills, _)| {
-                let missing: Vec<usize> = outfit?
-                    .0
-                    .iter()
-                    .copied()
-                    .filter(|&i| !gear.is_some_and(|g| g.has(i)) && items.wearable(i, techs))
-                    .filter(|&i| !(items.collects(i) && items.collects_any(gear)))
-                    .filter(|&i| items.skilled(i, skill_rules, skills))
-                    .collect();
-                (!missing.is_empty()).then(|| (id.0.clone(), missing))
-            })
-            .collect();
-        if short.is_empty() {
-            return Vec::new();
-        }
-        let booked = crate::trade::booked(deals.iter(world), paws.iter(world));
-        let mut on_base = |item: usize| -> i32 {
-            let have: i32 = piles
-                .iter(world)
-                .filter(|s| s.item == item)
-                .map(|s| s.count)
-                .sum();
-            have - booked
-                .iter()
-                .find(|&&(i, _)| i == item)
-                .map_or(0, |&(_, n)| n)
-        };
-        let mut lacking: Vec<usize> = Vec::new();
-        for (_, missing) in &short {
-            for &item in missing {
-                if lacking.contains(&item) {
-                    continue;
-                }
-                let need = short.iter().filter(|(_, m)| m.contains(&item)).count() as i32;
-                if on_base(item) < need {
-                    lacking.push(item);
-                }
-            }
-        }
-        let mut out: Vec<String> = short
-            .into_iter()
-            .filter(|(_, m)| m.iter().any(|i| lacking.contains(i)))
-            .map(|(id, _)| id)
+        let plan = self.outfit_plan();
+        let mut q = self
+            .world
+            .query::<(&UnitId, &Enlisted, Option<&Equipping>)>();
+        let mut out: Vec<String> = q
+            .iter(&self.world)
+            .filter(|(_, spot, going)| spot.spot == (x, y) && going.is_none())
+            .filter(|(id, ..)| !plan.short_of(&id.0).is_empty())
+            .map(|(id, ..)| id.0.clone())
             .collect();
         out.sort_unstable();
         out
@@ -5831,19 +5839,10 @@ impl Sim {
                     .map(|(id, o)| (id.0.clone(), o.0.clone()))
                     .collect()
             };
-            // Сколько каждой вещи лежит кучами (склад и пол): рамке «нет на
-            // складе» в штабе (§12.268) важно одно — есть ли за чем сходить.
-            let piled: Vec<i32> = {
-                let n = self.world.resource::<ItemRules>().0.len();
-                let mut out = vec![0; n];
-                let mut q = self.world.query::<&Stack>();
-                for st in q.iter(&self.world) {
-                    if let Some(slot) = out.get_mut(st.item) {
-                        *slot += st.count;
-                    }
-                }
-                out
-            };
+            // Кому что достанется из приписанного (§12.293): «нет на базе» и
+            // «станет» считаются по раздаче запаса, а не по «есть ли хоть одна
+            // куча» — иначе две штуки обещались бы четверым.
+            let plan = self.outfit_plan();
             // Приписка к парте (§12.84) — тем же отдельным запросом и по той же
             // причине, что и зачисление в отряд.
             let enrolled: Vec<(String, usize)> = {
@@ -6167,12 +6166,7 @@ impl Sim {
                             .to_string()
                         })
                         .collect(),
-                    outfit_short: outfit
-                        .iter()
-                        .filter(|&&i| !gear.is_some_and(|g| g.has(i)))
-                        .copied()
-                        .filter(|&i| piled.get(i).copied().unwrap_or(0) <= 0)
-                        .collect(),
+                    outfit_short: plan.short_of(&id.0).to_vec(),
                     // Приписка, а не задача: `study` в `job` уже есть, но он
                     // молчит про кота, которого увёл сон (§12.84).
                     study: enrolled
@@ -6207,7 +6201,7 @@ impl Sim {
                     // подписью она теперь не может.
                     raid_force: raid_skill + gear_force + 1,
                     raid_force_next: raid_skill
-                        + crate::gear::planned_force(items, gear, &outfit)
+                        + crate::gear::planned_force(items, gear, plan.coming_of(&id.0))
                         + 1,
                     raid_skill,
                     gear_force,
@@ -6786,6 +6780,7 @@ impl Sim {
         // Отряды поимённо: с §12.152 у каждого гаража свой состав, и панель
         // обязана называть его словом — иначе кнопка вылазки берёт отряд ниоткуда.
         let nodes: Vec<NodeSnap> = {
+            let plan = self.outfit_plan();
             let cells = self.node_cells_of();
             cells
                 .into_iter()
@@ -6793,8 +6788,8 @@ impl Sim {
                     let forces = self.node_forces(x, y);
                     let (shares, fails) = self.node_outcomes(x, y);
                     // «Станет», когда отряд доберёт приписанное (§12.293).
-                    let forces_next = self.node_forces_by(x, y, true);
-                    let (shares_next, fails_next) = self.node_outcomes_by(x, y, true);
+                    let forces_next = self.node_forces_by(x, y, Some(&plan));
+                    let (shares_next, fails_next) = self.node_outcomes_by(x, y, Some(&plan));
                     // Почему правило стоит (§12.116). Два разных ответа, и
                     // считает их ядро теми же выражениями, что и сам
                     // `run_auto_raids`: «состав не в сборе» чинится временем,
@@ -6814,7 +6809,7 @@ impl Sim {
                             .into_iter()
                             .map(|(e, _)| e)
                             .collect();
-                        (self.traits_of(&ready), self.traits_planned(&ready))
+                        (self.traits_of(&ready), self.traits_planned(&ready, &plan))
                     };
                     let (node_traits, next_traits) = node_traits;
                     let active = self.abilities_active();
