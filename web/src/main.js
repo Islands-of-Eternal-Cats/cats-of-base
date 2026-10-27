@@ -485,6 +485,17 @@ onPanelClick(raidWinEl, ".crew-duty", (b) => {
     y: Number(b.dataset.y),
   });
 });
+// Фишка снаряжения (§12.268): приписка прямо из штаба, та же команда, что в
+// «Личном деле». Отказ — классом и словом в подсказке (§12.121).
+onPanelClick(raidWinEl, ".crew-gear", (b) => {
+  if (b.classList.contains("off")) return;
+  sendAction({
+    type: "setOutfit",
+    id: b.dataset.id,
+    item: Number(b.dataset.item),
+    on: !b.dataset.in,
+  });
+});
 onPanelClick(raidWinEl, ".raid-go", (b) => {
   // Классом, а не `disabled` (§12.121). Причина отказа у заказа написана
   // строкой `.raidwin-why` прямо над кнопкой — но правило сплошное, без
@@ -4545,7 +4556,8 @@ function crewList(snap, x, y) {
     // Дежурство — вторая кнопка той же строки: радист приписан к **этому**
     // отряду (§12.285), а сядет за любую свободную рацию. Нет на базе ни одной
     // рации — дежурить негде, и кнопки нет вовсе (§12.60).
-    if (!radioOnBase()) return { band, id: e.id, html: pick };
+    const kit = gearChips(e);
+    if (!radioOnBase()) return { band, id: e.id, html: pick + kit };
     const on = e.post_x === x && e.post_y === y;
     // Допуск считает ядро (`may_relay`, §12.291). Снять приписку можно всегда:
     // запертая отмена оставила бы её несбрасываемой.
@@ -4553,7 +4565,7 @@ function crewList(snap, x, y) {
     // ту одну, что отличает радиста. Место под кнопку остаётся пустым, чтобы
     // строки не разъезжались по ширине.
     const gap = '<span class="tool crew-duty void" aria-hidden="true">📻</span>';
-    if (!on && !e.may_relay) return { band, id: e.id, html: pick + gap };
+    if (!on && !e.may_relay) return { band, id: e.id, html: pick + kit + gap };
     const dutyTip = on
       ? "Снять приписку к рации"
       : "Радист этого отряда: сядет за свободную рацию, когда отряд выйдет";
@@ -4561,7 +4573,7 @@ function crewList(snap, x, y) {
       `<button class="tool crew-duty${on ? " on" : ""}" data-id="${esc(e.id)}"` +
       ` data-x="${x}" data-y="${y}"${on ? ' data-in="1"' : ""}` +
       ` data-tip="${dutyTip}">📻</button>`;
-    return { band, id: e.id, html: pick + duty };
+    return { band, id: e.id, html: pick + kit + duty };
   });
 
   // Четыре группы с подписями. Вопрос «почему сила 0, когда в отряде трое»
@@ -11725,6 +11737,69 @@ function wearLeft(e, item) {
   return k < 0 ? 0 : ((e.gear_left ?? [])[k] ?? 0);
 }
 
+// Состояние приписанной вещи словом (§12.268) — **одно выражение** на строку
+// «Личного дела» и на фишку в штабе: разойдись они, и одна сказала бы «сходит
+// сам» там, где другая говорит «нет на базе».
+function gearState(e, i) {
+  const worn = (e.gear ?? []).includes(i);
+  const want = (e.outfit ?? []).includes(i);
+  const left = wearLeft(e, i);
+  if ((e.outfit_gates ?? [])[i] === "personal") return "личное — не снимается";
+  if (worn) {
+    return left > 0
+      ? `надето · ещё ${plural(left, "выход", "выхода", "выходов")}`
+      : "надето";
+  }
+  if (!want) return "не носит";
+  return (e.outfit_short ?? []).includes(i)
+    ? "носит · нет на базе"
+    : "носит · сходит сам";
+}
+
+// Фишки снаряжения в строке кота штаба: кнопка на каждую надеваемую вещь,
+// клик — та же приписка, что «Носить»/«Снять» в «Личном деле» (`setOutfit`).
+// Стоит здесь потому, что в штабе видна цена решения — сила кота и прогноз
+// заказа рядом (§12.80), а одевать отряд по коту через дело — пять окон на
+// одно решение.
+//
+// Набор фишек **один на все строки** — открытые вещи палитры (`gear_open`), — и
+// поэтому колонки фишек стоят ровно под друг другом. Личная вещь (§12.256)
+// фишки не получает: она не выбор ни для кого, а у хозяина о ней уже говорит
+// строка поля («сбор образцов»). Состояний три: надето (ярко), приписано и
+// ещё не взято (обводка; красная — взять негде), не носит (тускло).
+function gearChips(e) {
+  const items = meta.items ?? [];
+  const open = lastSnap?.gear_open ?? [];
+  const chips = [];
+  items.forEach((def, i) => {
+    if (def.personal || !open[i]) return;
+    const worn = (e.gear ?? []).includes(i);
+    const want = (e.outfit ?? []).includes(i);
+    const short = want && !worn && (e.outfit_short ?? []).includes(i);
+    const gate = (e.outfit_gates ?? [])[i] ?? "";
+    // Снять можно всегда, кроме кота в поле: запертая отмена оставила бы
+    // приписку несбрасываемой. Ворота считает ядро, тег называет вид.
+    const why = gate === "unskilled" ? skillNeedWhy(def) : OUTFIT_WHY[gate];
+    const act = want
+      ? "Клик — снять: надетое кот положит под ноги"
+      : "Клик — носить: кот сам сходит за вещью";
+    const tip = `${def.label || def.id}: ${gearState(e, i)}. ${why || act}`;
+    const cls = [
+      "tool crew-gear",
+      worn ? "worn" : want ? "want" : "",
+      short ? "short" : "",
+      why ? "off" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    chips.push(
+      `<button class="${cls}" data-id="${esc(e.id)}" data-item="${i}"` +
+        `${want ? ' data-in="1"' : ""} data-tip="${esc(tip)}">${itemGlyph(i)}</button>`,
+    );
+  });
+  return chips.length ? `<span class="crew-kit">${chips.join("")}</span>` : "";
+}
+
 function syncDossierGear(ui, e) {
   let any = false;
   for (const { row, live, btn, def, i } of ui.gear) {
@@ -11744,18 +11819,7 @@ function syncDossierGear(ui, e) {
     if (row.hidden) continue;
     any = true;
     const personal = gate === "personal";
-    const left = wearLeft(e, i);
-    const state = personal
-      ? "личное — не снимается"
-      : worn
-        ? left > 0
-          ? `надето · ещё ${plural(left, "выход", "выхода", "выходов")}`
-          : "надето"
-        : want
-          ? (e.outfit_short ?? []).includes(i)
-            ? "носит · нет на базе"
-            : "носит · сходит сам"
-          : "не носит";
+    const state = gearState(e, i);
     setHtml(
       live,
       `<div class="cat-row"><span>${itemGlyph(i)} ${esc(def.label || def.id)}</span></div>` +

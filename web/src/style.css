@@ -884,6 +884,45 @@ main#stage.mode-cursor #mode-banner {
   filter: grayscale(1);
   opacity: 0.55;
 }
+/* Фишки снаряжения в строке кота (§12.268): колонка маленьких кнопок между
+   строкой и рацией. Надето — ярко, приписано и не взято — обводкой (красной,
+   если взять негде), не носит — тускло и серо, как незанятая рация. */
+.crew-kit {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+.crew-gear {
+  flex: 0 0 auto;
+  padding: 3px;
+  line-height: 0;
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+.crew-gear svg,
+.crew-gear .chip {
+  width: 16px;
+  height: 16px;
+}
+.crew-gear.worn {
+  filter: none;
+  opacity: 1;
+  border-color: var(--accent);
+}
+.crew-gear.want {
+  filter: none;
+  opacity: 0.8;
+  border-style: dashed;
+  border-color: var(--accent);
+}
+.crew-gear.short {
+  border-color: var(--bad);
+}
+.crew-gear.off {
+  opacity: 0.25;
+}
 /* Не умеет «Связь» (§12.291): место держим, значок прячем. */
 .crew-duty.void {
   visibility: hidden;
