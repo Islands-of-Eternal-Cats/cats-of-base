@@ -5729,11 +5729,18 @@ impl Sim {
     /// заявка, и каждый тик сбора: радиста могли приписать уже после заявки,
     /// и сбор мог приехать из снимка. Неготового (спит, ранен) не трогаем по
     /// тем же доводам, что бойца; севшего — тоже: его стул держит `OnDuty`.
+    ///
+    /// **Идущего за приписанной вещью — тоже** (§12.296): бойца сбор одевает
+    /// и на маршруте (§12.34), а радиста срывал. Сорванного `assign_equip`
+    /// (он в цепочке раньше `gather_squad`) тем же тиком слал за вещью снова,
+    /// и кот дрожал на месте — ни одет, ни за столом; а со стулом, выданным
+    /// заявкой, уходил в поле голым. Поход короткий, брифинг его ждёт.
     fn summon_operators(&mut self, node: (i32, i32)) {
         let ops: Vec<String> = {
-            let mut q = self
-                .world
-                .query_filtered::<(&Posted, &UnitId), (Without<OnDuty>, Without<Away>)>();
+            let mut q = self.world.query_filtered::<
+                (&Posted, &UnitId),
+                (Without<OnDuty>, Without<Away>, Without<Equipping>),
+            >();
             q.iter(&self.world)
                 .filter(|(p, _)| p.spot == node)
                 .map(|(_, id)| id.0.clone())

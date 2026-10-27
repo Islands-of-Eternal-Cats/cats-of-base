@@ -739,3 +739,32 @@ fn only_a_cat_who_knows_relay_takes_the_radio() {
     assert!(!sim.post_relay("b", 2, 1), "отказ");
     assert_eq!(sim.post_of("a"), Some((2, 1)), "и прежний на месте");
 }
+
+/// Радист, ушедший за приписанной вещью, сбор не держит вечно (§12.296): сбор
+/// не снимает его с похода за снаряжением, а ждёт, пока он оденется. До этого
+/// сбор срывал поход каждый тик, `assign_equip` (он раньше `gather_squad`)
+/// тут же посылал кота снова, и тот дрожал на месте — ни одет, ни за столом.
+#[test]
+fn an_operator_going_for_his_gear_is_not_pulled_back() {
+    const SUIT: usize = 1;
+    let (mut sim, first, _) = sim_with_two_radios(2, 2, 200);
+    sim.set_force(SUIT, 1);
+    sim.put_item(1, 2, SUIT, 4);
+    sim.enlist("a", 1, 2);
+    sim.post_relay("d", 1, 2);
+    sim.outfit_all(&[SUIT]);
+    sim.tick_n(1);
+    assert!(sim.is_equipping("d"), "радист пошёл за комбинезоном");
+    assert!(sim.launch_node(first, 1, 2, -1));
+    let mut t = 0;
+    while !sim.is_away("a") {
+        sim.tick_n(1);
+        t += 1;
+        assert!(t < 150, "отряд так и не ушёл: радист {:?}", sim.pos_of("d"));
+    }
+    assert_eq!(
+        sim.gear_of("d"),
+        vec![SUIT],
+        "радист оделся перед брифингом"
+    );
+}
