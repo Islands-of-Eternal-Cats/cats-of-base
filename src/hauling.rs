@@ -29,10 +29,12 @@
 //! Отдельного claim'а поэтому нет ни у чертежа, ни у сделки, ни у пометки: его
 //! пришлось бы снимать в пяти местах, откуда задачу отбирают, и однажды забыть.
 
+use std::cell::OnceCell;
+
 use bevy_ecs::prelude::*;
 
 use crate::components::*;
-use crate::jobs::{build_spot, held_cells, work_spot, worked_cells};
+use crate::jobs::{build_spot, build_spots, held_cells, work_spot, worked_cells};
 use crate::map::{BaseMap, DIRS};
 use crate::path::Reach;
 
@@ -86,8 +88,8 @@ impl Dest {
 }
 
 /// Куча-источник в раздаче: сущность (её запоминает наводка), клетка, тип,
-/// сколько в ней осталось необещанного и обход от неё.
-type Pile = (Entity, (i32, i32), usize, i32, Reach);
+/// сколько в ней осталось необещанного и обход от неё — лениво, §12.298.
+type Pile = (Entity, (i32, i32), usize, i32, OnceCell<Reach>);
 
 /// Сколько этого типа адресату не хватает; ноль — не нужен вовсе.
 fn need_of(miss: &[(usize, i32)], item: usize) -> i32 {
@@ -434,7 +436,12 @@ pub(crate) fn assign_hauls(
     for n in &mut needy {
         n.budget = n.miss.iter().map(|&(_, count)| count).sum::<i32>();
     }
-    needy.retain(|n| n.budget > 0);
+    // Адресат, к которому не подойти ни с одной клетки, не сойдётся ни в одну
+    // пару (§12.298): `build_spot` перебирает ровно эти клетки. Отсев идёт до
+    // обходов от куч — при массовой разметке пола на пустоте подход есть только
+    // у кромки, а глубинные чертежи иначе стоили бы обхода от каждой кучи
+    // каждый тик, пока не достроится всё.
+    needy.retain(|n| n.budget > 0 && build_spots(&map, &rules, n.at, n.tile).next().is_some());
     if needy.is_empty() {
         return;
     }
@@ -478,15 +485,7 @@ pub(crate) fn assign_hauls(
             .iter()
             .filter_map(|(e, p, s)| {
                 let left = s.count - claimed(&spoken_for, e);
-                (left > 0).then(|| {
-                    (
-                        e,
-                        (p.x, p.y),
-                        s.item,
-                        left,
-                        Reach::all(map, tiles, (p.x, p.y)),
-                    )
-                })
+                (left > 0).then(|| (e, (p.x, p.y), s.item, left, OnceCell::new()))
             })
             .collect()
     } else {
@@ -536,6 +535,9 @@ pub(crate) fn assign_hauls(
                             // не строится вовсе — кот «доходил» бы не сходя с
                             // места, а взять с соседней клетки уже не мог.
                             let (spot, to_pile) = work_spot(map, tiles, reach, *pile, held)?;
+                            // Обход от кучи — лениво (§12.298): нужен он лишь
+                            // той куче, до которой кот дошёл бы и чей тип ждут.
+                            let from_pile = from_pile.get_or_init(|| Reach::all(map, tiles, *pile));
                             let (_, rest) =
                                 build_spot(map, tiles, from_pile, n.at, n.tile, None, held)?;
                             Some((to_pile + rest, ci, ni, spot, Some(pi)))

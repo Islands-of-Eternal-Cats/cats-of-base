@@ -339,6 +339,29 @@ fn splits_space(plan: &Plan, rules: &TileRules, at: (i32, i32), tile: i16) -> bo
     left > 0
 }
 
+/// Клетки, с которых вообще можно работать над чертежом, — без оглядки на то,
+/// дойдёт ли туда кто-нибудь: сам тайл (если проходим и это не снос) и
+/// проходимые соседи.
+///
+/// Одно выражение на `build_spot` и на отсев в `assign_hauls` (§12.298): при
+/// массовой разметке пола на пустоте подойти можно только к кромке, а
+/// глубинные чертежи без подхода раздача иначе перебирала бы каждый тик,
+/// считая обход от каждой кучи. Разойдись множества — отсев выбросил бы
+/// чертёж, к которому `build_spot` подход нашёл.
+pub(crate) fn build_spots<'a>(
+    map: &'a BaseMap,
+    rules: &'a TileRules,
+    bp: (i32, i32),
+    bp_tile: i16,
+) -> impl Iterator<Item = (i32, i32)> + 'a {
+    let own = (bp_tile >= 0 && map.walkable(rules, bp.0, bp.1)).then_some(bp);
+    own.into_iter().chain(
+        DIRS.iter()
+            .map(move |(dx, dy)| (bp.0 + dx, bp.1 + dy))
+            .filter(move |n| map.walkable(rules, n.0, n.1)),
+    )
+}
+
 /// Найти клетку, откуда кот выполнит чертёж (сам тайл, если проходим, либо
 /// сосед), и её цену — число шагов от кота. Возвращает (клетка, шаги).
 ///
@@ -380,18 +403,7 @@ pub(crate) fn build_spot(
     front: Option<&DemolitionFront>,
     held: &[(i32, i32)],
 ) -> Option<((i32, i32), i32)> {
-    let mut spots = Vec::new();
-    if bp_tile >= 0 && map.walkable(rules, bp.0, bp.1) {
-        spots.push(bp);
-    }
-    for (dx, dy) in DIRS {
-        let n = (bp.0 + dx, bp.1 + dy);
-        if map.walkable(rules, n.0, n.1) {
-            spots.push(n);
-        }
-    }
-    let reachable = spots
-        .into_iter()
+    let reachable = build_spots(map, rules, bp, bp_tile)
         .filter_map(|s| reach.dist_at(s.0, s.1).map(|d| (s, d)));
     // Своя клетка занятой не бывает: нулевой шаг и значит «я уже здесь стою».
     let busy = |s: (i32, i32), d: i32| i32::from(d > 0 && held.contains(&s));
