@@ -488,22 +488,20 @@ onPanelClick(raidWinEl, ".crew-duty", (b) => {
 // Слот снаряжения (§12.293): открывает список вещей для слота, повторный клик
 // закрывает. Это осмотр, а не команда — мимо `sendAction`.
 onPanelClick(raidWinEl, ".crew-slot", (b) => {
-  if (b.classList.contains("off") || b.classList.contains("lock")) return;
-  const same = slotPick?.id === b.dataset.id && slotPick.slot === b.dataset.slot;
-  slotPick = same ? null : { id: b.dataset.id, slot: b.dataset.slot };
-  renderRaidWindow();
+  if (toggleSlot(b, "raid")) renderRaidWindow();
 });
 // Строка списка — приписка, та же команда, что «Носить»/«Снять» в «Личном
 // деле». Замену прежней вещи в слоте делает ядро (`Sim::set_outfit`).
-onPanelClick(raidWinEl, ".slot-pick", (b) => {
-  if (b.classList.contains("off") || !slotPick) return;
-  sendAction({
-    type: "setOutfit",
-    id: slotPick.id,
-    item: Number(b.dataset.item),
-    on: !b.dataset.off,
-  });
-  closeSlotPop();
+onPanelClick(raidWinEl, ".slot-pick", pickSlotItem);
+// То же в «Личном деле» (§12.297): карточка слота нажимается целиком, а
+// кнопка-якорь списка — внутри неё.
+onPanelClick(dossierEl, ".dos-slot", (card) => {
+  const b = card.querySelector(".crew-slot");
+  if (b && toggleSlot(b, "dos")) syncDossier();
+});
+onPanelClick(dossierEl, ".slot-pick", pickSlotItem);
+dossierEl.addEventListener("mousedown", (e) => {
+  if (!e.target.closest(".slot-pop, .dos-slot")) closeSlotPop();
 });
 onPanelClick(raidWinEl, ".raid-go", (b) => {
   // Классом, а не `disabled` (§12.121). Причина отказа у заказа написана
@@ -11699,6 +11697,7 @@ function openDossier(id) {
 
 function closeDossier() {
   if (!dossierOpen) return;
+  if (slotPick?.host === "dos") slotPick = null;
   dossierOpen = false;
   dossierUi = null;
   dossierEl.hidden = true;
@@ -11838,9 +11837,29 @@ function buildDossier(roster) {
   ui.gearHead.className = "cat-row";
   ui.gearHead.innerHTML = "<span>Снаряжение</span>";
   list.appendChild(ui.gearHead);
+  // Слоты (§12.297) — карточкой на слот, как в штабе (§12.293): что надето и
+  // что можно надеть вместо — одним кликом, а не списком всей палитры.
+  // Карточка — постоянный узел, внутри `setHtml` только на изменении.
+  ui.slots = document.createElement("div");
+  ui.slots.className = "dos-slots";
+  list.appendChild(ui.slots);
+  ui.slotCards = slotsInPlay().map(({ id, label }) => {
+    const card = document.createElement("div");
+    card.className = "dos-slot";
+    card.dataset.key = `slot@${id}`;
+    ui.slots.appendChild(card);
+    return { card, id, label };
+  });
+  // Список вещей слота — один постоянный узел на окно, как `raidUi.pop`.
+  ui.pop = document.createElement("div");
+  ui.pop.className = "slot-pop";
+  ui.pop.hidden = true;
+  box.appendChild(ui.pop);
+  // Вещь без слота в рулсете (`slot` не задан) по-прежнему идёт строкой
+  // «Носить»/«Снять»: слотов для неё нет, и карточкой её не показать.
   ui.gear = [];
   (meta.items ?? []).forEach((def, i) => {
-    if (!wearable(def)) return;
+    if (!wearable(def) || def.slot) return;
     const row = document.createElement("div");
     row.className = "dos-skill";
     const live = document.createElement("div");
@@ -11945,10 +11964,8 @@ const SLOTS = [
 // Контур пустого слота: силуэт рубашки и лапы. Не глиф вещи — тот назвал бы
 // предмет, которого база, может быть, ещё не видела (§12.131).
 const SLOT_ICON = {
-  body:
-    '<svg class="slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3 4 6l2 4 2-1v11h8V9l2 1 2-4-5-3c-.6 1.6-1.8 2.5-3 2.5S9.6 4.6 9 3z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>',
-  hand:
-    '<svg class="slot-icon" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="16" rx="4.5" ry="3.8"/><circle cx="6" cy="10" r="1.8"/><circle cx="10" cy="6.5" r="1.8"/><circle cx="14" cy="6.5" r="1.8"/><circle cx="18" cy="10" r="1.8"/></g></svg>',
+  body: '<svg class="slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3 4 6l2 4 2-1v11h8V9l2 1 2-4-5-3c-.6 1.6-1.8 2.5-3 2.5S9.6 4.6 9 3z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path></svg>',
+  hand: '<svg class="slot-icon" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="16" rx="4.5" ry="3.8"></ellipse><circle cx="6" cy="10" r="1.8"></circle><circle cx="10" cy="6.5" r="1.8"></circle><circle cx="14" cy="6.5" r="1.8"></circle><circle cx="18" cy="10" r="1.8"></circle></g></svg>',
 };
 
 // Слоты, которые вообще бывают в этой игре: у какой-нибудь вещи палитры такой
@@ -11975,60 +11992,127 @@ function slotItem(e, slot) {
 function gearSlots(e) {
   const slots = slotsInPlay();
   if (!slots.length) return "";
-  const html = slots.map(({ id, label }) => {
-    const i = slotItem(e, id);
-    const def = i >= 0 ? meta.items[i] : null;
-    const worn = i >= 0 && (e.gear ?? []).includes(i);
-    const want = i >= 0 && (e.outfit ?? []).includes(i);
-    const short = want && !worn && (e.outfit_short ?? []).includes(i);
-    const lock = !!def?.personal;
-    const open = slotPick?.id === e.id && slotPick.slot === id;
-    const what = def ? `${def.label || def.id} — ${gearState(e, i)}` : "пусто";
-    // Личная вещь (§12.256) держит слот насовсем: выбирать нечего, и клик по
-    // такому слоту не открывает ничего — подсказка только называет вещь.
-    const tip = lock
-      ? `${label}: ${def.label || def.id} — личная вещь, слот не меняется`
-      : e.away
-        ? `${label}: ${what}. ${OUTFIT_WHY.away}`
-        : `${label}: ${what}. Клик — выбрать`;
-    const cls = [
-      "tool crew-slot",
-      !def ? "empty" : worn ? "worn" : "want",
-      short ? "short" : "",
-      lock ? "lock" : "",
-      open ? "open" : "",
-      e.away ? "off" : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-    return (
-      `<button class="${cls}" data-id="${esc(e.id)}" data-slot="${id}" data-tip="${esc(tip)}">` +
-      (def ? itemGlyph(i) : SLOT_ICON[id]) +
-      "</button>"
-    );
-  });
+  const html = slots.map(({ id, label }) => slotButton(e, id, label, "raid"));
   return `<span class="crew-kit">${html.join("")}</span>`;
 }
 
-// Открытый список слота: чей и какой. Один на окно — второй клик по другому
-// слоту его переставляет, повторный по тому же закрывает.
+// Кнопка слота — **одно выражение** на штаб и «Личное дело» (§12.297): разойдись
+// они, и рамка «не хватит» горела бы в одном окне и молчала в другом.
+function slotButton(e, id, label, host) {
+  const i = slotItem(e, id);
+  const def = i >= 0 ? meta.items[i] : null;
+  const worn = i >= 0 && (e.gear ?? []).includes(i);
+  const want = i >= 0 && (e.outfit ?? []).includes(i);
+  const short = want && !worn && (e.outfit_short ?? []).includes(i);
+  const lock = !!def?.personal;
+  const open =
+    slotPick?.host === host && slotPick.id === e.id && slotPick.slot === id;
+  const what = def ? `${def.label || def.id} — ${gearState(e, i)}` : "пусто";
+  // Личная вещь (§12.256) держит слот насовсем: выбирать нечего, и клик по
+  // такому слоту не открывает ничего — подсказка только называет вещь.
+  const tip = lock
+    ? `${label}: ${def.label || def.id} — личная вещь, слот не меняется`
+    : e.away
+      ? `${label}: ${what}. ${OUTFIT_WHY.away}`
+      : `${label}: ${what}. Клик — выбрать`;
+  const cls = [
+    "tool crew-slot",
+    !def ? "empty" : worn ? "worn" : "want",
+    short ? "short" : "",
+    lock ? "lock" : "",
+    open ? "open" : "",
+    e.away ? "off" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    `<button class="${cls}" data-id="${esc(e.id)}" data-slot="${id}" data-tip="${esc(tip)}">` +
+    (def ? itemGlyph(i) : SLOT_ICON[id]) +
+    "</button>"
+  );
+}
+
+// Слот в «Личном деле» (§12.297): та же кнопка, что в штабе, и рядом словом —
+// что за слот, что в нём и в каком оно состоянии. Карточка целиком нажимается:
+// мишень в 30 пикселей посреди широкой строки — это поиск, а не выбор.
+function dossierSlotHtml(e, id, label) {
+  const i = slotItem(e, id);
+  const def = i >= 0 ? meta.items[i] : null;
+  const gives = def
+    ? [
+        (def.force ?? 0) > 0 ? `+${def.force} к силе` : "",
+        (def.collects ?? 0) > 0 ? "сбор образцов" : "",
+      ].filter(Boolean)
+    : [];
+  const state = def
+    ? gearState(e, i) + (gives.length ? ` · ${gives.join(" · ")}` : "")
+    : e.away
+      ? "пусто"
+      : "пусто · клик — выбрать";
+  return (
+    slotButton(e, id, label, "dos") +
+    '<div class="dos-slot-text">' +
+    `<div class="dos-slot-label">${label}</div>` +
+    `<div class="dos-slot-item${def ? "" : " empty"}">${def ? esc(def.label || def.id) : "—"}</div>` +
+    `<div class="cat-sub">${state}</div>` +
+    "</div>"
+  );
+}
+
+// Открытый список слота: в каком окне, чей и какой. Один на игру — второй клик
+// по другому слоту его переставляет, повторный по тому же закрывает. `host` —
+// чья кнопка: штаб (`raid`) или «Личное дело» (`dos`), §12.297.
 let slotPick = null;
+
+// Узел списка и окно, в котором ищем кнопку-якорь, — по `host`.
+function slotHost(host) {
+  if (host === "dos")
+    return dossierOpen ? { root: dossierEl, pop: dossierUi?.pop } : null;
+  return raidWinOpen ? { root: raidWinEl, pop: raidUi?.pop } : null;
+}
+
+// Клик по слоту: открыть список, повторный — закрыть. Осмотр, а не команда —
+// мимо `sendAction`. Общий у штаба и «Личного дела».
+function toggleSlot(b, host) {
+  if (b.classList.contains("off") || b.classList.contains("lock")) return false;
+  const same =
+    slotPick?.host === host &&
+    slotPick.id === b.dataset.id &&
+    slotPick.slot === b.dataset.slot;
+  slotPick = same ? null : { host, id: b.dataset.id, slot: b.dataset.slot };
+  return true;
+}
+
+// Строка списка — приписка (`Sim::set_outfit` сам заменяет прежнюю вещь слота).
+function pickSlotItem(b) {
+  if (b.classList.contains("off") || !slotPick) return;
+  sendAction({
+    type: "setOutfit",
+    id: slotPick.id,
+    item: Number(b.dataset.item),
+    on: !b.dataset.off,
+  });
+  closeSlotPop();
+}
 
 // Список вещей для слота (§12.293). Узел **один и постоянный** (`raidUi.pop`):
 // строка кота переписывается кадром, и список внутри неё жил бы один кадр —
 // клик по нему умирал бы (§12.84). Строки внутри переписываются только на
 // изменении (`setHtml`), а ловятся делегированием (`onPanelClick`).
-function syncSlotPop() {
-  const pop = raidUi?.pop;
+function syncSlotPop(host) {
+  const at = slotHost(host);
+  const pop = at?.pop;
   if (!pop) return;
-  const e = slotPick && (lastSnap?.entities ?? []).find((c) => c.id === slotPick.id);
+  const mine = slotPick?.host === host;
+  const e =
+    mine && (lastSnap?.entities ?? []).find((c) => c.id === slotPick.id);
   const anchor =
     e &&
-    raidWinEl.querySelector(
+    at.root.querySelector(
       `.crew-slot[data-id="${CSS.escape(e.id)}"][data-slot="${slotPick.slot}"]`,
     );
   if (!e || !anchor) {
-    slotPick = null;
+    if (mine) slotPick = null;
     pop.hidden = true;
     return;
   }
@@ -12079,23 +12163,44 @@ function syncSlotPop() {
   );
   pop.hidden = false;
   // Позиция — от кнопки слота, каждым кадром: колонка состава прокручивается,
-  // а строки переставляются узлами.
-  const r = anchor.getBoundingClientRect();
-  const left = `${Math.round(r.right + 6)}px`;
-  const top = `${Math.round(Math.min(r.top, innerHeight - pop.offsetHeight - 8))}px`;
+  // а строки переставляются узлами. В «Личном деле» список встаёт **под
+  // карточкой** (§12.297): справа от кнопки он закрыл бы её же подпись — то
+  // самое «что сейчас в слоте», с которым игрок сравнивает выбор.
+  const card = host === "dos" && anchor.closest(".dos-slot");
+  const r = (card || anchor).getBoundingClientRect();
+  const below = r.bottom + 4 + pop.offsetHeight <= innerHeight - 8;
+  const left = `${Math.round(card ? r.left : r.right + 6)}px`;
+  const top = `${Math.round(
+    card
+      ? below
+        ? r.bottom + 4
+        : r.top - 4 - pop.offsetHeight
+      : Math.min(r.top, innerHeight - pop.offsetHeight - 8),
+  )}px`;
   if (pop.style.left !== left) pop.style.left = left;
   if (pop.style.top !== top) pop.style.top = top;
 }
 
 function closeSlotPop() {
   if (!slotPick) return false;
+  const pop = slotHost(slotPick.host)?.pop;
   slotPick = null;
-  if (raidUi?.pop) raidUi.pop.hidden = true;
+  if (pop) pop.hidden = true;
+  if (dossierOpen) syncDossier();
   return true;
 }
 
 function syncDossierGear(ui, e) {
-  let any = false;
+  let any = ui.slotCards.length > 0;
+  for (const { card, id, label } of ui.slotCards) {
+    setHtml(card, dossierSlotHtml(e, id, label));
+    const b = card.firstElementChild;
+    card.classList.toggle(
+      "off",
+      !!b && (b.classList.contains("off") || b.classList.contains("lock")),
+    );
+    card.classList.toggle("open", !!b?.classList.contains("open"));
+  }
   for (const { row, live, btn, def, i } of ui.gear) {
     const worn = (e.gear ?? []).includes(i);
     const want = (e.outfit ?? []).includes(i);
@@ -12277,9 +12382,15 @@ function syncDossier() {
 
   // Надетое и лапы — те же строки, что и в панели: это состояние, а не
   // история, и дублируются они намеренно.
-  setHtml(ui.kit, `${gearLine(e)} · ${pawsLine(e)}`);
+  // С карточками слотов (§12.297) строка «надето: …» повторяла бы их же
+  // соседом снизу — остаются лапы.
+  setHtml(
+    ui.kit,
+    ui.slotCards.length ? pawsLine(e) : `${gearLine(e)} · ${pawsLine(e)}`,
+  );
 
   syncDossierGear(ui, e);
+  syncSlotPop("dos");
 
   // История. Пустой её не пишем вовсе: у кота, который никуда не ходил, это
   // не ответ на вопрос, а строка про отсутствие событий — соседняя дата
@@ -14296,7 +14407,7 @@ function closeRaidWindow() {
   readNews("rule", ruleDefsAt("raid"));
   raidWinOpen = false;
   raidWinAt = null;
-  slotPick = null;
+  if (slotPick?.host === "raid") slotPick = null;
   raidUi = null;
   raidWinEl.hidden = true;
   raidWinEl.innerHTML = "";
@@ -14605,7 +14716,7 @@ function renderRaidWindow() {
 
   setHtml(raidUi.sum, summaryHtml(raid, node));
   syncCrewRows(node);
-  syncSlotPop();
+  syncSlotPop("raid");
 
   // Правило узла — строкой **над** списком, а не первой карточкой в нём.
   // Порядок заказов это лестница сложности (индекс в палитре = ступень), и

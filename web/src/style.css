@@ -2731,6 +2731,60 @@ main#stage.mode-cursor #mode-banner {
   padding: 4px 10px;
 }
 
+/* Слоты снаряжения в «Личном деле» (§12.297): карточка на слот, кнопка та же,
+   что в штабе (`.crew-slot`), только крупнее, и рядом словом — что в слоте. */
+.dos-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 4px 0 10px;
+}
+.dos-slot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 240px;
+  max-width: 360px;
+  padding: 8px 12px 8px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.dos-slot:hover {
+  border-color: var(--accent);
+}
+.dos-slot.open {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.dos-slot.off {
+  cursor: default;
+}
+.dos-slot.off:hover {
+  border-color: var(--line);
+}
+.dos-slot .crew-slot {
+  width: 44px;
+  height: 44px;
+}
+.dos-slot .crew-slot svg,
+.dos-slot .crew-slot .chip {
+  width: 26px;
+  height: 26px;
+}
+.dos-slot-text {
+  min-width: 0;
+}
+.dos-slot-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dos-slot-item.empty {
+  color: var(--muted);
+}
+
 .dos-log {
   margin-top: 8px;
   border-top: 1px solid var(--line);
