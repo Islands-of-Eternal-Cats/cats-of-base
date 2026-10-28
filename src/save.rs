@@ -577,6 +577,9 @@ pub(crate) struct StructureDto {
     /// Порядок постановки (§12.284): по нему номера отрядов.
     #[serde(default)]
     pub(crate) serial: u32,
+    /// Имя отряда (§12.300); пусто — отряд называется номером.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) name: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -816,6 +819,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                     anchor: s.anchor,
                     rot: s.rot,
                     serial: s.serial,
+                    name: s.name.clone(),
                 }),
                 stack: e.get::<Stack>().map(|s| (s.item, s.count)),
                 to_store: e.contains::<ToStore>(),
@@ -1320,6 +1324,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
                 anchor: s.anchor,
                 rot: s.rot,
                 serial: s.serial,
+                name: s.name.clone(),
             });
         }
         if let Some((item, count)) = dto.stack {

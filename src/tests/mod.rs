@@ -623,6 +623,7 @@ impl Sim {
             anchor: (x, y),
             rot: 0,
             serial,
+            name: String::new(),
         });
     }
 

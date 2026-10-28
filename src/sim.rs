@@ -37,7 +37,8 @@ use crate::jobs::{BUILD_WORK, Plan, may_build, site_clutter};
 use crate::map::{BaseMap, rect_cells};
 use crate::missions::{
     Crew, crew_danger, crew_force, crew_traits, duration, exit_cells, faction_is_met, gather_squad,
-    guide_cut, guide_of, guide_value, node_cells, node_count, outcome, phase, sway, travel, way,
+    guide_cut, guide_of, guide_value, node_cells, node_count, numbered_as, outcome, phase,
+    squad_label, squad_name_gate, sway, tidy_squad_name, travel, way,
 };
 use crate::movement::note_clutter;
 use crate::movement::{Busy, is_stuck};
@@ -1268,6 +1269,36 @@ impl Sim {
         self.node_cells_of().contains(&(x, y))
     }
 
+    /// Объект-стол, держащий отряд этой клетки (§12.300). Отряд адресуется
+    /// первой клеткой объекта, а объект узнаётся по номеру постановки: он у
+    /// стоящих объектов уникален (§12.284). Одиночная клетка без объекта
+    /// (`set_gate` в тестах) объекта не имеет — и имени тоже.
+    fn node_structure(&mut self, x: i32, y: i32) -> Option<Entity> {
+        let serial = self.owners().serial_at(x, y)?;
+        let mut q = self.world.query::<(Entity, &Structure)>();
+        q.iter(&self.world)
+            .find(|(_, s)| s.serial == serial)
+            .map(|(e, _)| e)
+    }
+
+    /// Имена отрядов, как их видит игрок, в порядке отрядов (§12.300):
+    /// данное игроком или номерное. Одно выражение на снимок и ворота имени.
+    pub(crate) fn squad_labels(&mut self) -> Vec<String> {
+        let cells = self.node_cells_of();
+        cells
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, y))| {
+                let name = self
+                    .node_structure(x, y)
+                    .and_then(|e| self.world.get::<Structure>(e))
+                    .map(|s| s.name.clone())
+                    .unwrap_or_default();
+                squad_label(i + 1, &name)
+            })
+            .collect()
+    }
+
     /// Свободно ли **это** место брифинга: вылазки за ним сейчас нет.
     fn node_is_free(&mut self, x: i32, y: i32) -> bool {
         let mut q = self.world.query::<&Mission>();
@@ -1694,6 +1725,7 @@ impl Sim {
                 anchor,
                 rot: 0,
                 serial,
+                name: String::new(),
             });
         }
         world.insert_resource(ResearchRules(
@@ -2370,6 +2402,7 @@ impl Sim {
             height: self.height,
             day: self.day,
             news: self.news,
+            squad_name_max: crate::missions::SQUAD_NAME_MAX,
             palette: self.palette.clone(),
             structures: self.structures.clone(),
             sites: self.sites.clone(),
@@ -2766,6 +2799,7 @@ impl Sim {
             anchor: (x, y),
             rot,
             serial,
+            name: String::new(),
         });
         true
     }
@@ -4187,6 +4221,40 @@ impl Sim {
         }
         self.world.resource_mut::<AutoRaids>().set(x, y, def);
         true
+    }
+
+    /// Назвать отряд стола `(x, y)` (§12.300). Имя — подача, а не механика:
+    /// ни одна система его не читает, и исход вылазки от него не зависит.
+    ///
+    /// Пустое имя, как и своё номерное («Отряд 2» у второго), возвращает
+    /// умолчание: второго представления у безымянного отряда нет. Вернёт тег
+    /// отказа (`missions::squad_name_gate`) или `nonode`, если в клетке не
+    /// отряд; пустая строка — имя принято.
+    pub fn rename_squad(&mut self, x: i32, y: i32, name: &str) -> String {
+        note(&mut self.world, format!("rename_squad {x} {y} {name}"));
+        let cells = self.node_cells_of();
+        let Some(i) = cells.iter().position(|&c| c == (x, y)) else {
+            return "nonode".into();
+        };
+        let Some(e) = self.node_structure(x, y) else {
+            return "nonode".into();
+        };
+        let mut name = tidy_squad_name(name);
+        if numbered_as(&name) == Some(i + 1) {
+            name.clear();
+        }
+        if !name.is_empty() {
+            let mut others = self.squad_labels();
+            others.remove(i);
+            let why = squad_name_gate(&name, &others);
+            if !why.is_empty() {
+                return why.into();
+            }
+        }
+        if let Some(mut s) = self.world.get_mut::<Structure>(e) {
+            s.name = name;
+        }
+        String::new()
     }
 
     /// Приостановить правило узла `(x, y)` или вернуть его в строй (§12.77).
@@ -6789,9 +6857,13 @@ impl Sim {
         let nodes: Vec<NodeSnap> = {
             let plan = self.outfit_plan();
             let cells = self.node_cells_of();
+            let labels = self.squad_labels();
             cells
                 .into_iter()
-                .map(|(x, y)| {
+                .zip(labels)
+                .enumerate()
+                .map(|(i, ((x, y), name))| {
+                    let named = name != squad_label(i + 1, "");
                     let forces = self.node_forces(x, y);
                     let (shares, fails) = self.node_outcomes(x, y);
                     // «Станет», когда отряд доберёт приписанное (§12.293).
@@ -6823,6 +6895,8 @@ impl Sim {
                     NodeSnap {
                         x,
                         y,
+                        name,
+                        named,
                         crew: self.roster_of(x, y),
                         seats: {
                             let owners = self.owners();

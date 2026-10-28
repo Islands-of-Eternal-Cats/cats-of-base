@@ -7,6 +7,7 @@
 //! свободные слоты (§12.283); шлюзов два, на разном расстоянии от стола.
 
 use super::*;
+use crate::missions::SQUAD_NAME_MAX;
 
 const TABLE: i16 = 2;
 const EXIT: i16 = 3;
@@ -452,4 +453,95 @@ fn a_sleeping_operator_holds_the_briefing() {
     assert!(sim.is_resting("c"), "радист спит");
     assert_eq!(sim.mission_exit(), None, "брифинг не начат без радиста");
     assert!(!sim.is_away("a"), "отряд дома");
+}
+
+// --- имя отряда (§12.300) ---------------------------------------------------
+
+/// Боевой рулсет и второй стол в северной комнате: два отряда.
+fn two_squads() -> (Sim, (i32, i32), (i32, i32)) {
+    let yaml = include_str!("../../assets/rulesets/core.yaml");
+    let mut sim = Sim::new(yaml).expect("рулсет");
+    let def = sim.structure_index("muster").expect("место брифинга");
+    sim.force_structure(def, 4, 2);
+    let order = sim.node_cells_of();
+    (sim, order[0], order[1])
+}
+
+/// Без имени отряд называется номером, с именем — именем, и имя переживает
+/// сохранение: оно живёт на объекте и едет в снимке вместе с ним.
+#[test]
+fn a_squad_keeps_the_name_the_player_gave_it() {
+    let (mut sim, first, second) = two_squads();
+    assert_eq!(sim.squad_labels(), ["Отряд 1", "Отряд 2"]);
+
+    assert_eq!(sim.rename_squad(second.0, second.1, "  Мусорщики  "), "");
+    assert_eq!(sim.squad_labels(), ["Отряд 1", "Мусорщики"]);
+
+    let yaml = include_str!("../../assets/rulesets/core.yaml");
+    let saved = sim.save().expect("снимок");
+    let mut loaded = Sim::load(yaml, &saved).expect("загрузка");
+    assert_eq!(loaded.squad_labels(), ["Отряд 1", "Мусорщики"]);
+    assert_eq!(loaded.rename_squad(first.0, first.1, "Альфа"), "");
+    assert_eq!(loaded.squad_labels(), ["Альфа", "Мусорщики"]);
+}
+
+/// Пустое имя и своё номерное возвращают умолчание: безымянный отряд
+/// представлен одним способом, а не двумя.
+#[test]
+fn an_empty_or_own_number_name_restores_the_default() {
+    let (mut sim, first, _) = two_squads();
+    assert_eq!(sim.rename_squad(first.0, first.1, "Альфа"), "");
+    assert_eq!(sim.rename_squad(first.0, first.1, "   "), "");
+    assert_eq!(sim.squad_labels()[0], "Отряд 1");
+
+    assert_eq!(sim.rename_squad(first.0, first.1, "Альфа"), "");
+    assert_eq!(sim.rename_squad(first.0, first.1, "отряд 1"), "");
+    assert_eq!(sim.squad_labels()[0], "Отряд 1");
+}
+
+/// Двух отрядов с одним именем не бывает — ни с именем игрока, ни с чужим
+/// номером, в том числе номером отряда, которого ещё нет. Регистр не спасает.
+#[test]
+fn a_squad_name_is_never_shared() {
+    let (mut sim, first, second) = two_squads();
+    assert_eq!(sim.rename_squad(first.0, first.1, "Альфа"), "");
+    assert_eq!(sim.rename_squad(second.0, second.1, "альфа"), "taken");
+    assert_eq!(sim.rename_squad(second.0, second.1, "Отряд 1"), "numbered");
+    assert_eq!(sim.rename_squad(first.0, first.1, "Отряд 2"), "numbered");
+    assert_eq!(sim.rename_squad(first.0, first.1, "Отряд 7"), "numbered");
+    assert_eq!(
+        sim.squad_labels(),
+        ["Альфа", "Отряд 2"],
+        "отказ имени не меняет"
+    );
+}
+
+/// Длинное имя отклоняется целиком, а не режется: обрезанное имя — это имя,
+/// которого игрок не давал. Пробелы внутри сжимаются, и длина меряется после.
+#[test]
+fn a_long_squad_name_is_refused() {
+    let (mut sim, first, _) = two_squads();
+    let long = "Ж".repeat(SQUAD_NAME_MAX + 1);
+    assert_eq!(sim.rename_squad(first.0, first.1, &long), "long");
+    let fits = "Ж".repeat(SQUAD_NAME_MAX);
+    assert_eq!(sim.rename_squad(first.0, first.1, &fits), "");
+    assert_eq!(sim.rename_squad(first.0, first.1, "Ночная     смена"), "");
+    assert_eq!(sim.squad_labels()[0], "Ночная смена");
+    assert_eq!(sim.rename_squad(9, 9, "Альфа"), "nonode", "не отряд");
+}
+
+/// Снесённый стол уносит имя вместе с отрядом: новый стол на том же месте —
+/// новый отряд, и чужого имени он не наследует.
+#[test]
+fn a_rebuilt_table_does_not_inherit_the_name() {
+    let (mut sim, _, second) = two_squads();
+    assert_eq!(sim.rename_squad(second.0, second.1, "Мусорщики"), "");
+    // Столешница посередине штампа 3×3 якорем в (4, 2).
+    sim.force_tile(5, 3, 0);
+    sim.tick_n(1);
+    assert_eq!(sim.node_cells_of().len(), 1, "стол снесён");
+
+    let def = sim.structure_index("muster").expect("место брифинга");
+    sim.force_structure(def, 4, 2);
+    assert_eq!(sim.squad_labels(), ["Отряд 1", "Отряд 2"]);
 }

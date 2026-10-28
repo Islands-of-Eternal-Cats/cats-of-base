@@ -3263,3 +3263,30 @@ main#stage.mode-cursor #mode-banner {
 .light-stats.off {
   opacity: 0.6;
 }
+
+/* Имя отряда в шапке штаба (§12.300): подпись-дверь в правку, как `.keep-val`. */
+.raidwin-title .squad-name {
+  cursor: text;
+  border-bottom: 1px dashed transparent;
+}
+.raidwin-title .squad-name:hover {
+  border-bottom-color: var(--accent);
+}
+.raidwin-title .squad-input {
+  font: inherit;
+  color: inherit;
+  width: 14em;
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0 6px;
+}
+.raidwin-title .squad-input::placeholder {
+  color: inherit;
+  opacity: 0.4;
+}
+.raidwin-title .squad-why {
+  color: var(--bad);
+  font-size: 13px;
+  font-weight: 400;
+}

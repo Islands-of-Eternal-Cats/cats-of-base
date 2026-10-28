@@ -464,6 +464,10 @@ onPanelClick(catEl, ".raid-open", (b) =>
 // заведено, — и без ключа две строки поделили бы один взвод. `data-in` —
 // «числится ли здесь»: одна кнопка на два состояния, потому что и вопрос один —
 // про этого кота и этот узел.
+onPanelClick(raidWinEl, ".squad-name", (b) => {
+  const [x, y] = b.dataset.key.slice(5).split(",").map(Number);
+  startSquadRename(x, y);
+});
 onPanelClick(raidWinEl, ".crew-pick", (b) => {
   // Погашенная классом строка события мыши шлёт — тем и ценна (§12.121), —
   // поэтому отказ проверяем сами; причина написана в подсказке.
@@ -1019,6 +1023,8 @@ worker.onmessage = (e) => {
   } else if (m.type === "saved") {
     if (m.auto) localStorage.setItem(SAVE_KEY, m.json);
     else download(`sp-save-${stamp()}.json`, m.json);
+  } else if (m.type === "renamed") {
+    onSquadRenamed(m);
   } else if (m.type === "traced") {
     download(`sp-trace-${stamp()}.txt`, m.text);
   } else if (m.type === "loadFailed") {
@@ -4469,10 +4475,11 @@ function crewList(snap, x, y) {
     // Пока узел ведёт вылазку, состав уже в поле и не переигрывается: для этого
     // есть отзыв (`cancel_mission`), а не правка списка.
     const off = hurt || !!node?.busy || !!e.away;
+    // Имя отряда — из ядра (`NodeSnap::name`, §12.300): номер вид не собирает.
     const where = no
-      ? ` · Отряд ${no}`
+      ? ` · ${esc(nodes[no - 1].name)}`
       : opOf
-        ? ` · Отряд ${opOf}, радист`
+        ? ` · ${esc(nodes[opOf - 1].name)}, радист`
         : "";
     // Ушедшего `jobLabel` намеренно оставляет без слова (§12.40) — его
     // объясняют отдельные строки панелей. Здесь строка и есть то место, где
@@ -4535,10 +4542,10 @@ function crewList(snap, x, y) {
               (mine
                 ? ". Исключить: клик"
                 : no
-                  ? `. Сейчас в Отряде ${no}: зачислить сюда — значит забрать оттуда`
+                  ? `. Сейчас числится: ${nodes[no - 1].name} — зачислить сюда значит забрать оттуда`
                   : "")
             : no
-              ? `Сейчас в Отряде ${no}: зачислить сюда — значит забрать оттуда`
+              ? `Сейчас числится: ${nodes[no - 1].name} — зачислить сюда значит забрать оттуда`
               : "";
     // Гасим классом, а не `disabled` (§12.121): по выключенному элементу
     // браузер не шлёт событий мыши, и подсказка выше не показалась бы никогда.
@@ -4841,10 +4848,9 @@ function cellWork(snap, x, y, def) {
     const raid = (snap.missions ?? []).find(
       (v) => v.x === node.x && v.y === node.y,
     );
-    // Номер отряда — порядок `nodes`, тот же, что на строке тулбара и на
-    // вкладке штаба (§12.66). Здесь он главное слово панели: решение
-    // принимается не тут, и сказать надо, какую строку открывать.
-    const n = nodes.indexOf(node) + 1;
+    // Имя отряда — то же, что на строке панели «Отряды» и на вкладке штаба
+    // (§12.300; без имени — номер, §12.66). Здесь оно главное слово панели:
+    // решение принимается не тут, и сказать надо, какую строку открывать.
     // Состав живёт на клетке и переживает вылазку (§12.61). Кто из него не
     // уйдёт прямо сейчас — тусклым, ровно как в строке тулбара (§12.70):
     // «в отряде трое, а сила ноль» без этой пометки читается поломкой.
@@ -4856,7 +4862,7 @@ function cellWork(snap, x, y, def) {
     // «Отряд N» — дверь в штаб **этого** отряда, как «Назначить» у ящика:
     // модал открывает не клик по карте, а второй жест в уже открытой карточке
     // (§12.101 цел).
-    const squadLink = `<button class="squad-open" data-key="raidwin@${node.x},${node.y}" data-x="${node.x}" data-y="${node.y}">Отряд ${n}</button>`;
+    const squadLink = `<button class="squad-open" data-key="raidwin@${node.x},${node.y}" data-x="${node.x}" data-y="${node.y}">${esc(node.name)}</button>`;
     out.push(
       node.crew.length
         ? `${squadLink}: ${node.crew
@@ -4895,11 +4901,9 @@ function cellWork(snap, x, y, def) {
     if (!def.comms) {
       out.push("дежурить незачем: рация без связи");
     } else if (on) {
-      const n =
-        nodes.findIndex((v) => v.x === on.post_x && v.y === on.post_y) + 1;
       const node = nodeAt(on.post_x, on.post_y);
       out.push(
-        `на связи ${esc(on.id)} · дорога Отряда ${n} ${roadCutWord(node?.boost ?? 0)}`,
+        `на связи ${esc(on.id)} · ${esc(node?.name ?? "")}: дорога ${roadCutWord(node?.boost ?? 0)}`,
       );
     } else {
       out.push("свободна: радист отряда сядет сюда сам, когда отряд выйдет");
@@ -4962,9 +4966,9 @@ function renderMissionPanel(list) {
   // панель самой рации (§12.80). Механику связи ещё предстоит переделать — до
   // тех пор дублировать её здесь тем более незачем.
   const parts = ['<div class="cat-name">Отряды</div>'];
-  for (const [n, node] of nodes.entries()) {
+  for (const node of nodes) {
     const raid = raidsOut.find((m) => m.x === node.x && m.y === node.y);
-    parts.push(squadRow(node, n, raid));
+    parts.push(squadRow(node, raid));
   }
   missionEl.innerHTML = parts.join("");
   missionEl.hidden = false;
@@ -5012,7 +5016,7 @@ const SITE_PHASE = {
   work: "здесь работает",
 };
 
-function squadRow(node, n, m) {
+function squadRow(node, m) {
   const def = m ? (meta.missions ?? [])[m.def] : null;
   const pct =
     m?.away && m.total > 0
@@ -5135,7 +5139,7 @@ function squadRow(node, n, m) {
     `<div class="cat-skill raid-open" data-key="squad@${node.x},${node.y}"` +
     ` data-x="${node.x}" data-y="${node.y}"` +
     ` data-tip="${esc(m ? missionTip(m, def) : squadTip(node))}">` +
-    `<div class="cat-row"><span>Отряд ${n + 1}</span>` +
+    `<div class="cat-row"><span>${esc(node.name)}</span>` +
     `<i class="raid-mark">${mark}</i></div>` +
     // ⚠️ **Полоска рисуется всегда, а доли числом нет** (§12.172) — дословно
     // карточка сделки (`dealGroups`), с которой панель стоит в одной колонке.
@@ -6803,12 +6807,12 @@ function skillBlock(e, def, i, note, flat) {
   );
 }
 
-// Номер отряда по клетке его гаража — порядок `nodes` (§12.66). Пустая строка:
-// кот ни в чьём отряде не числится либо гараж снесли.
+// Имя отряда по клетке его стола (§12.300; номер по порядку `nodes`, §12.66,
+// если имени игрок не дал — решает ядро). Пустая строка: кот ни в чьём отряде
+// не числится либо стол снесли.
 function nodeNameAt(x, y) {
   if (x < 0 || y < 0) return "";
-  const i = (lastSnap?.nodes ?? []).findIndex((o) => o.x === x && o.y === y);
-  return i >= 0 ? `Отряд ${i + 1}` : "";
+  return (lastSnap?.nodes ?? []).find((o) => o.x === x && o.y === y)?.name ?? "";
 }
 
 // Надетое: снаряжение молча прибавляет отряду силы, и без этой строки игрок не
@@ -7573,6 +7577,8 @@ const KEEPS_CELL = new Set([
   // «Отменить» у темы (§12.233) — там же: снятое выделение спрятало бы ответ
   // («лаборатория свободна»).
   "cancelResearch",
+  // Имя отряда (§12.300) — из штаба, модала поверх карты: довод `setOutfit`.
+  "renameSquad",
 ]);
 
 // --- свет (прототип, `light.js`) ---------------------------------------------
@@ -9830,7 +9836,7 @@ function syncRaidTrips() {
     const show = there || !(m.way > 0) ? "none" : "";
     if (mark.style.display !== show) mark.style.display = show;
     const what = (meta?.missions ?? [])[m.def]?.label ?? "";
-    liveTitle(mark, `Отряд ${n} — ${RAID_PHASE[m.phase] ?? "сбор"}: ${what}`);
+    liveTitle(mark, `${nodes[n - 1]?.name ?? ""} — ${RAID_PHASE[m.phase] ?? "сбор"}: ${what}`);
   });
   for (const g of [...layer.children]) if (!seen.has(g.dataset.key)) g.remove();
 }
@@ -9854,7 +9860,7 @@ function syncRaidMap() {
   missionsOut.forEach((m) => {
     if (m.site >= 0 && m.phase !== "back") {
       const n = nodes.findIndex((o) => o.x === m.x && o.y === m.y);
-      going.set(m.site, { who: `Отряд ${n + 1}`, n: n + 1, phase: m.phase });
+      going.set(m.site, { who: nodes[n]?.name ?? "", n: n + 1, phase: m.phase });
     }
   });
 
@@ -9922,7 +9928,7 @@ function syncRaidMap() {
       rs
         .map(
           (r) =>
-            `Отряд ${r.n} ходит сюда сам: «${meta.missions[r.def]?.label || ""}»` +
+            `${nodes[r.n - 1].name} ходит сюда сам: «${meta.missions[r.def]?.label || ""}»` +
             (r.on ? "" : " — на паузе"),
         )
         .join(" · "),
@@ -14389,7 +14395,76 @@ function openRaidWindow(x, y) {
   // от соседних.
 }
 
+// Правка имени отряда (§12.300): поле на месте имени в шапке штаба, дословно
+// подпись порога (`startNumEdit`, §12.92). Конец набора называет игрок —
+// Enter или уход из поля, — и имя уходит командой один раз. Ворота имени
+// считает ядро: ответ `renamed` приезжает тегом, и отказ называется словом
+// под полем, а набранное остаётся в нём (§12.53) — правка не закрывается
+// молча, пока имя не принято или игрок не отказался сам (Escape).
+let squadEdit = null;
+
+const SQUAD_NAME_WHY = {
+  long: () => `не длиннее ${meta?.squad_name_max ?? 0} знаков`,
+  taken: () => "так уже зовут другой отряд",
+  numbered: () => "номер — не имя: «Отряд N» занят за отрядами",
+  nonode: () => "отряда здесь больше нет",
+};
+
+function startSquadRename(x, y, text = null, why = "") {
+  const node = nodeAt(x, y);
+  if (!raidUi || !node) return;
+  endSquadRename(false);
+  const input = document.createElement("input");
+  input.className = "squad-input";
+  input.type = "text";
+  input.maxLength = meta?.squad_name_max ?? 0;
+  // Номерное имя не предлагаем править: поле начинается пустым, и пустое
+  // имя — это и есть номер.
+  input.value = text ?? (node.named ? node.name : "");
+  input.placeholder = node.name;
+  raidUi.title.innerHTML = "";
+  raidUi.title.appendChild(input);
+  if (why) {
+    const w = document.createElement("span");
+    w.className = "squad-why";
+    w.textContent = SQUAD_NAME_WHY[why]?.() ?? why;
+    raidUi.title.appendChild(w);
+  }
+  squadEdit = { x, y, input };
+  // Клавиши игры висят на окне (пробел — пауза, цифры — скорость), и имя
+  // «Отряд 5» уводило бы игру в ×5 — гасим их у самого поля.
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") endSquadRename(true);
+    else if (e.key === "Escape") endSquadRename(false);
+  });
+  input.addEventListener("blur", () => endSquadRename(true));
+  input.focus();
+  input.select();
+}
+
+// Закончить правку: `commit` — отправить набранное, иначе бросить. Шапку
+// вернёт ближайший снимок.
+function endSquadRename(commit) {
+  if (!squadEdit) return;
+  const { x, y, input } = squadEdit;
+  squadEdit = null;
+  const name = input.value;
+  input.remove();
+  if (raidUi) raidUi.title.innerHTML = "";
+  if (commit) sendAction({ type: "renameSquad", x, y, name });
+}
+
+// Ответ ядра на переименование. Отказ возвращает поле с набранным и причиной —
+// только если штаб всё ещё открыт на этом отряде.
+function onSquadRenamed(m) {
+  if (!m.why) return;
+  if (!raidWinOpen || raidWinAt?.x !== m.x || raidWinAt?.y !== m.y) return;
+  startSquadRename(m.x, m.y, m.name, m.why);
+}
+
 function closeRaidWindow() {
+  endSquadRename(true);
   // Гасим на закрытии: колонка заказов в штабе видна **всегда**, даже когда
   // отряд в поле, — значит визит и есть «посмотрел» (§12.120). Но с §12.243
   // колонка режется участком, и прочитанным идёт лишь то, что показывалось.
@@ -14693,10 +14768,18 @@ function renderRaidWindow() {
   const n = nodes.indexOf(node);
   const raid = missionsOut.find((m) => m.x === node.x && m.y === node.y);
 
-  setHtml(
-    raidUi.title,
-    `Отряд ${n + 1}<span class="cell-at">стол ${node.x}, ${node.y}</span>`,
-  );
+  // Имя отряда — дверь в его правку (§12.300). Пока игрок печатает, шапку не
+  // трогаем: снимок затёр бы набранное, как подпись порога (§12.92).
+  if (!squadEdit) {
+    setHtml(
+      raidUi.title,
+      `<span class="squad-name" data-key="name@${node.x},${node.y}"` +
+        ` data-tip="Переименовать отряд">${esc(node.name)}</span>` +
+        // Номер остаётся рядом с именем: им подписана плашка отряда на карте.
+        (node.named ? `<span class="cell-at">№ ${n + 1}</span>` : "") +
+        `<span class="cell-at">стол ${node.x}, ${node.y}</span>`,
+    );
+  }
 
   // Вкладки узлов: перекинуть кота с отряда на отряд — это одно решение, и
   // закрывать ради него окно незачем. При единственном узле вкладок нет.
@@ -14707,7 +14790,7 @@ function renderRaidWindow() {
             (o, i) =>
               `<button class="tool raidwin-tab${o === node ? " on" : ""}"` +
               ` data-key="tab@${o.x},${o.y}" data-x="${o.x}" data-y="${o.y}">` +
-              `Отряд ${i + 1}${o.busy ? " · в поле" : ""}</button>`,
+              `${esc(o.name)}${o.busy ? " · в поле" : ""}</button>`,
           )
           .join("")
       : "";
@@ -15397,7 +15480,7 @@ function raidCard(i, node) {
   if (leadBy.length) {
     rows.push(
       `<div class="cat-sub">эту вылазку уже ведёт: ${leadBy
-        .map((k) => `Отряд ${k}`)
+        .map((k) => esc(nodes[k - 1].name))
         .join(", ")}</div>`,
     );
   }
