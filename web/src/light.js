@@ -28,6 +28,8 @@ import {
   Container,
   Graphics,
   Matrix,
+  Mesh,
+  MeshGeometry,
   Rectangle,
   RenderTexture,
   Sprite,
@@ -707,10 +709,68 @@ export function createLighting(app, tile) {
     return node;
   }
 
+  /// Неподвижные лампы одной текстуры — **веерами треугольников**, а не
+  /// спрайтом под маской (§12.299). Многоугольник видимости звёздный
+  /// относительно лампы (лучи идут из её центра), значит веер из центра
+  /// покрывает ровно его, а UV градиента — аффинная функция координат, и
+  /// картинка та же. Маска стоила триангуляции на 240 вершин и трафарета на
+  /// каждую лампу — сотни на смену карты, то есть на каждый достроенный тайл.
+  /// Лампы с одним цветом и яркостью идут одной сеткой: их немного видов.
+  function bakeFans(list, map) {
+    const groups = new Map();
+    for (const [spec, cx, cy] of list) {
+      const color = tintOf(spec, prefs.sat);
+      let alpha = spec.alpha;
+      if ((spec.base ?? spec) === CEIL) alpha *= 1 - CEIL_FADE * boost();
+      const key = `${color}|${alpha}`;
+      let g = groups.get(key);
+      if (!g) groups.set(key, (g = { color, alpha, pos: [], uv: [], idx: [] }));
+      const pts = visibility(map.cells, map.W, map.H, cx, cy, spec.radius, tile);
+      const x0 = cx * tile;
+      const y0 = cy * tile;
+      const span = 2 * spec.radius * tile;
+      const base = g.pos.length / 2;
+      const n = pts.length / 2;
+      g.pos.push(x0, y0);
+      g.uv.push(0.5, 0.5);
+      for (let i = 0; i < n; i++) {
+        const x = pts[2 * i];
+        const y = pts[2 * i + 1];
+        g.pos.push(x, y);
+        g.uv.push(0.5 + (x - x0) / span, 0.5 + (y - y0) / span);
+        g.idx.push(base, base + 1 + i, base + 1 + ((i + 1) % n));
+      }
+    }
+    const meshes = [];
+    for (const g of groups.values()) {
+      const mesh = new Mesh({
+        geometry: new MeshGeometry({
+          positions: new Float32Array(g.pos),
+          uvs: new Float32Array(g.uv),
+          indices: new Uint32Array(g.idx),
+        }),
+        texture: glow,
+      });
+      mesh.tint = g.color;
+      mesh.alpha = g.alpha;
+      mesh.blendMode = "add";
+      meshes.push(mesh);
+    }
+    return meshes;
+  }
+
   /// Свет карты. Зовётся из `drawMap`, то есть только на росте `map_version`.
+  ///
+  /// ⚠️ **Выключенный свет не запекается** (§12.299): карта меняется на каждый
+  /// достроенный и снесённый тайл, а запекание — это сотни ламп. Карта
+  /// запоминается, и пересборку делает первый кадр после включения (`dirty`).
   function rebuild(meta, cells, regions) {
-    const t0 = performance.now();
     lastMap = { meta, cells, regions };
+    if (!enabled) {
+      dirty = true;
+      return;
+    }
+    const t0 = performance.now();
     const W = meta.width;
     const H = meta.height;
     const map = { cells, W, H };
@@ -836,8 +896,11 @@ export function createLighting(app, tile) {
       }
     }
 
-    // Неподвижные — в запечённую текстуру, по одной и с разрушением следом;
-    // мерцающие — живыми узлами в кадр.
+    // Неподвижные — в запечённую текстуру **одним проходом на текстуру**
+    // (§12.299) и с разрушением следом; мерцающие — живыми узлами в кадр.
+    // Проход на лампу стоил сотни `render` на смену карты, то есть на каждый
+    // достроенный тайл; свет складывается (`add`), и порядок ламп в одном
+    // проходе на результат не влияет.
     // Ночной свет — те же места дежурными лампами (`DUTY`), второй текстурой.
     // Мерцающие ночью не мерцают: живые узлы светят днём.
     bakedCount = 0;
@@ -846,35 +909,30 @@ export function createLighting(app, tile) {
       [baked, false],
       [bakedNight, true],
     ]) {
-      let first = true;
+      const still = [];
       for (const [day, cx, cy] of spots) {
         let spec = day;
         if (night) {
           spec = duty.get(day);
           if (!spec) duty.set(day, (spec = dutyOf(day)));
         }
-        const node = shadedLamp(spec, map, cx, cy);
         if (!night && ANIMATE && (spec.flicker || spec.pulse)) {
-          lamps.addChild(node);
+          lamps.addChild(shadedLamp(spec, map, cx, cy));
           continue;
         }
-        bakeShift.addChild(node);
-        app.renderer.render({
-          container: bakeRoot,
-          target: into,
-          clear: first,
-        });
-        bakeShift.removeChild(node);
-        first = false;
-        node.destroy({ children: true });
+        still.push([spec, cx, cy]);
         if (!night) bakedCount++;
       }
-      if (first)
-        app.renderer.render({
-          container: new Container(),
-          target: into,
-          clear: true,
-        });
+      for (const mesh of bakeFans(still, map)) bakeShift.addChild(mesh);
+      // Пустой `bakeShift` тоже рисуется: `clear` и есть запекание без ламп.
+      app.renderer.render({ container: bakeRoot, target: into, clear: true });
+      // Геометрию у сетки разрушаем явно: `Mesh.destroy` её не трогает, а
+      // буферы живут у рендерера до `destroy()` (§12.84). Градиент общий.
+      for (const n of bakeShift.removeChildren()) {
+        const geometry = n.geometry;
+        n.destroy();
+        geometry.destroy();
+      }
     }
     resoften();
     bakeMs = performance.now() - t0;
@@ -882,15 +940,18 @@ export function createLighting(app, tile) {
 
   /// Кадр: двигаем свет котов, мерцаем, перерисовываем текстуру.
   function frame(units, deltaMS, speed) {
-    if (!enabled || !target) return;
-    if (lit && !lit.boundsArea)
-      lit.boundsArea = new Rectangle(-PAD, -PAD, target.width, target.height);
-    const t0 = performance.now();
-    clock += (deltaMS * Math.max(speed, 1)) / 1000;
+    if (!enabled) return;
+    // Пересборка — до проверки текстур: партия, открытая с выключенным светом,
+    // их ещё не завела (§12.299), и создаёт их первая пересборка после включения.
     if (dirty && lastMap) {
       dirty = false;
       rebuild(lastMap.meta, lastMap.cells, lastMap.regions);
     }
+    if (!target) return;
+    if (lit && !lit.boundsArea)
+      lit.boundsArea = new Rectangle(-PAD, -PAD, target.width, target.height);
+    const t0 = performance.now();
+    clock += (deltaMS * Math.max(speed, 1)) / 1000;
     for (const n of lamps.children) {
       const spec = n.spec;
       if (spec.flicker) {
