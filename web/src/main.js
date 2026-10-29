@@ -53,6 +53,7 @@ const COLORS = {
   wallLight: 0x676c7a, // блик по верху стены
   shadow: 0x000000,
   select: 0x6cf0a0, // выбор кота / метка цели / взведённая клетка
+  placeable: 0x6cf0a0, // режим стройки: сюда тайл в руке поставить можно (§12.302)
   cell: 0x9fb0ff, // осмотренная клетка: уголки вокруг того, о чём говорит панель
   erase: 0xff5566,
   // Хром режима стройки. Цвет самого тайла для этого не годится: тайлы тёмные
@@ -693,6 +694,13 @@ const cellMarker = new Graphics();
 // внутри освещаемого слоя её гасила тень, и в тёмной скале она не читалась.
 const gridGfx = new Graphics();
 overlay.addChild(gridGfx);
+// Куда тайл в руке поставить можно (§12.302) — по всей карте, а не только в
+// рамке под курсором: крест в рамке отвечает «почему не здесь», а этот слой —
+// «куда вообще», ещё до того, как игрок повёл мышь. Узел постоянный и
+// перерисовывается только на смене маски (§12.84). Стоит под рамкой: рамка —
+// ответ про конкретный жест и читается поверх.
+const placeGfx = new Graphics();
+overlay.addChild(placeGfx);
 overlay.addChild(hoverRect);
 overlay.addChild(orderMarker);
 overlay.addChild(cellMarker);
@@ -1016,6 +1024,7 @@ worker.onmessage = (e) => {
     const mask = m.mask ?? null;
     if (!sameMask(mask, buildMask)) {
       buildMask = mask;
+      drawPlaceable();
       if (hoverAt) updateHover(hoverAt);
     }
     renderSnapshot(m.snap);
@@ -7278,6 +7287,9 @@ function modeChrome() {
 // читаться до клика — периферийным зрением и там, куда игрок смотрит.
 function applyModeChrome() {
   syncWallsDown();
+  // Смена инструмента: тайл → объект или выход из режима гасит зелёные клетки
+  // сразу, не дожидаясь следующей маски (§12.302).
+  drawPlaceable();
   const m = modeChrome();
   stageEl.classList.remove("mode-cursor", "mode-build", "mode-erase");
   stageEl.classList.add(`mode-${m.key}`);
@@ -7351,7 +7363,10 @@ function askBuildMask(r) {
   if (key === maskAsked) return;
   maskAsked = key;
   // Курсор и ластик правилу не подчиняются.
-  if (tile < 0 && structure < 0) buildMask = null;
+  if (tile < 0 && structure < 0 && buildMask) {
+    buildMask = null;
+    drawPlaceable();
+  }
   worker.postMessage({
     type: "setBuildTile",
     tile,
@@ -7359,6 +7374,50 @@ function askBuildMask(r) {
     structure,
     rot: buildRot,
   });
+}
+
+// Зелёные клетки «сюда можно» (§12.302) — та же маска, что даёт кресты в
+// рамке, только по всей карте. Своей арифметики здесь нет: считает ядро, и
+// второй экземпляр правила показал бы зелёной клетку, которую фасад отклонит
+// (инвариант 14). Только у **тайла**: маска объекта-штампа отвечает «встанет ли
+// отсюда весь штамп» и посчитана лишь внутри рамки — снаружи у неё нули, и
+// карта читалась бы «объект не встанет нигде». Без маски (`null` — правило к
+// тайлу не применимо, ластик, курсор) слой пуст: «можно везде» мы не знаем.
+function drawPlaceable() {
+  placeGfx.clear();
+  if (!buildMask || mode !== "build" || buildStruct >= 0) return;
+  const W = meta.width;
+  const H = buildMask.length / W;
+  const ok = (x, y) => x >= 0 && y >= 0 && x < W && y < H && buildMask[y * W + x];
+  let any = false;
+  for (let i = 0; i < buildMask.length; i++) {
+    if (!buildMask[i]) continue;
+    const x = i % W;
+    const y = (i - x) / W;
+    placeGfx.rect(x * TILE + 3, y * TILE + 3, TILE - 6, TILE - 6);
+    any = true;
+  }
+  if (!any) return;
+  // Одна заливка на все квадраты: путь общий, и это один разбор фигуры, а не
+  // по разбору на клетку.
+  placeGfx.fill({ color: COLORS.placeable, alpha: 0.16 });
+  // Граница области — ярко (§12.302): бледные квадраты говорят «тут можно»,
+  // а край отвечает на вопрос, который задают глазами, — «докуда». Ребро
+  // рисуется с разрешённой стороны, полосой внутри клетки: у двух областей,
+  // разделённых одной запрещённой клеткой, края не сливаются в один.
+  const B = 2;
+  for (let i = 0; i < buildMask.length; i++) {
+    if (!buildMask[i]) continue;
+    const x = i % W;
+    const y = (i - x) / W;
+    const px = x * TILE;
+    const py = y * TILE;
+    if (!ok(x, y - 1)) placeGfx.rect(px, py, TILE, B);
+    if (!ok(x, y + 1)) placeGfx.rect(px, py + TILE - B, TILE, B);
+    if (!ok(x - 1, y)) placeGfx.rect(px, py, B, TILE);
+    if (!ok(x + 1, y)) placeGfx.rect(px + TILE - B, py, B, TILE);
+  }
+  placeGfx.fill({ color: COLORS.placeable, alpha: 0.9 });
 }
 
 // Та же маска или другая. Байт на клетку — сравнить её дешевле, чем перерисовать
