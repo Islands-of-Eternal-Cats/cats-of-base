@@ -2721,31 +2721,30 @@ impl Sim {
             .all(|&t| self.tech_allows(t))
     }
 
-    /// Маска превью для штампа: влезает ли он якорем в каждую клетку рамки.
+    /// Маска превью для штампа: влезает ли он якорем в каждую клетку карты.
     ///
     /// Байт на клетку, как у `buildable`, но отвечает он не «можно ли сюда
     /// тайл», а «встанет ли отсюда весь штамп»: у объекта запрещённой бывает
     /// только постановка целиком, и красить половину рамки было бы враньём.
-    pub fn structure_buildable(
-        &mut self,
-        def: i32,
-        rx: i32,
-        ry: i32,
-        rw: i32,
-        rh: i32,
-        rot: i32,
-    ) -> Vec<u8> {
+    ///
+    /// Считается **по всей карте**, а не по рамке под курсором (§12.302): из неё
+    /// вид красит, куда объект вообще встанет, ещё до того, как игрок повёл
+    /// мышь. Рамки у штампа нет и накопления тоже — штамп ставится одним
+    /// кликом, и ответ по якорю от соседних якорей не зависит. Дорого (штамп
+    /// на каждую клетку), поэтому воркер зовёт её не каждым кадром, а только
+    /// когда ответ мог измениться.
+    pub fn structure_buildable(&mut self, def: i32, rot: i32) -> Vec<u8> {
         let (def, rot) = (def.max(0) as usize, rot.rem_euclid(4) as u8);
         if def >= self.world.resource::<StructureRules>().0.len() {
             return Vec::new();
         }
         let mut out = vec![0u8; (self.width * self.height) as usize];
-        for (cx, cy) in rect_cells(rx, ry, rw, rh) {
-            let ok = self
-                .stamp_cells(def, cx, cy, rot)
-                .is_some_and(|cells| self.stamp_fits(def, (cx, cy), rot, &cells));
-            if let Some(i) = self.cell_index(cx, cy) {
-                out[i] = u8::from(ok);
+        for cy in 0..self.height {
+            for cx in 0..self.width {
+                let ok = self
+                    .stamp_cells(def, cx, cy, rot)
+                    .is_some_and(|cells| self.stamp_fits(def, (cx, cy), rot, &cells));
+                out[(cy * self.width + cx) as usize] = u8::from(ok);
             }
         }
         out

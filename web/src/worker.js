@@ -47,6 +47,13 @@ let maskStruct = -1;
 // Четверть оборота в руке. Едет вместе с инструментом: поворот меняет и рамку,
 // и ответ ворот, значит маску надо пересчитать.
 let maskRot = 0;
+// Маска штампа считается по всей карте (§12.302) — это штамп на каждую клетку,
+// и каждым кадром её не гоняем. Ответ меняется только от объекта и поворота
+// в руке, от карты (`map_version`) и от команд игрока (чертёж, постановка):
+// ключ ловит первые два, `structStale` — команды.
+let structMask = null;
+let structKey = "";
+let structStale = true;
 // Текст рулсета нужен и после старта: из него собирается и новая партия, и
 // загруженная — правил в снимке нет и быть не должно (§12.45).
 let yamlText = null;
@@ -127,12 +134,18 @@ function loop() {
     }
     // Маска едет вместе со снимком: она про тот же кадр. Пустая (тайл правилу
     // не подчиняется) — не едет вовсе, и рендер не красит ничего.
-    const mask =
-      maskStruct >= 0
-        ? sim.structure_buildable(maskStruct, ...maskRect, maskRot)
-        : maskTile >= 0
-          ? sim.buildable(maskTile, ...maskRect)
-          : null;
+    let mask = null;
+    if (maskStruct >= 0) {
+      const key = `${maskStruct}:${maskRot}:${v}`;
+      if (structStale || key !== structKey) {
+        structMask = sim.structure_buildable(maskStruct, maskRot);
+        structKey = key;
+        structStale = false;
+      }
+      mask = structMask;
+    } else if (maskTile >= 0) {
+      mask = sim.buildable(maskTile, ...maskRect);
+    }
     postMessage({
       type: "snapshot",
       snap: sim.snapshot(),
@@ -146,7 +159,10 @@ onmessage = (e) => {
   const m = e.data;
   // Любая команда, кроме читающих, делает мир несохранённым — в том числе на
   // паузе, где тиков нет, а разметка есть.
-  if (!READ_ONLY.has(m.type)) dirty = true;
+  if (!READ_ONLY.has(m.type)) {
+    dirty = true;
+    structStale = true;
+  }
   if (m.type === "setSpeed") {
     speed = m.speed;
   } else if (m.type === "setBuildTile") {

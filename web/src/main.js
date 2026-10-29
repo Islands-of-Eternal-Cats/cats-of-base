@@ -7379,19 +7379,46 @@ function askBuildMask(r) {
 // Зелёные клетки «сюда можно» (§12.302) — та же маска, что даёт кресты в
 // рамке, только по всей карте. Своей арифметики здесь нет: считает ядро, и
 // второй экземпляр правила показал бы зелёной клетку, которую фасад отклонит
-// (инвариант 14). Только у **тайла**: маска объекта-штампа отвечает «встанет ли
-// отсюда весь штамп» и посчитана лишь внутри рамки — снаружи у неё нули, и
-// карта читалась бы «объект не встанет нигде». Без маски (`null` — правило к
-// тайлу не применимо, ластик, курсор) слой пуст: «можно везде» мы не знаем.
-function drawPlaceable() {
-  placeGfx.clear();
-  if (!buildMask || mode !== "build" || buildStruct >= 0) return;
+// (инвариант 14). Без маски (`null` — правило к тайлу не применимо, ластик,
+// курсор) слой пуст: «можно везде» мы не знаем.
+//
+// У объекта-штампа маска отвечает про **якорь** — «встанет ли отсюда весь
+// штамп», — и якорь это левый верхний угол. Покрась его одного, и область
+// читалась бы сдвинутой влево-вверх от комнаты, куда объект на деле встаёт.
+// Поэтому красится **след**: все клетки, которые займёт хоть одна разрешённая
+// постановка (силуэт и свободные слоты, тот же, что рисует рамка). Это не
+// правило, а геометрия уже посчитанного ответа: силуэт и слоты присылает ядро.
+function placeableArea() {
+  if (!buildMask || mode !== "build") return null;
+  const shape = structShape();
+  if (!shape) return buildMask;
   const W = meta.width;
   const H = buildMask.length / W;
-  const ok = (x, y) => x >= 0 && y >= 0 && x < W && y < H && buildMask[y * W + x];
-  let any = false;
+  const foot = [...shape.map(([dx, dy]) => [dx, dy]), ...structSlots()];
+  const area = new Uint8Array(buildMask.length);
   for (let i = 0; i < buildMask.length; i++) {
     if (!buildMask[i]) continue;
+    const x = i % W;
+    const y = (i - x) / W;
+    for (const [dx, dy] of foot) {
+      const fx = x + dx;
+      const fy = y + dy;
+      if (fx < W && fy < H) area[fy * W + fx] = 1;
+    }
+  }
+  return area;
+}
+
+function drawPlaceable() {
+  placeGfx.clear();
+  const area = placeableArea();
+  if (!area) return;
+  const W = meta.width;
+  const H = area.length / W;
+  const ok = (x, y) => x >= 0 && y >= 0 && x < W && y < H && area[y * W + x];
+  let any = false;
+  for (let i = 0; i < area.length; i++) {
+    if (!area[i]) continue;
     const x = i % W;
     const y = (i - x) / W;
     placeGfx.rect(x * TILE + 3, y * TILE + 3, TILE - 6, TILE - 6);
@@ -7406,8 +7433,8 @@ function drawPlaceable() {
   // рисуется с разрешённой стороны, полосой внутри клетки: у двух областей,
   // разделённых одной запрещённой клеткой, края не сливаются в один.
   const B = 2;
-  for (let i = 0; i < buildMask.length; i++) {
-    if (!buildMask[i]) continue;
+  for (let i = 0; i < area.length; i++) {
+    if (!area[i]) continue;
     const x = i % W;
     const y = (i - x) / W;
     const px = x * TILE;
