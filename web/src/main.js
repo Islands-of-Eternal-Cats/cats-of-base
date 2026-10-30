@@ -16063,8 +16063,18 @@ function toolInHand() {
   return mode === "build" && (buildStruct >= 0 || buildTile !== null);
 }
 
+// Повторный щелчок по взятому инструменту кладёт его из рук (§12.307), а вместе
+// с ним гаснут рамка кнопки и зелёный прогноз. Раздел остаётся раскрытым и режим
+// стройки цел: игрок передумал насчёт инструмента, а не насчёт стройки.
+function putDownIfHeld(btn) {
+  if (!btn.classList.contains("active")) return false;
+  selectBuildIdle();
+  return true;
+}
+
 // Времени выбор инструмента не касается: паузу ставит только игрок (§12.86).
 function selectBuild(i, btn) {
+  if (putDownIfHeld(btn)) return;
   mode = "build";
   buildTile = i;
   buildStruct = -1;
@@ -16079,6 +16089,7 @@ function selectBuild(i, btn) {
 // а не объекта, и подхваченная от прошлого инструмента четверть читалась бы
 // как поломка (§12.162).
 function selectStructure(i, btn) {
+  if (putDownIfHeld(btn)) return;
   mode = "build";
   buildTile = -1;
   buildStruct = i;
