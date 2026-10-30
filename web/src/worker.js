@@ -25,7 +25,7 @@ const AUTOSAVE_EVERY = 120; // сим-тиков (20 с на ×1)
 const AUTOSAVE_EVERY_MS = 20000; // и не реже этого по реальным часам
 
 // Команды, которые мир не меняют: после них сохранять нечего.
-const READ_ONLY = new Set(["setSpeed", "save", "trace", "setBuildTile"]);
+const READ_ONLY = new Set(["setSpeed", "save", "trace", "setBuildTile", "setHandAim"]);
 
 let sim = null;
 let speed = 1; // 0 (пауза) | 1 | 5 | 10
@@ -150,10 +150,19 @@ function loop() {
       type: "snapshot",
       snap: sim.snapshot(),
       mask: mask && mask.length ? mask : null,
+      // Что сделает клик по выбранной клетке и почему лежит куча (§12.303):
+      // считает ядро и только для клетки под вниманием игрока.
+      hand: handAim && {
+        key: handAim.key,
+        verb: handAim.id ? sim.hand_tag(handAim.id, handAim.x, handAim.y) : "",
+        why: sim.pile_why(handAim.x, handAim.y),
+      },
     });
   }
   setTimeout(loop, 16);
 }
+
+let handAim = null;
 
 onmessage = (e) => {
   const m = e.data;
@@ -165,6 +174,8 @@ onmessage = (e) => {
   }
   if (m.type === "setSpeed") {
     speed = m.speed;
+  } else if (m.type === "setHandAim") {
+    handAim = m.aim;
   } else if (m.type === "setBuildTile") {
     // Инструмент в руке игрока — состояние вида, и живёт оно здесь: ядру он не
     // нужен ни для чего, кроме ответа «где этот тайл поставить можно».
@@ -200,7 +211,7 @@ onmessage = (e) => {
     // (см. `set_auto_rest` в ядре, §12.33). Выключение никого не будит.
     sim.set_auto_rest(m.on);
   } else if (m.type === "move" && sim) {
-    sim.set_target(m.id, m.x, m.y);
+    sim.command_at(m.id, m.x, m.y);
   } else if (m.type === "launch" && sim) {
     // **Узел заменяет выбор отряда** (§12.61): состав живёт на клетке рации, и
     // кнопка адресуется узлом, а не списком котов. С двумя узлами иначе не

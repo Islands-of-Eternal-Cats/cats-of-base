@@ -758,6 +758,7 @@ let selectedUnits = [];
 // Клетка под последним кликом: о ней говорит панель, и она же взводит приказ —
 // повторный клик по ней отправляет туда выбранных котов (§12.58).
 let selectedCell = null; // { x, y } в тайлах
+let lastHand = null; // ответ ядра по выбранной клетке (§12.303)
 let dragFrom = null; // якорь рамки (клетка, где нажали), null = не тянем
 let dragTo = null; // текущий угол рамки; переживает выход курсора за карту
 // Кот, стоявший под началом рамки. Запоминается в момент нажатия, а не читается
@@ -1018,6 +1019,8 @@ worker.onmessage = (e) => {
     puffChanged(mapCells, m.map.cells);
     drawMap(m.map);
   } else if (m.type === "snapshot") {
+    lastHand = m.hand ?? null;
+    syncHandAim();
     // Перерисовываем рамку только на **изменение** маски: `snapshot` приходит
     // каждые 16 мс, а безусловный `clear()` живого `Graphics` — это разбор
     // фигуры шестьдесят раз в секунду на ровном месте (§12.84, §12.109).
@@ -4154,7 +4157,16 @@ function renderCellPanel(snap) {
   // `walkable`), и зелёная рамка «пойдут» обещала бы то, чего не будет. Своей
   // строки отказа тут нет: причину словом уже говорит роль клетки ниже («на
   // клетку не встать»), и вторая такая же читалась бы эхом.
-  if (cellIsArmed() && def?.solid) {
+  const hand = handOnCell();
+  if (hand && HAND_WORDS[hand]) {
+    parts.push(
+      `<div class="cell-armed">ещё клик сюда — ${selectedUnits
+        .map(esc)
+        .join(" · ")}: ${HAND_WORDS[hand]}</div>`,
+    );
+  } else if (hand && HAND_REFUSALS[hand]) {
+    parts.push(`<div class="cell-refuse">${HAND_REFUSALS[hand]}</div>`);
+  } else if (cellIsArmed() && def?.solid) {
     // обещать нечего
   } else if (cellIsArmed() && !alreadyHere(def, x, y)) {
     const who = selectedUnits.map(esc).join(" · ");
@@ -4243,6 +4255,10 @@ function renderCellPanel(snap) {
     // которые игрок прочтёт как поломку. Остаётся факт строкой.
     const marked = piles.some((s) => s.marked);
     const auto = def?.capacity > 0 || autoTidy;
+    // Почему куча не едет — словом (§12.53, §12.303): считает ядро (`pile_why`).
+    const pileWhy =
+      lastHand?.key === handAimKey() ? PILE_WHY[lastHand.why] : null;
+    if (pileWhy) parts.push(`<div class="cat-sub">${pileWhy}</div>`);
     if (auto) {
       if (marked) parts.push('<div class="cat-sub">помечено на склад</div>');
     } else {
@@ -7187,7 +7203,16 @@ function command(global, add) {
     else updateSelectionOverlay();
     return;
   }
-  if (cellReleases()) {
+  const hand = handOnCell();
+  if (hand && HAND_WORDS[hand]) {
+    // Метки приказа нет: работают с соседней клетки, и встать на эту кот не обязан.
+    for (const id of selectedUnits) {
+      worker.postMessage({ type: "move", id, x: t.tx, y: t.ty });
+      orders.delete(id);
+    }
+  } else if (hand) {
+    // Отказ назван в панели, клик ничего не отдаёт.
+  } else if (cellReleases()) {
     selectedUnits = [];
   } else if (isWalkable(t.tx, t.ty)) {
     // Приказ уходит каждому выбранному: коты друг друга не блокируют, и толпа
@@ -7198,6 +7223,53 @@ function command(global, add) {
     }
   }
   updateSelectionOverlay();
+}
+
+// Приказ с вещью (§12.303): что он значит, решает ядро (`hand_tag`), а вид только
+// называет. Ответ едет снимком и подписан клеткой — чужой клетке он не годится.
+const HAND_WORDS = {
+  take: "взять из кучи",
+  put: "положить сюда",
+  site: "отнести на стройку",
+  shop: "отнести к станку",
+};
+const HAND_REFUSALS = {
+  full: "Сюда не положить: ячейка полна",
+  refuses: "Сюда не положить: ячейка этого не принимает",
+  unneeded: "Здесь этот груз не нужен",
+  booked: "Не взять: всё обещано покупателю",
+  unreachable: "Не дойти",
+  asleep: "Кот спит и приказ не примет",
+};
+const PILE_WHY = {
+  untidy: "Лежит: уборка выключена",
+  nostore: "Лежит: нет склада",
+  noroom: "Лежит: на складах нет места для этого",
+  waiting: "Ждёт свободного кота",
+};
+let handKey = "";
+function handAimKey() {
+  return selectedCell
+    ? `${selectedUnits[0] ?? ""}@${selectedCell.x},${selectedCell.y}`
+    : "";
+}
+function syncHandAim() {
+  const key = handAimKey();
+  if (key === handKey) return;
+  handKey = key;
+  worker.postMessage({
+    type: "setHandAim",
+    aim: selectedCell && {
+      key,
+      id: selectedUnits[0] ?? "",
+      x: selectedCell.x,
+      y: selectedCell.y,
+    },
+  });
+}
+function handOnCell() {
+  const h = lastHand;
+  return h && h.key === handAimKey() && selectedUnits.length ? h.verb : "";
 }
 
 // Клик по функциональной клетке раскрывает её раздел тулбара (§12.55). Это
