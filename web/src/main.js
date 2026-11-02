@@ -8091,13 +8091,14 @@ function mkSection(el, title, sw) {
 // партию: их держат покадровые `sync*`, поэтому окно их только показывает.
 let settingsBody = null;
 let setWinOpen = false;
-function mkSetGroup(title) {
+function mkSetGroup(title, first = false) {
   const head = document.createElement("div");
   head.className = "set-head";
   head.textContent = title;
   const body = document.createElement("div");
   body.className = "sec-body";
-  settingsBody.append(head, body);
+  if (first) settingsBody.prepend(head, body);
+  else settingsBody.append(head, body);
   return body;
 }
 
@@ -8663,7 +8664,8 @@ function buildToolbar() {
   // Партия (§12.45). Автосохранение идёт само и молча, поэтому здесь только
   // то, что игрок решает сам: начать заново, унести партию файлом, принести
   // обратно и снять трейс.
-  const game = mkSetGroup("Партия");
+  // Партия стоит первой: это решения, а звук и свет только подстройка.
+  const game = mkSetGroup("Партия", true);
 
   const fresh = mkTool(
     '<span class="sw sw-cursor"></span><span>Новая партия</span>',
@@ -10492,10 +10494,19 @@ function openNewsTarget(kind, def) {
   // И рецепт, и новый ресурс ведут в «Склад»: там строка предмета, там же его
   // «(?)» и кнопка заказа (§12.131, §12.136).
   else if (kind === "recipe" || kind === "item") openStockWindow();
-  // Постройка живёт не в окне, а в палитре (§12.126), поэтому и ведёт новость в
-  // раздел тулбара — единственное место, где новую кнопку видно вместе с
-  // соседями и где ею тут же можно размечать.
-  else if (kind === "tile") openOnly("Постройка");
+  // Постройка живёт не в окне, а в палитре (§12.126), поэтому новость ведёт на
+  // базу, в раздел тулбара, и сразу кладёт инструмент в руки (§12.313): игрок
+  // видит, где её можно поставить. Взятая новость гаснет, как клик по кнопке
+  // (§12.224). Уже взятую не трогаем: `selectBuild` положил бы её из рук.
+  else if (kind === "tile") {
+    if (topWindow()) closeAllWindows();
+    openOnly("Постройка");
+    const btn = tileButtons.find((t) => t.def === def)?.btn;
+    if (btn && !btn.hidden && !btn.classList.contains("off")) {
+      readNews("tile", [def]);
+      if (buildTile !== def) selectBuild(def, btn);
+    }
+  }
   // Правило ведёт туда, где им пользуются (§12.202): порог сбыта и порог
   // запаса — полоски в строке предмета в окне «Склад», автовылазка — тумблер
   // «↻» в карточке заказа. Указателя в шапке склада (§12.136) у него нет и
