@@ -269,8 +269,7 @@ body.marking #side button {
    `pointer-events: none`, иначе она съедала бы разметку верхнего ряда клеток. */
 #mode-banner {
   position: absolute;
-  /* Под полосой дверей (§12.301): она стоит поверх сцены. */
-  top: calc(var(--screenbar-h) + 10px);
+  top: 10px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 2;
@@ -293,7 +292,7 @@ main#stage.mode-cursor #mode-banner {
 
 #error {
   position: fixed;
-  left: 12px;
+  left: calc(var(--rail-w) + 12px);
   bottom: 12px;
   max-width: 60ch;
   padding: 10px 12px;
@@ -307,9 +306,9 @@ main#stage.mode-cursor #mode-banner {
 
 #toolbar {
   position: fixed;
-  left: 12px;
-  /* Под шапкой и полосой дверей (§12.301). */
-  top: calc(var(--header-h) + var(--screenbar-h) + 12px);
+  /* Правее рейки дверей и под шапкой (§12.311). */
+  left: calc(var(--rail-w) + 12px);
+  top: calc(var(--header-h) + 12px);
   /* ⚠️ **226, а не 190** (§12.228): значок «i» у кнопки палитры (§12.204) стоит
      первым в строке и стоит ~24px, а справа у той же кнопки цена набором с
      `margin-left: auto` — «Лежанка ≡1 ⚙1» теряла последнюю фишку за краем.
@@ -322,7 +321,7 @@ main#stage.mode-cursor #mode-banner {
   width: 226px;
   /* Инструментов стало больше экрана: тулбар растёт вниз, а окно — нет.
      По горизонтали не скроллим — цена просто прижата к правому краю. */
-  max-height: calc(100vh - var(--header-h) - var(--screenbar-h) - 40px);
+  max-height: calc(100vh - var(--header-h) - 40px);
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;
@@ -343,7 +342,7 @@ main#stage.mode-cursor #mode-banner {
 #side {
   position: fixed;
   right: 12px;
-  top: calc(var(--header-h) + var(--screenbar-h) + 12px);
+  top: calc(var(--header-h) + 12px);
   bottom: 12px;
   width: 200px;
   display: flex;
@@ -1391,7 +1390,7 @@ main#stage.mode-cursor #mode-banner {
 
 #toasts {
   position: fixed;
-  top: calc(var(--header-h) + var(--screenbar-h) + 12px);
+  top: calc(var(--header-h) + 12px);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -1612,55 +1611,75 @@ main#stage.mode-cursor #mode-banner {
    карты. Шапка остаётся видна целиком — скорость, счёт ресурсов, цели, — и
    это главное: пауза у экрана та же, что у модала (§12.254), но пустить
    время на экране можно, не выходя из него. Тулбар и правую колонку экран
-   накрывает, двери тулбара ему заменяет полоса вкладок `#screenbar`.
+   накрывает, двери ему заменяет рейка `#screenbar`.
    Высоту шапки меряет JS (`--header-h`): счёт ресурсов в ней переносится. */
 :root {
   --header-h: 45px;
-  --screenbar-h: 44px;
+  --rail-w: 48px;
 }
+/* Рейка дверей (§12.311): колонка глифов у левого края. Подписи нет, имя и
+   причину говорит подсказка. Окна и тулбар стоят правее (`--rail-w`). */
 #screenbar {
   position: fixed;
   top: var(--header-h);
   left: 0;
-  right: 0;
-  height: var(--screenbar-h);
+  bottom: 0;
+  width: var(--rail-w);
+  box-sizing: border-box;
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding: 0 14px;
+  padding: 10px 0;
   background: var(--panel);
-  border-bottom: 1px solid var(--line);
-  /* На узком окне двери не переносятся — ряд прокручивается, а высота
-     полосы остаётся той, под которую сдвинуты тулбар и колонка. */
-  overflow-x: auto;
-  overflow-y: hidden;
+  border-right: 1px solid var(--line);
+  /* На низком окне двери не сжимаются: колонка прокручивается. */
+  overflow-x: hidden;
+  overflow-y: auto;
   z-index: 12;
 }
 #screenbar .tool {
+  position: relative;
   flex: 0 0 auto;
-  padding: 5px 10px;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
 }
-/* Метка новостей у вкладки — точкой, как у двери в тулбаре (§12.226): это
-   та же дверь, только в другом ряду. */
+#screenbar .door-end {
+  margin-top: auto;
+}
+#screenbar .door-glyph {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+#screenbar .tool.off .door-glyph {
+  opacity: 0.45;
+}
+/* Метка новостей — точкой в углу, как у заголовка раздела (§12.226). */
 #screenbar .tool.fresh {
   border-color: var(--line);
   box-shadow: none;
 }
 #screenbar .tool.fresh::after {
   content: "";
-  margin-left: 2px;
+  position: absolute;
+  top: 3px;
+  right: 3px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
-  flex: 0 0 auto;
 }
 #screenbar .tool.active.fresh,
 #screenbar .tool.active {
   border-color: var(--accent);
+  color: var(--accent);
 }
 .screen {
-  top: calc(var(--header-h) + var(--screenbar-h)) !important;
+  top: var(--header-h) !important;
+  left: var(--rail-w) !important;
   align-items: stretch !important;
   justify-content: stretch !important;
   background: var(--bg) !important;
@@ -1687,7 +1706,7 @@ main#stage.mode-cursor #mode-banner {
   /* Три колонки с §12.199: к составу и заказам прибавилась карта. 900 px на
      троих давали граф в спичечный коробок — имена участков не читались, а
      соседство ради этого и рисуют. */
-  width: min(1180px, calc(100vw - 60px));
+  width: min(1180px, calc(100vw - var(--rail-w) - 60px));
   max-height: calc(100vh - 80px);
   padding: 16px 18px;
   background: var(--panel);
@@ -2038,12 +2057,14 @@ main#stage.mode-cursor #mode-banner {
 #buywin,
 #binwin,
 #dossier,
-#wikiwin {
+#wikiwin,
+#setwin {
   position: fixed;
   inset: 0;
-  /* Под шапкой и полосой дверей (§12.301): скорость, счёт ресурсов и двери
+  /* Под шапкой и правее рейки (§12.311): скорость, счёт ресурсов и двери
      остаются видны и нажимаются, переход из окна в окно — один клик. */
-  top: calc(var(--header-h) + var(--screenbar-h));
+  top: var(--header-h);
+  left: var(--rail-w);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2057,14 +2078,40 @@ main#stage.mode-cursor #mode-banner {
 #buywin[hidden],
 #binwin[hidden],
 #dossier[hidden],
-#wikiwin[hidden] {
+#wikiwin[hidden],
+#setwin[hidden] {
   display: none;
+}
+/* «Настройки» (§12.312): панель у рейки без затемнения, потому что ползунки света
+   проверяют глазами по карте. Клик мимо панели закрывает окно, как у всех. */
+#setwin {
+  justify-content: flex-start;
+  align-items: flex-start;
+  padding: 12px;
+  background: transparent;
+  backdrop-filter: none;
+}
+#setwin .win-box {
+  width: 280px;
+  overflow-y: auto;
+}
+.set-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.set-head {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 .win-box {
   display: flex;
   flex-direction: column;
-  width: min(1180px, calc(100vw - 60px));
-  max-height: calc(100vh - var(--header-h) - var(--screenbar-h) - 40px);
+  width: min(1180px, calc(100vw - var(--rail-w) - 60px));
+  max-height: calc(100vh - var(--header-h) - 40px);
   padding: 16px 18px;
   background: var(--panel);
   border: 1px solid var(--accent);
@@ -2092,7 +2139,7 @@ main#stage.mode-cursor #mode-banner {
    растягивать его на всю ширину склада значило бы разгонять название темы и
    цену по разным краям экрана. */
 .win-box.narrow {
-  width: min(560px, calc(100vw - 60px));
+  width: min(560px, calc(100vw - var(--rail-w) - 60px));
 }
 .win-box.narrow .win-list {
   gap: 6px;
@@ -2595,7 +2642,7 @@ main#stage.mode-cursor #mode-banner {
    одном столбце, и одна дверь с обводкой, а другая с точкой читались как два
    разных состояния, хотя новость у них одна и та же. Внутри окон кольцо
    остаётся: там точки нет, и метить нечем. */
-/* С §12.301 двери живут в полосе `#screenbar` (точка — там же, ниже), а в
+/* С §12.311 двери живут в рейке `#screenbar` (точка — там же, ниже), а в
    тулбаре метку носят только заголовки разделов. */
 .sec-head.fresh::after {
   content: "";
@@ -2637,10 +2684,10 @@ main#stage.mode-cursor #mode-banner {
 /* Окно «Наука» в две колонки: слева реестр тем, справа идущие. Ширина правой
    не зависит от содержимого — иначе старт темы менял бы раскладку. */
 .win-box.narrow.sci {
-  width: min(1040px, calc(100vw - 60px));
+  width: min(1040px, calc(100vw - var(--rail-w) - 60px));
   /* Высота — по экрану, а не по содержимому: старт, отмена и конец темы
      меняли число строк, и окно прыгало вместе с ними. */
-  height: calc(100vh - var(--header-h) - var(--screenbar-h) - 40px);
+  height: calc(100vh - var(--header-h) - 40px);
 }
 /* Заголовок группы отбивается только от строки над ним. `:first-child` тут не
    годится: перед первым видимым заголовком стоят спрятанные, и левая колонка
@@ -3207,7 +3254,7 @@ main#stage.mode-cursor #mode-banner {
 /* Колонка уже прочих окон: справочник читают, а не сканируют глазами по
    столбцам, и строка длиннее ~90 знаков теряет начало следующей. */
 #wikiwin .win-box {
-  width: min(760px, calc(100vw - 60px));
+  width: min(760px, calc(100vw - var(--rail-w) - 60px));
 }
 .wiki-head {
   display: flex;

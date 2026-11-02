@@ -2,7 +2,7 @@
 // и шлём команды (постройка тайлов, приказы движения).
 
 import { Application, Container, Graphics, Text } from "pixi.js";
-import { ITEM_GLYPHS, SITE_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
+import { DOOR_GLYPHS, ITEM_GLYPHS, SITE_GLYPHS, TILE_GLYPHS } from "./glyphs.js";
 import { createLighting } from "./light.js";
 import { blightBlob, terrainTexture } from "./terrain.js";
 import {
@@ -161,6 +161,7 @@ function installGlyphSprite() {
     '<svg id="glyph-sprite" style="display:none" aria-hidden="true">' +
       sym("item", ITEM_GLYPHS) +
       sym("tile", TILE_GLYPHS) +
+      sym("door", DOOR_GLYPHS) +
       "</svg>",
   );
 }
@@ -314,6 +315,7 @@ const stockWinEl = document.getElementById("stockwin");
 const sciWinEl = document.getElementById("sciwin");
 const hireWinEl = document.getElementById("hirewin");
 const buyWinEl = document.getElementById("buywin");
+const setWinEl = document.getElementById("setwin");
 const binWinEl = document.getElementById("binwin");
 const dossierEl = document.getElementById("dossier");
 
@@ -942,6 +944,7 @@ let buyDoor = null;
 // двери тулбара, а не держит свой список.
 let filesDoor = null;
 let wikiDoor = null;
+let setDoor = null;
 // Пороги автопроизводства в порядке палитры рецептов (§12.65). Число хранит
 // ядро; здесь оно нужно строке окна «Склад» — и подписи, и полю правки, которое
 // открывается **с него** (§12.100, §12.105, §12.108).
@@ -1127,10 +1130,9 @@ function layout() {
     ? Math.max(8, stageBox.right - sideBox.left + 12)
     : 8;
   const availW = Math.max(TILE, app.screen.width - padLeft - padRight);
-  // Сверху сцену накрывает полоса дверей (§12.301): она постоянная, а не
-  // растёт по разделам, поэтому её высоту вычитаем — карта не прыгает.
-  const topBox = document.getElementById("screenbar")?.getBoundingClientRect();
-  const padTop = topBox?.height ? Math.max(8, topBox.bottom - stageBox.top + 8) : 8;
+  // Рейку дверей (§12.311) вычитать незачем: тулбар стоит правее неё, и слева
+  // сцену режет уже его край.
+  const padTop = 8;
   const availH = Math.max(TILE, app.screen.height - padTop - 8);
   // Не мельчим ниже единицы: `TILE` подобран под самый маленький экран, и на нём
   // карта просто уезжает под панели, как уезжала всегда.
@@ -5427,7 +5429,10 @@ function refreshLiveTip() {
 }
 
 function showLiveTip(el) {
-  const text = el.dataset.tip ?? "";
+  const tip = el.dataset.tip ?? "";
+  // У двери рейки подписи нет (§12.311): её имя идёт первой строкой подсказки.
+  const door = tip && el.querySelector?.(":scope > [data-door]")?.dataset.door;
+  const text = door ? `${door}\n${tip}` : tip;
   // Пустой текст и спрятанный элемент — не «подсказка без слов», а её
   // отсутствие: заказов нет, и говорить не о чем.
   if (!text || el.hidden) {
@@ -8082,6 +8087,39 @@ function mkSection(el, title, sw) {
   return body;
 }
 
+// Группа окна «Настройки» (§12.312). Узлы строит `buildToolbar`, и живут они всю
+// партию: их держат покадровые `sync*`, поэтому окно их только показывает.
+let settingsBody = null;
+let setWinOpen = false;
+function mkSetGroup(title) {
+  const head = document.createElement("div");
+  head.className = "set-head";
+  head.textContent = title;
+  const body = document.createElement("div");
+  body.className = "sec-body";
+  settingsBody.append(head, body);
+  return body;
+}
+
+function openSetWindow() {
+  if (setWinOpen) return;
+  closeOtherWindows("settings");
+  setWinOpen = true;
+  mkWindow(setWinEl, "Настройки", () => closeSetWindow(), true).list.appendChild(
+    settingsBody,
+  );
+  setWinEl.hidden = false;
+}
+
+function closeSetWindow() {
+  if (!setWinOpen) return;
+  setWinOpen = false;
+  settingsBody.remove();
+  setWinEl.hidden = true;
+  setWinEl.innerHTML = "";
+  hideLiveTip();
+}
+
 // `title === null` значит «свёрнуто всё» — состояние стартового экрана и
 // законный выбор игрока, а не «раздел потерялся».
 //
@@ -8171,6 +8209,7 @@ document.addEventListener(
 );
 
 function buildToolbar() {
+  closeSetWindow();
   const el = document.getElementById("toolbar");
   el.innerHTML = "";
   sections.length = 0;
@@ -8192,7 +8231,7 @@ function buildToolbar() {
   // читалось как «открыть ту постройку». Окно же отвечает на «что у базы есть»
   // целиком, считая пол, лапы и бронь (§12.53), — то есть ровно не про склад.
   const ware = mkTool(
-    '<span class="sw sw-scrap"></span><span>Ресурсы</span>',
+    doorHtml("stock", "Ресурсы"),
     folds(() => openStockWindow()),
   );
   liveTitle(
@@ -8219,14 +8258,14 @@ function buildToolbar() {
     // `disabled`: по выключенному элементу браузер не шлёт событий мыши, и
     // причина не показалась бы ни разу (§12.53, §12.124).
     sciDoor = mkTool(
-      '<span class="sw sw-lab"></span><span>Наука</span>',
+      doorHtml("sci", "Наука"),
       folds(() => openSciWindow()),
     );
     liveTitle(sciDoor, "За какую тему взяться и чего для этого не хватает");
       }
   if ((meta.recruits ?? []).length) {
     hireDoor = mkTool(
-      '<span class="sw sw-hire"></span><span>Найм</span>',
+      doorHtml("hire", "Найм"),
       folds(() => openHireWindow()),
     );
     liveTitle(hireDoor, "Кто откликнется на известность базы и чего он стоит");
@@ -8257,7 +8296,7 @@ function buildToolbar() {
     // элементу браузер не шлёт событий мыши, и причина не показалась бы ни разу
     // (§12.53, §12.124).
     buyDoor = mkTool(
-      '<span class="sw sw-trade"></span><span>Покупка</span>',
+      doorHtml("buy", "Покупка"),
       folds(() => openBuyWindow()),
     );
     liveTitle(
@@ -8374,7 +8413,7 @@ function buildToolbar() {
   raidDoor = null;
   if ((meta.missions ?? []).length) {
     raidDoor = mkTool(
-      '<span class="sw sw-gate"></span><span>Вылазки</span>',
+      doorHtml("raid", "Вылазки"),
       // Дверь стоит и над открытым штабом (§12.301): повторный клик по ней
       // не должен сбрасывать выбранный отряд к первому.
       // А коробку поверх него (§12.308) снимает: дверь подсвечена, и щелчок по
@@ -8392,7 +8431,7 @@ function buildToolbar() {
   // места — один жест. Дверь «Карта» тут была ровно один заход и вела в окно,
   // которое отвечало «где горит» и отсылало тушить в другое окно.
   const files = mkTool(
-    '<span class="sw sw-desk"></span><span>Личные дела</span>',
+    doorHtml("dossier", "Личные дела"),
     folds(() => dossierOpen || openDossier(null)),
   );
   liveTitle(files, "Кто каков, что с ним было и чему его выучить");
@@ -8403,11 +8442,18 @@ function buildToolbar() {
   // у которой ворот нет вовсе. Ведёт она в оглавление, потому что адресата у
   // неё нет: к вещам ведут значки «i» рядом с самими вещами.
   const wiki = mkTool(
-    '<span class="sw sw-note"></span><span>Справочник</span>',
+    doorHtml("wiki", "Справочник"),
     folds(() => openWikiDoor()),
   );
   liveTitle(wiki, "Что это за мир, кто в нём есть и как всё устроено");
   wikiDoor = wiki;
+  // «Настройки» (§12.312): стоит внизу рейки, это не про партию, а про вид и файл.
+  setDoor = mkTool(
+    doorHtml("settings", "Настройки"),
+    folds(() => (setWinOpen ? closeSetWindow() : openSetWindow())),
+  );
+  setDoor.classList.add("door-end");
+  liveTitle(setDoor, "Звук, свет и партия: сохранить, загрузить, начать заново");
     buildScreenBar();
 
   // Правила симуляции — не режимы ввода, а тумблеры поведения котов, поэтому
@@ -8451,7 +8497,9 @@ function buildToolbar() {
 
   // Звук (§12.253) — свой раздел: общий вкл/выкл, громкость и три шины
   // отдельно. Кнопки раздел не складывают: их жмут, чтобы услышать разницу.
-  const snd = mkSection(el, "Звук");
+  settingsBody = document.createElement("div");
+  settingsBody.className = "set-body";
+  const snd = mkSetGroup("Звук");
   soundBtn = mkTool("", () => toggleSound());
   liveTitle(soundBtn, "Включить или выключить весь звук (клавиша M)");
   snd.appendChild(soundBtn);
@@ -8486,7 +8534,7 @@ function buildToolbar() {
   // Свет (прототип, `light.js`) — свой раздел, как звук: вкл/выкл, три
   // ползунка, нагрузка для замера и цифры, сколько свет стоит. Кнопки раздел
   // не складывают: их жмут, чтобы увидеть разницу на карте.
-  const lit = mkSection(el, "Свет");
+  const lit = mkSetGroup("Свет");
   lightUi = {};
   lightUi.on = mkTool("", () => {
     lighting.toggle();
@@ -8615,7 +8663,7 @@ function buildToolbar() {
   // Партия (§12.45). Автосохранение идёт само и молча, поэтому здесь только
   // то, что игрок решает сам: начать заново, унести партию файлом, принести
   // обратно и снять трейс.
-  const game = mkSection(el, "Партия");
+  const game = mkSetGroup("Партия");
 
   const fresh = mkTool(
     '<span class="sw sw-cursor"></span><span>Новая партия</span>',
@@ -13421,6 +13469,7 @@ const WINDOWS = [
     },
   ],
   ["wiki", () => wikiOpen, () => closeWikiWindow(), () => openWikiDoor],
+  ["settings", () => setWinOpen, () => closeSetWindow(), () => openSetWindow],
 ];
 
 // Окно модальное, значит второго рядом не бывает. До §12.120 столкнуться им
@@ -13477,13 +13526,13 @@ function closeAllWindows() {
 // Реестры («Ресурсы», «Наука», «Найм», «Покупка», «Личные дела») побывали
 // экранами и вернулись коробками: показать на весь экран им нечего, и
 // растянутый короткий список читался пустотой. Коробки встают под шапку и
-// полосу дверей, как и экран. Пауза у обоих та же (§12.254), а скорость в
+// правее рейки дверей, как и экран. Пауза у обоих та же (§12.254), а скорость в
 // шапке остаётся под рукой. Экран — ключ `WINDOWS` в этом списке, а не второй
 // реестр окон.
 const SCREENS = new Set(["raid"]);
 const screenBarEl = document.getElementById("screenbar");
 
-// Полоса дверей (§12.301) — **постоянная**, под шапкой, и на базе, и на
+// Рейка дверей (§12.301, §12.311) — **постоянная**, у левого края, и на базе, и на
 // экране. Двери живут в ней **сами**, а не копиями: узел у двери один, его
 // строит `buildToolbar`, ворота у него те же (`syncDoors`, §12.151, §12.211,
 // §12.275), метка новостей та же (`syncNewsMarks`, §12.120). До этого полоса
@@ -13497,7 +13546,7 @@ let baseTab = null;
 function buildScreenBar() {
   if (!screenBarEl) return;
   screenBarEl.innerHTML = "";
-  baseTab = mkTool('<span class="sw sw-build"></span><span>База</span>', () =>
+  baseTab = mkTool(doorHtml("base", "База"), () =>
     closeAllWindows(),
   );
   liveTitle(baseTab, "Карта базы: стройка и коты (Escape — назад сюда)");
@@ -13510,6 +13559,7 @@ function buildScreenBar() {
     ["buy", buyDoor],
     ["dossier", filesDoor],
     ["wiki", wikiDoor],
+    ["settings", setDoor],
   ]
     .filter(([, door]) => door)
     .map(([key, door]) => {
@@ -13518,7 +13568,7 @@ function buildScreenBar() {
     });
 }
 
-// Полоса видна и над окнами (они встают под неё), поэтому подсвечена дверь
+// Рейка видна и рядом с окнами (они встают правее неё), поэтому подсвечена дверь
 // открытого окна — экрана или коробки; окна с дверью нет — «База». Пишем
 // только на изменении: дверь живёт всю партию, и класс, переставленный
 // каждым кадром, сбросил бы ей наведённую подсказку (§12.125).
@@ -16297,6 +16347,12 @@ function ruleRow(node) {
     }>${state}: «${label}»</span>` +
     "</div>"
   );
+}
+
+// Дверь рейки (§12.311): только глиф. Имя едет в `data-door`, его первой
+// строкой показывает подсказка, и причина отказа остаётся под ним словом.
+function doorHtml(key, name) {
+  return `<svg class="glyph door-glyph" data-door="${name}" aria-label="${name}"><use href="#g-door-${key}"/></svg>`;
 }
 
 function mkTool(html, onClick) {
