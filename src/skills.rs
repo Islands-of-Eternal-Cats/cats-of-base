@@ -314,6 +314,7 @@ pub(crate) fn assign_study(
     mut commands: Commands,
     students: Query<&Study>,
     mut records: Query<&mut Record>,
+    missions: Query<&Mission>,
     free_cats: Query<
         (
             Entity,
@@ -322,6 +323,7 @@ pub(crate) fn assign_study(
             &Enrolled,
             Option<&Skills>,
             Option<&Stats>,
+            Option<&Posted>,
         ),
         (
             Without<Assignment>,
@@ -343,9 +345,19 @@ pub(crate) fn assign_study(
 ) {
     let mut taken: Vec<(i32, i32)> = students.iter().map(|s| s.spot).collect();
 
+    // Радиста собирающегося отряда парта не берёт (§12.286): его снимает с дела
+    // фасад перед цепочкой, чтобы за стол посадил `gather_squad`, — а стоя
+    // раньше него, этот раздатчик возвращал бы его за парту тем же тиком.
+    // Кот дрожал на месте, брифинг ждал радиста, класс — ученика.
+    let gathering: Vec<(i32, i32)> = missions
+        .iter()
+        .filter(|m| m.left == 0)
+        .map(|m| m.node)
+        .collect();
     let mut idle: Vec<(&str, Entity, (i32, i32), usize, i32, i32)> = free_cats
         .iter()
-        .map(|(e, id, p, enrolled, skills, stats)| {
+        .filter(|(.., posted)| posted.is_none_or(|p| !gathering.contains(&p.spot)))
+        .map(|(e, id, p, enrolled, skills, stats, _)| {
             let skill = enrolled.skill;
             (
                 id.0.as_str(),

@@ -768,3 +768,30 @@ fn an_operator_going_for_his_gear_is_not_pulled_back() {
         "радист оделся перед брифингом"
     );
 }
+
+/// Радист, которого посреди сбора отправили учиться, сбор не держит вечно
+/// (§12.286): фасад снимает его с учёбы перед цепочкой, а `assign_study` (он раньше `gather_squad`) тем же
+/// тиком сажал обратно. Кот дрожал на месте, брифинг ждал радиста, класс —
+/// ученика. Собирающийся отряд старше приписки к парте; вернувшись, кот
+/// садится за неё сам.
+#[test]
+fn an_enrolled_operator_is_not_pulled_back_to_the_desk() {
+    let (mut sim, first, _) = sim_with_two_radios(2, 2, 200);
+    let science = sim.set_skill("science", &[20, 100]);
+    sim.set_taught(science, 1);
+    sim.set_teaches(5, science);
+    sim.force_tile(7, 2, 5);
+    sim.enlist("a", 1, 2);
+    sim.post_relay("d", 1, 2);
+    assert!(sim.launch_node(first, 1, 2, -1));
+    sim.tick_n(1);
+    // Учить велели посреди сбора: приписка к парте снимает радиста со стула.
+    assert!(sim.teach("d", "science"));
+    let mut t = 0;
+    while !sim.is_away("a") {
+        sim.tick_n(1);
+        t += 1;
+        assert!(t < 100, "отряд так и не ушёл: радист {:?}", sim.pos_of("d"));
+    }
+    assert!(sim.is_enrolled("d"), "приписка к парте пережила сбор");
+}
