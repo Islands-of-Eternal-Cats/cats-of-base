@@ -20,7 +20,7 @@ use crate::relay::assign_relay;
 use crate::research::{assign_research, work_research};
 use crate::seen::note_seen;
 use crate::sites::grow_blights;
-use crate::skills::{assign_study, assign_tutor, study, train_skills};
+use crate::skills::{assign_self_study, assign_study, assign_tutor, study, train_skills};
 use crate::timeline::run_timeline;
 use crate::trade::run_trade;
 
@@ -196,7 +196,10 @@ pub(crate) fn build_schedule() -> Schedule {
         mark_loose_scrap,
         assign_tidy,
         assign_relay,
-        assign_nap,
+        // Учёба в простое (§12.314) — вплотную перед дремотой и тем же
+        // фильтром простоя: «коту ничего не досталось» решают все раздатчики
+        // работы до неё. Вложенной цепочкой по той же арности.
+        (assign_self_study, assign_nap).chain(),
     )
         .chain();
     // Что из этого вышло: шаги и сама работа.

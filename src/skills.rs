@@ -393,6 +393,7 @@ pub(crate) fn assign_study(
                 skill,
                 spot,
                 teacher: false,
+                auto: false,
             },
             Path { steps: path },
         ));
@@ -469,8 +470,12 @@ pub(crate) fn assign_tutor(
     // кого-то из класса, ровно как `study` держит его за кафедрой. Домен в
     // ключе с §12.290: за одной партой учат и «Науку», и «Связь», и класс
     // вперемешку зовёт того, кто есть, — учитель один, учит он одному.
+    //
+    // Ученик правила «учёба в простое» учителя не зовёт (§12.314): срывать
+    // ради него учёного с работы — та скрытая цена, от которой правило и
+    // берёт только свободное время. Его учителя сажает `assign_self_study`.
     let mut waiting: Vec<((i32, i32), usize, i32)> = Vec::new();
-    for (s, skills) in desks.iter().filter(|(s, _)| !s.teacher) {
+    for (s, skills) in desks.iter().filter(|(s, _)| !s.teacher && !s.auto) {
         let Some(lectern) = lectern_of(&map, &tiles, &owners, s.spot) else {
             continue;
         };
@@ -544,9 +549,199 @@ pub(crate) fn assign_tutor(
                     skill,
                     spot: lectern,
                     teacher: true,
+                    auto: false,
                 },
                 Path { steps: path },
             ));
+    }
+}
+
+/// Сажает за парту по правилу «учёба в простое» (§12.314): котов, которым
+/// больше нечем заняться, — и учителя тоже только свободного.
+///
+/// **Стоит последним перед дремотой** (`assign_nap`) по её же доводу (§12.52):
+/// «коту ничего не досталось» становится фактом только после всех раздатчиков
+/// работы. Фильтр простоя у них один и тот же — разойдись он, и правило брало
+/// бы котов, которых дремота свободными не считает.
+///
+/// **Пару сажает сам, одним ходом.** Пустое место учителя занимает свободный
+/// кот, который может научить (`may_tutor`), — лучший по уровню, при равенстве
+/// по `id`, как в `assign_tutor`. Учителя нет — ученик не садится: правило не
+/// срывает с работы ни своего, ни чужого, а сидеть за партой в ожидании значило
+/// бы молча отнимать у базы работника. Парта без места учителя учит сама.
+///
+/// **Очередь честная** (§12.269): сперва младший уровень, при равенстве — `id`
+/// кота, у одного кота — младший из отмеченных навыков, затем порядок палитры.
+/// Мест мало, и «всем по единичке» получается само.
+///
+/// Сеанс — один уровень, как у «Учить»: встаёт ученик в `train_skills`.
+/// Приписки (`Enrolled`) у него нет — прерванный, он не вернётся за парту вперёд
+/// работы, а дождётся следующего простоя.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(crate) fn assign_self_study(
+    map: Res<BaseMap>,
+    tiles: Res<TileRules>,
+    rules: Res<SkillRules>,
+    structures: Res<StructureRules>,
+    placed: Query<&Structure>,
+    mut commands: Commands,
+    desks: Query<(&Study, Option<&Skills>)>,
+    missions: Query<&Mission>,
+    idle: Query<
+        (
+            Entity,
+            &UnitId,
+            &Position,
+            Option<&SelfStudy>,
+            Option<&Enrolled>,
+            Option<&Skills>,
+            Option<&Stats>,
+            Option<&Posted>,
+        ),
+        (
+            Without<Assignment>,
+            Without<Haul>,
+            Without<Rest>,
+            Without<Study>,
+            Without<Researching>,
+            Without<Crafting>,
+            Without<Equipping>,
+            Without<Eating>,
+            Without<Healing>,
+            Without<Treating>,
+            Without<OnDuty>,
+            Without<Squad>,
+            Without<Away>,
+            Without<Path>,
+            Without<Order>,
+        ),
+    >,
+) {
+    // Правил нет почти никогда — и считать тогда нечего.
+    if !idle
+        .iter()
+        .any(|(_, _, _, own, ..)| own.is_some_and(|s| !s.0.is_empty()))
+    {
+        return;
+    }
+    let owners = owners_of(&map, &structures, &placed);
+    let mut taken: Vec<(i32, i32)> = desks
+        .iter()
+        .filter(|(s, _)| !s.teacher)
+        .map(|(s, _)| s.spot)
+        .collect();
+    // Занятые места учителя: `(место, домен, опыт учителя)`.
+    let mut manned: Vec<((i32, i32), usize, i32)> = desks
+        .iter()
+        .filter(|(s, _)| s.teacher)
+        .map(|(s, k)| (s.spot, s.skill, k.map_or(0, |k| k.xp_of(s.skill))))
+        .collect();
+    // Радист собирающегося отряда сидит брифинг, а не урок (§12.286).
+    let gathering: Vec<(i32, i32)> = missions
+        .iter()
+        .filter(|m| m.left == 0)
+        .map(|m| m.node)
+        .collect();
+    let mut free: Vec<_> = idle
+        .iter()
+        .filter(|(.., posted)| posted.is_none_or(|p| !gathering.contains(&p.spot)))
+        .map(|(e, id, p, own, enrolled, skills, stats, _)| {
+            (
+                id.0.as_str(),
+                e,
+                (p.x, p.y),
+                own,
+                enrolled.is_some(),
+                skills,
+                stats,
+            )
+        })
+        .collect();
+    free.sort_unstable_by_key(|&(id, ..)| id);
+
+    // Кто чему хочет учиться: `(уровень, id, домен, кот, клетка, опыт)`.
+    let mut wants: Vec<(i32, &str, usize, Entity, (i32, i32), i32)> = Vec::new();
+    for &(id, e, at, own, enrolled, skills, stats) in &free {
+        // Записанного игроком ведёт его запись (`assign_study`), а не правило.
+        if enrolled {
+            continue;
+        }
+        for &skill in own.map_or(&[][..], |s| s.0.as_slice()) {
+            let xp = skills.map_or(0, |s| s.xp_of(skill));
+            if rules.taught_cap(skill) > 0 && xp < desk_cap(&rules, stats, skill) {
+                wants.push((rules.level(skill, xp), id, skill, e, at, xp));
+            }
+        }
+    }
+    wants.sort_unstable_by_key(|&(level, id, skill, ..)| (level, id, skill));
+
+    let mut busy: Vec<Entity> = Vec::new();
+    for (_, _, skill, cat_e, at, xp) in wants {
+        if busy.contains(&cat_e) {
+            continue; // уже сел — учеником другого навыка или учителем
+        }
+        let reach = Reach::all(&map, &tiles, at);
+        let mut options: Vec<(i32, (i32, i32))> = desk_cells(&map, &tiles, skill)
+            .filter(|cell| !taken.contains(cell))
+            .filter_map(|(x, y)| reach.dist_at(x, y).map(|d| (d, (x, y))))
+            .collect();
+        options.sort_unstable();
+
+        for (_, desk) in options {
+            // Кто учит за этой партой: никто не нужен, уже сидит или найдётся.
+            let tutor = match lectern_of(&map, &tiles, &owners, desk) {
+                None => None,
+                Some(lectern) => match manned.iter().find(|(at, ..)| *at == lectern) {
+                    Some(&(_, k, t_xp)) if k == skill && may_tutor(&rules, skill, t_xp, xp) => None,
+                    Some(_) => continue, // учит другому или этому коту не учитель
+                    None => {
+                        let mut able: Vec<_> = free
+                            .iter()
+                            .filter(|(_, e, ..)| *e != cat_e && !busy.contains(e))
+                            .filter_map(|&(id, e, from, _, _, skills, _)| {
+                                let t_xp = skills.map_or(0, |s| s.xp_of(skill));
+                                may_tutor(&rules, skill, t_xp, xp)
+                                    .then(|| (-rules.level(skill, t_xp), id, e, from, t_xp))
+                            })
+                            .collect();
+                        able.sort_unstable_by_key(|&(level, id, ..)| (level, id));
+                        let found = able.into_iter().find_map(|(_, _, e, from, t_xp)| {
+                            find_path(&map, &tiles, from, lectern).map(|p| (e, t_xp, p))
+                        });
+                        let Some((tutor_e, t_xp, path)) = found else {
+                            continue; // учить некому — правило ученика не сажает
+                        };
+                        Some((tutor_e, lectern, t_xp, path))
+                    }
+                },
+            };
+            if let Some((tutor_e, lectern, t_xp, path)) = tutor {
+                busy.push(tutor_e);
+                manned.push((lectern, skill, t_xp));
+                commands.entity(tutor_e).insert((
+                    Study {
+                        skill,
+                        spot: lectern,
+                        teacher: true,
+                        auto: true,
+                    },
+                    Path { steps: path },
+                ));
+            }
+            busy.push(cat_e);
+            taken.push(desk);
+            let path = find_path(&map, &tiles, at, desk).unwrap_or_default();
+            commands.entity(cat_e).insert((
+                Study {
+                    skill,
+                    spot: desk,
+                    teacher: false,
+                    auto: true,
+                },
+                Path { steps: path },
+            ));
+            break;
+        }
     }
 }
 
@@ -677,6 +872,22 @@ pub(crate) fn study(
                 }
             }
             continue;
+        }
+
+        // Ученик правила без учителя не ждёт, а встаёт (§12.314): сидеть за
+        // партой без дела — это работник, которого база лишилась молча, а
+        // учителя ему с работы не сорвёт никто.
+        if task.auto
+            && let Some(at) = lectern_of(&map, &tiles, &owners, task.spot)
+        {
+            let mine = skills.map_or(0, |k| k.xp_of(task.skill));
+            let taught = tutors.iter().any(|&(spot, skill, xp, _)| {
+                spot == at && skill == task.skill && may_tutor(&rules, task.skill, xp, mine)
+            });
+            if !taught {
+                commands.entity(cat_e).remove::<(Study, Path, Stride)>();
+                continue;
+            }
         }
 
         if path.is_some() {

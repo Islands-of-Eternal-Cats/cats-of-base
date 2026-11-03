@@ -760,7 +760,7 @@ fn the_shipped_ruleset_can_reach_its_automation() {
     let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
     let cap = sim.taught_cap("science");
     let gates = sim.auto_gates();
-    assert_eq!(gates.len(), 3, "ворота названы у всех трёх правил");
+    assert_eq!(gates.len(), 4, "ворота названы у всех четырёх правил");
 
     for gate in gates {
         let topic = sim

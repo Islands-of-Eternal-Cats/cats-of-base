@@ -35,6 +35,7 @@ mod research;
 mod sampling;
 mod save;
 mod seen;
+mod self_study;
 mod sites;
 mod skills;
 mod stats;
@@ -1351,11 +1352,14 @@ impl Sim {
     /// Имена технологий, которыми рулсет запирает автоматику (§12.93); пустые
     /// не в счёт. Спрашивает это сторож боевого рулсета.
     fn auto_gates(&self) -> Vec<String> {
-        let rules = self.world.resource::<AutoRules>();
-        [&rules.sales, &rules.crafting, &rules.raids]
-            .into_iter()
+        // Из `AutoRules::gates`, а не перечнем полей: четвёртое правило
+        // (§12.314) перечень пропустил бы молча, и сторожа его не видели бы.
+        self.world
+            .resource::<AutoRules>()
+            .gates()
+            .iter()
+            .map(|&(_, gate)| gate.to_string())
             .filter(|g| !g.is_empty())
-            .cloned()
             .collect()
     }
 
@@ -1419,6 +1423,12 @@ impl Sim {
         rules.sales = sales.to_string();
         rules.crafting = crafting.to_string();
         rules.raids = raids.to_string();
+    }
+
+    /// Ворота учёбы в простое (§12.314) — отдельно от трёх старых, чтобы их
+    /// полсотни вызовов не обрастали четвёртым пустым аргументом.
+    fn set_study_gate(&mut self, tech: &str) {
+        self.world.resource_mut::<AutoRules>().study = tech.to_string();
     }
 
     /// Проступили ли детали события — то же, что уходит в снапшот (§12.28).
@@ -1523,6 +1533,26 @@ impl Sim {
     fn is_teaching(&mut self, unit: &str) -> bool {
         let cat = self.entity_of(unit);
         self.world.get::<Study>(cat).is_some_and(|s| s.teacher)
+    }
+
+    /// Чему кот учится в простое (§12.314) — отмеченные галочки, по порядку
+    /// палитры.
+    fn self_study_of(&mut self, unit: &str) -> Vec<usize> {
+        let cat = self.entity_of(unit);
+        self.world
+            .get::<SelfStudy>(cat)
+            .map(|s| s.0.clone())
+            .unwrap_or_default()
+    }
+
+    /// Кот сидит (или идёт) за партой **по правилу**, а не по записи (§12.314);
+    /// `None` — не учится вовсе, иначе домен.
+    fn studies_by_rule(&mut self, unit: &str) -> Option<usize> {
+        let cat = self.entity_of(unit);
+        self.world
+            .get::<Study>(cat)
+            .filter(|s| s.auto && !s.teacher)
+            .map(|s| s.skill)
     }
 
     /// Кот приписан к парте (§12.84): вернётся за неё, как только освободится.

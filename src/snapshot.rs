@@ -269,6 +269,8 @@ pub(crate) struct Snapshot {
     pub(crate) auto_sales: bool,
     pub(crate) auto_crafting: bool,
     pub(crate) auto_raids: bool,
+    /// Учёба в простое (§12.314): галочка в «Личном деле».
+    pub(crate) auto_study: bool,
     /// Убирают ли коты лом с пола без разметки (§12.16). До §12.96 вид держал
     /// это своим зеркалом тумблера, и после загрузки партии зеркало врало:
     /// ресурс в снимке сохраняется, а переменная в JS начиналась заново с
@@ -320,7 +322,8 @@ pub(crate) struct Snapshot {
 pub(crate) struct NewsSnap {
     /// `raid` · `recruit` · `topic` · `recipe` · `tile` · `item` · `rule` —
     /// какой палитре принадлежит `def`. У `rule` палитра — сам `automation:`
-    /// (§12.202): `0` сбыт · `1` производство · `2` вылазки.
+    /// (§12.202): `0` сбыт · `1` производство · `2` вылазки ·
+    /// `3` учёба (§12.314).
     pub(crate) kind: &'static str,
     /// Индекс записи в палитре своего вида.
     pub(crate) def: usize,
@@ -1303,6 +1306,9 @@ pub(crate) struct SkillSnap {
     /// Слово по тегу подбирает вид — то же деление, что у `MissionSnap::phase`
     /// (§12.168) и у календаря (§12.46): ядро не занимается подписями.
     pub(crate) teach: &'static str,
+    /// Отмечена ли галочка «учиться в простое» (§12.314). Правило, а не
+    /// задача: учится ли кот прямо сейчас, говорит `job`.
+    pub(crate) self_study: bool,
 }
 
 #[derive(Serialize)]

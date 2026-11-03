@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 48;
+pub(crate) const FORMAT: u32 = 49;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -114,6 +114,8 @@ pub(crate) const SAVED: &[&str] = &[
     // загруженная партия забыла бы, кого игрок отправил учиться, и ученик,
     // спавший в момент сохранения, за парту больше не вернулся бы.
     "Enrolled",
+    // Правило «учёба в простое» (§12.314) — конфигурация игрока на коте.
+    "SelfStudy",
     // Состояния кота, которые не задачи.
     "Away",
     "Captive",
@@ -489,6 +491,9 @@ pub(crate) struct EntityDto {
     /// выбирает сам, любую свободную.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) enrolled: Option<usize>,
+    /// Чему кот учится в простое (§12.314).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) self_study: Option<Vec<usize>>,
 
     // Состояния кота, которые не задачи.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -562,6 +567,9 @@ pub(crate) struct StudyDto {
     /// Учитель, а не ученик (§12.258).
     #[serde(default)]
     pub(crate) teacher: bool,
+    /// Сел по правилу «учёба в простое» (§12.314).
+    #[serde(default)]
+    pub(crate) auto: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -778,6 +786,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                     skill: s.skill,
                     spot: s.spot,
                     teacher: s.teacher,
+                    auto: s.auto,
                 }),
                 researching: e.get::<Researching>().and_then(|r| at(r.0)),
                 crafting: e.get::<Crafting>().and_then(|c| at(c.0)),
@@ -798,6 +807,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                 posted: e.get::<Posted>().map(|p| p.spot),
                 enlisted: e.get::<Enlisted>().map(|c| c.spot),
                 enrolled: e.get::<Enrolled>().map(|c| c.skill),
+                self_study: e.get::<SelfStudy>().map(|s| s.0.clone()),
                 trained: e.get::<Trained>().map(|t| (t.skill, t.at)),
                 record: e.get::<Record>().map(|r| RecordDto {
                     joined: r.joined,
@@ -1251,6 +1261,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
                 skill: s.skill,
                 spot: s.spot,
                 teacher: s.teacher,
+                auto: s.auto,
             });
         }
         if let Some(n) = dto.researching.and_then(at) {
@@ -1290,6 +1301,9 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
         }
         if let Some(skill) = dto.enrolled {
             e.insert(Enrolled { skill });
+        }
+        if let Some(v) = &dto.self_study {
+            e.insert(SelfStudy(v.clone()));
         }
         if let Some((skill, at)) = dto.trained {
             e.insert(Trained { skill, at });

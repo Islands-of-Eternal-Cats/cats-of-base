@@ -1230,7 +1230,7 @@ fn empty_gates_open_everything() {
     assert!(sim.set_sale(f, 0, 20), "ворот нет — правило ставится");
 }
 
-/// **Три флага не перепутаны местами.** Снапшот на хосте не собрать, поэтому
+/// **Флаги не перепутаны местами.** Снапшот на хосте не собрать, поэтому
 /// панель и этот тест спрашивают одно выражение (`auto_gates_open`) — иначе
 /// перепутанные поля дали бы молча не работающую строку, и заметить это можно
 /// было бы только в игре (§12.93).
@@ -1238,17 +1238,29 @@ fn empty_gates_open_everything() {
 fn each_automation_gate_answers_for_itself() {
     let (mut sim, _) = sim_with_market();
     sim.set_auto_gates("logistics", "planning", "callsigns");
-    assert_eq!(sim.auto_gates_open(), (false, false, false), "закрыто всё");
+    sim.set_study_gate("curriculum");
+    assert_eq!(
+        sim.auto_gates_open(),
+        (false, false, false, false),
+        "закрыто всё"
+    );
 
     sim.set_tech("planning");
     assert_eq!(
         sim.auto_gates_open(),
-        (false, true, false),
+        (false, true, false, false),
         "изучили «Автопроизводство» — открылось только производство",
     );
 
     sim.set_tech("logistics");
-    assert_eq!(sim.auto_gates_open(), (true, true, false), "и сбыт");
+    assert_eq!(sim.auto_gates_open(), (true, true, false, false), "и сбыт");
+
+    sim.set_tech("curriculum");
+    assert_eq!(
+        sim.auto_gates_open(),
+        (true, true, false, true),
+        "и учёба в простое (§12.314)",
+    );
 }
 
 // --- закладки склада (§12.100) ---------------------------------------------

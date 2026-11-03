@@ -867,7 +867,7 @@ let postLot = 0;
 // Открыта ли автоматика такого рода (§12.93): ворота названы технологиями в
 // рулсете, а изучены они или нет — считает ядро. Ярлыки самих тем приезжают
 // один раз в `meta.auto_gates`, потому что имя темы это контент.
-let autoOpen = { sales: true, crafting: true, raids: true };
+let autoOpen = { sales: true, crafting: true, raids: true, study: true };
 
 // Как правило зовётся на экране. Подача, а не механика, поэтому живёт в виде
 // (§12.46): ядро о словах не знает, оно возит ключ.
@@ -875,13 +875,20 @@ const AUTO_LABEL = {
   crafting: "запас в мастерской",
   sales: "сбыт излишков",
   raids: "автовылазки",
+  study: "учёба в простое",
 };
 
 // За какой дверью правилом пользуются (§12.202): порог сбыта и порог запаса —
 // полоски в строке предмета в окне «Склад», автовылазка — тумблер «↻» в
 // карточке заказа в штабе. По этому же делению правило носит метку на дверь и
-// гаснет, когда игрок её открыл и закрыл.
-const RULE_DOOR = { sales: "stock", crafting: "stock", raids: "raid" };
+// гаснет, когда игрок её открыл и закрыл. Учёба в простое (§12.314) — галочка
+// в строке навыка, то есть в «Личном деле».
+const RULE_DOOR = {
+  sales: "stock",
+  crafting: "stock",
+  raids: "raid",
+  study: "dossier",
+};
 
 // Ключ правила по индексу палитры. ⚠️ **Порядок приезжает из ядра**
 // (`AutoRules::gates`, §12.202) и здесь не переписан: по нему же считается
@@ -2769,6 +2776,7 @@ function renderSnapshot(snap) {
     sales: !!snap.auto_sales,
     crafting: !!snap.auto_crafting,
     raids: !!snap.auto_raids,
+    study: !!snap.auto_study,
   };
   // Правило живёт в ядре и сохраняется в снимке, поэтому вид его **читает**,
   // а не помнит (§12.96): от него зависит, есть ли у кучи кнопка «на склад».
@@ -7749,6 +7757,8 @@ const KEEPS_CELL = new Set([
   // Приписка снаряжения (§12.268) — из окна «Личное дело», модала поверх
   // карты: гасить под ним выделение значит стирать то, к чему вернутся.
   "setOutfit",
+  // Галочка «учиться в простое» (§12.314) — там же и по тому же доводу.
+  "setSelfStudy",
   // «Отменить» у темы (§12.233) — там же: снятое выделение спрятало бы ответ
   // («лаборатория свободна»).
   "cancelResearch",
@@ -10513,7 +10523,9 @@ function openNewsTarget(kind, def) {
   // быть не может: полоска порога стоит **в каждой** строке, то есть новость
   // здесь не строка, а колонка, и вести к одной из сорока не к чему.
   else if (kind === "rule") {
-    if (RULE_DOOR[autoKind(def)] === "raid") openRaidWindow();
+    const door = RULE_DOOR[autoKind(def)];
+    if (door === "raid") openRaidWindow();
+    else if (door === "dossier") openDossier();
     else openStockWindow();
   } else openSciWindow();
 }
@@ -11157,6 +11169,10 @@ function syncNewsMarks() {
       0,
   );
   sciDoor?.classList.toggle("fresh", newsPending("topic").length > 0);
+  filesDoor?.classList.toggle(
+    "fresh",
+    newsPending("rule", ruleDefsAt("dossier")).length > 0,
+  );
   hireDoor?.classList.toggle("fresh", newsPending("recruit").length > 0);
   // Точку зажигает только **открытие** заказа: «заказ закрылся» звать в штаб
   // незачем — карточки там уже нет, и метка горела бы над пустотой (так
@@ -11960,6 +11976,9 @@ function openDossier(id) {
 function closeDossier() {
   if (!dossierOpen) return;
   if (slotPick?.host === "dos") slotPick = null;
+  // Галочка учёбы стоит в каждой строке навыка (§12.314): правило видно
+  // целиком, и гаснет его новость здесь, как у «Склада» и штаба.
+  readNews("rule", ruleDefsAt("dossier"));
   dossierOpen = false;
   dossierUi = null;
   dossierEl.hidden = true;
@@ -12092,9 +12111,26 @@ function buildDossier(roster) {
         });
     });
     btn.className = "tool dos-teach";
+    // Галочка «учиться в простое» (§12.314) — тоже стабильный узел: меняются
+    // только класс, глиф и подсказка. Правило, а не запись, поэтому ведёт
+    // его снимок (`self_study`), а не клик.
+    const selfBtn = mkTool(
+      '<span class="dos-box"></span><span>в простое</span>',
+      () => {
+        const me = (lastSnap?.entities ?? []).find((e) => e.id === dossierAt);
+        sendAction({
+          type: "setSelfStudy",
+          id: dossierAt,
+          skill: (meta.skills ?? [])[i]?.id,
+          on: !me?.skills?.[i]?.self_study,
+        });
+      },
+    );
+    selfBtn.className = "tool toggle dos-self";
+    row.appendChild(selfBtn);
     row.appendChild(btn);
     left.appendChild(row);
-    ui.rows.push({ row, live, btn, def, i });
+    ui.rows.push({ row, live, btn, selfBtn, def, i });
   });
 
   ui.kit = document.createElement("div");
@@ -12574,7 +12610,7 @@ function syncDossier() {
       : "на базе с самого начала",
   );
 
-  for (const { row, live, btn, def, i } of ui.rows) {
+  for (const { row, live, btn, selfBtn, def, i } of ui.rows) {
     const s = e.skills?.[i];
     if (!s) continue;
     const learning = e.study === i;
@@ -12639,6 +12675,21 @@ function syncDossier() {
     // (`desk_gate`), и второй экземпляр ворот в виде прятал кнопку там, где
     // `teach` соглашается (инвариант 14).
     btn.hidden = !skillOpen(i) || topped;
+
+    // Галочка — за темой «Автообучение» (§12.93) и только там, где парта ещё
+    // учит (§12.314): на её потолке галочки нет, как и кнопки, а причину уже
+    // называет строка под полоской. Учится ли кот сейчас, говорит шапка.
+    selfBtn.hidden = !autoOpen.study || !skillOpen(i) || s.teach === "topped";
+    selfBtn.classList.toggle("on", !!s.self_study);
+    setHtml(selfBtn.firstChild, s.self_study ? "☑" : "☐");
+    const selfWhy = s.self_study
+      ? "Учится сам, когда нечем заняться"
+      : "Учиться самому, когда нечем заняться: до потолка парты " +
+        "и только у свободного учителя";
+    liveTitle(
+      selfBtn,
+      selfWhy + (s.teach === "nodesk" ? " · парт пока нет" : ""),
+    );
     setHtml(btn.firstChild, learning ? "Снять с учёбы" : "Учить");
     btn.classList.toggle("off", !learning && !!why);
     liveTitle(

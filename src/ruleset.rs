@@ -518,6 +518,9 @@ pub(crate) struct AutomationDef {
     /// Автовылазка (§12.67).
     #[serde(default)]
     pub(crate) raids: String,
+    /// Учёба в простое (§12.314).
+    #[serde(default)]
+    pub(crate) study: String,
 }
 
 /// Цель партии: то, ради чего игрок вообще здесь (§12.58).

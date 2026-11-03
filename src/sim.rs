@@ -1192,18 +1192,19 @@ impl Sim {
     }
 
     /// Открыта ли автоматика — по правилу на каждое: `(сбыт, производство,
-    /// вылазки)`, §12.93.
+    /// вылазки, учёба)`, §12.93, §12.314.
     ///
     /// Одно место на снимок и на тесты: снапшот на хосте не собрать, а три
     /// почти одинаковых флага рядом — приглашение перепутать их местами, и
     /// заметить это можно было бы только по молча не работающей строке.
-    pub(crate) fn auto_gates_open(&self) -> (bool, bool, bool) {
+    pub(crate) fn auto_gates_open(&self) -> (bool, bool, bool, bool) {
         let gates = self.world.resource::<AutoRules>();
         let techs = self.world.resource::<Techs>();
         (
             gates.sales_open(techs),
             gates.crafting_open(techs),
             gates.raids_open(techs),
+            gates.study_open(techs),
         )
     }
 
@@ -2190,6 +2191,7 @@ impl Sim {
             sales: rs.automation.sales.clone(),
             crafting: rs.automation.crafting.clone(),
             raids: rs.automation.raids.clone(),
+            study: rs.automation.study.clone(),
         });
         world.insert_resource(Trace::default());
         world.insert_resource(NeedRules {
@@ -5164,7 +5166,19 @@ impl Sim {
         let Some((cat_e, from, away)) = found else {
             return Desk::Away;
         };
-        let taken = self.taken_desks();
+        // Своя парта коту не помеха (§12.314): севший по правилу «Учить» жмёт,
+        // чтобы учиться вперёд работы, и «все парты заняты» про его же парту
+        // было бы враньём.
+        let own = self
+            .world
+            .get::<Study>(cat_e)
+            .filter(|s| !s.teacher)
+            .map(|s| s.spot);
+        let taken: Vec<(i32, i32)> = self
+            .taken_desks()
+            .into_iter()
+            .filter(|&c| Some(c) != own)
+            .collect();
         let reach = Reach::all(
             self.world.resource::<BaseMap>(),
             self.world.resource::<TileRules>(),
@@ -5225,6 +5239,7 @@ impl Sim {
                 skill,
                 spot,
                 teacher: false,
+                auto: false,
             },
             Path { steps: path },
         ));
@@ -5338,6 +5353,7 @@ impl Sim {
                 skill,
                 spot: (x, y),
                 teacher: false,
+                auto: false,
             },
             Path { steps: path },
         ));
@@ -5375,6 +5391,72 @@ impl Sim {
         self.world
             .entity_mut(cat_e)
             .remove::<(Enrolled, Study, Path, Stride)>();
+        true
+    }
+
+    /// Отметить или снять галочку «учиться в простое» (§12.314): кот `unit_id`
+    /// учится домену `skill_id` за партой, когда ему больше нечем заняться.
+    ///
+    /// **Правило, а не запись**: сажает по нему `assign_self_study`, последним
+    /// перед дремотой, и учителя берёт только свободного. Ворота — технология
+    /// (`automation: study`, §12.93) и домен, которому учат за партой; снятие
+    /// ворот не спрашивает. Снятая галочка снимает и идущий сеанс этого навыка:
+    /// иначе кот досидел бы урок, и игрок решил бы, что клик не сработал.
+    ///
+    /// Вернёт false, если кота нет, домена нет, ворота закрыты или менять нечего.
+    pub fn set_self_study(&mut self, unit_id: &str, skill_id: &str, on: bool) -> bool {
+        note(
+            &mut self.world,
+            format!("set_self_study {unit_id} {skill_id} {on}"),
+        );
+        let Some(skill) = self.world.resource::<SkillRules>().index_of(skill_id) else {
+            return false;
+        };
+        if on {
+            let techs = self.world.resource::<Techs>();
+            if !self.world.resource::<AutoRules>().study_open(techs)
+                || self.world.resource::<SkillRules>().taught_cap(skill) <= 0
+            {
+                return false;
+            }
+        }
+        let found = {
+            let mut q = self.world.query::<(Entity, &UnitId)>();
+            q.iter(&self.world)
+                .find(|(_, id)| id.0 == unit_id)
+                .map(|(e, _)| e)
+        };
+        let Some(cat_e) = found else {
+            return false;
+        };
+        let mut own = self
+            .world
+            .get::<SelfStudy>(cat_e)
+            .map(|s| s.0.clone())
+            .unwrap_or_default();
+        if own.contains(&skill) == on {
+            return false;
+        }
+        if on {
+            own.push(skill);
+            own.sort_unstable();
+        } else {
+            own.retain(|&k| k != skill);
+            let session = self
+                .world
+                .get::<Study>(cat_e)
+                .is_some_and(|s| s.auto && !s.teacher && s.skill == skill);
+            if session {
+                self.world
+                    .entity_mut(cat_e)
+                    .remove::<(Study, Path, Stride)>();
+            }
+        }
+        if own.is_empty() {
+            self.world.entity_mut(cat_e).remove::<SelfStudy>();
+        } else {
+            self.world.entity_mut(cat_e).insert(SelfStudy(own));
+        }
         true
     }
 
@@ -6183,6 +6265,13 @@ impl Sim {
                     .map(|(id, e)| (id.0.clone(), e.skill))
                     .collect()
             };
+            // Галочки «учиться в простое» (§12.314) — тем же боковым запросом.
+            let self_studies: Vec<(String, Vec<usize>)> = {
+                let mut q = self.world.query::<(&UnitId, &SelfStudy)>();
+                q.iter(&self.world)
+                    .map(|(id, s)| (id.0.clone(), s.0.clone()))
+                    .collect()
+            };
             // Занятые парты — тем же боковым запросом: ворота обучения
             // спрашивают их у каждого кота, а `Study::spot` держит и ту клетку,
             // к которой ученик ещё только идёт (§12.20).
@@ -6441,6 +6530,14 @@ impl Sim {
                     skills: (0..rules.0.len())
                         .map(|i| {
                             let xp = skills.map_or(0, |s| s.xp_of(i));
+                            // Своя парта не занята — тем же правилом, что в
+                            // `desk_gate_of` (инвариант 14).
+                            let own = study.filter(|s| !s.teacher).map(|s| s.spot);
+                            let taken: Vec<(i32, i32)> = desks_taken
+                                .iter()
+                                .copied()
+                                .filter(|&c| Some(c) != own)
+                                .collect();
                             SkillSnap {
                                 level: rules.level(i, xp),
                                 xp,
@@ -6456,9 +6553,12 @@ impl Sim {
                                     stats,
                                     i,
                                     away.is_some(),
-                                    &desks_taken,
+                                    &taken,
                                 )
                                 .tag(),
+                                self_study: self_studies
+                                    .iter()
+                                    .any(|(who, own)| who == &id.0 && own.contains(&i)),
                             }
                         })
                         .collect(),
@@ -7671,6 +7771,7 @@ impl Sim {
             auto_sales: auto_open.0,
             auto_crafting: auto_open.1,
             auto_raids: auto_open.2,
+            auto_study: auto_open.3,
             auto_tidy: self.world.resource::<AutoTidy>().0,
             recruits,
             research,
