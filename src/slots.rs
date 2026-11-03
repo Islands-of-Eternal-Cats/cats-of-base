@@ -101,6 +101,14 @@ impl Owners {
         (n != NONE).then(|| self.serials[n as usize])
     }
 
+    /// Достроена ли роль на клетке (§12.282): клетка ничья — сама себе объект и
+    /// достроена, иначе достроен ли весь её объект. Одно выражение на слоты
+    /// (`slot_cells`) и на парты: недостроенная большая парта учила бы.
+    pub(crate) fn finished_at(&self, x: i32, y: i32) -> bool {
+        let n = self.at(x, y);
+        n == NONE || !self.unfinished[n as usize]
+    }
+
     /// Клетки объекта `n` в порядке обхода карты.
     fn cells_of(&self, n: i32) -> Vec<(i32, i32)> {
         (0..self.height)
@@ -193,7 +201,7 @@ pub(crate) fn slot_cells(
             // бесплатны, а стол ждёт деталь, — и недостроенный стол уже звал
             // набирать отряд. То же у большой лаборатории: места без столов —
             // не лаборатория.
-            if owner != NONE && owners.unfinished[owner as usize] {
+            if !owners.finished_at(x, y) {
                 continue;
             }
             out.push((x, y));

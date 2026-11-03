@@ -5247,9 +5247,11 @@ impl Sim {
             self.world.resource::<TileRules>(),
             from,
         );
+        let owners = self.owners();
         desk_gate(
             self.world.resource::<BaseMap>(),
             self.world.resource::<TileRules>(),
+            &owners,
             self.world.resource::<SkillRules>(),
             &reach,
             self.world.get::<Skills>(cat_e),
@@ -5368,7 +5370,9 @@ impl Sim {
             let free = seats_at(map, tiles, &owners, (x, y), TileRules::is_desk)
                 .into_iter()
                 .find(|&(sx, sy)| {
-                    !taken.contains(&(sx, sy)) && tiles.teaches(map.tile_at(sx, sy), skill)
+                    !taken.contains(&(sx, sy))
+                        && tiles.teaches(map.tile_at(sx, sy), skill)
+                        && owners.finished_at(sx, sy)
                 });
             match free {
                 Some(spot) => spot,
@@ -6349,8 +6353,10 @@ impl Sim {
             // словом (§12.53) — игрок приписал ученика сам и обязан видеть,
             // почему тот сидит без дела. Тем же `lectern_of` и тем же `tutor_cap`,
             // какими решает `study`.
+            // Разметка по объектам: ею же ворота обучения отсекают
+            // недостроенные парты (§12.282).
+            let owners = self.owners();
             let (waiting, lonely): (Vec<String>, Vec<String>) = {
-                let owners = self.owners();
                 let mut q = self
                     .world
                     .query::<(&UnitId, &Position, &Study, Option<&Path>, Option<&Skills>)>();
@@ -6610,6 +6616,7 @@ impl Sim {
                                 teach: desk_gate(
                                     map,
                                     tiles,
+                                    &owners,
                                     rules,
                                     &reach,
                                     skills,

@@ -306,3 +306,16 @@ fn two_pupils_teach_each_other_in_turn() {
     assert_eq!(sim.level_of("b", science), 1, "b выучился «Науке»");
     assert_eq!(sim.level_of("a", relay), 1, "a выучился «Связи»");
 }
+
+/// Недостроенная парта не учит (§12.282): клетки штампа строятся порознь, и
+/// место ученика вставало раньше стола — класс учил, не будучи построен.
+#[test]
+fn an_unfinished_class_does_not_teach() {
+    let (mut sim, science) = big_class(&[20, 100, 300]);
+    sim.set_xp("d", science, 300);
+    sim.force_tile(5, 2, 0); // один стол класса ещё не стоит
+    assert_eq!(sim.teach_gate("a", science), "nodesk", "парты ещё нет");
+    assert!(!sim.teach("a", "science"), "и за неё не сажают");
+    sim.tick_n(200);
+    assert_eq!(sim.xp_of("a", science), 0, "и ничему не учит");
+}

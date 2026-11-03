@@ -162,16 +162,20 @@ pub(crate) fn may_tutor(rules: &SkillRules, skill: usize, teacher_xp: i32, pupil
 
 /// Клетки парт этого домена на карте — в порядке обхода, а не по расстоянию.
 ///
+/// Только **достроенных** (§12.282): у большой парты клетки строятся порознь,
+/// и место ученика вставало раньше стола — недостроенная парта уже учила.
+///
 /// Отдельным выражением, потому что спрашивают о них двое и о разном: ворота —
 /// «есть ли они вообще», выбор парты — «какая ближе».
 fn desk_cells<'a>(
     map: &'a BaseMap,
     tiles: &'a TileRules,
+    owners: &'a Owners,
     skill: usize,
 ) -> impl Iterator<Item = (i32, i32)> + 'a {
     (0..map.height)
         .flat_map(|y| (0..map.width).map(move |x| (x, y)))
-        .filter(move |&(x, y)| tiles.teaches(map.tile_at(x, y), skill))
+        .filter(move |&(x, y)| tiles.teaches(map.tile_at(x, y), skill) && owners.finished_at(x, y))
 }
 
 /// Ближайшая свободная парта по **уже готовому** обходу.
@@ -182,11 +186,12 @@ fn desk_cells<'a>(
 pub(crate) fn nearest_desk_at(
     map: &BaseMap,
     tiles: &TileRules,
+    owners: &Owners,
     reach: &Reach,
     skill: usize,
     taken: &[(i32, i32)],
 ) -> Option<(i32, i32)> {
-    desk_cells(map, tiles, skill)
+    desk_cells(map, tiles, owners, skill)
         .filter(|cell| !taken.contains(cell))
         .filter_map(|(x, y)| reach.dist_at(x, y).map(|d| (d, (x, y))))
         .min_by_key(|&(d, _)| d)
@@ -201,12 +206,13 @@ pub(crate) fn nearest_desk_at(
 pub(crate) fn nearest_desk(
     map: &BaseMap,
     tiles: &TileRules,
+    owners: &Owners,
     skill: usize,
     from: (i32, i32),
     taken: &[(i32, i32)],
 ) -> Option<(i32, i32)> {
     let reach = Reach::all(map, tiles, from);
-    nearest_desk_at(map, tiles, &reach, skill, taken)
+    nearest_desk_at(map, tiles, owners, &reach, skill, taken)
 }
 
 /// Ворота обучения: куда сажать — или почему нельзя.
@@ -257,6 +263,7 @@ impl Desk {
 pub(crate) fn desk_gate(
     map: &BaseMap,
     tiles: &TileRules,
+    owners: &Owners,
     rules: &SkillRules,
     reach: &Reach,
     skills: Option<&Skills>,
@@ -277,10 +284,10 @@ pub(crate) fn desk_gate(
     if skills.map_or(0, |s| s.xp_of(skill)) >= desk_cap(rules, stats, skill) {
         return Desk::Topped;
     }
-    if desk_cells(map, tiles, skill).next().is_none() {
+    if desk_cells(map, tiles, owners, skill).next().is_none() {
         return Desk::Missing;
     }
-    nearest_desk_at(map, tiles, reach, skill, taken).map_or(Desk::Taken, Desk::Open)
+    nearest_desk_at(map, tiles, owners, reach, skill, taken).map_or(Desk::Taken, Desk::Open)
 }
 
 /// Сажает **приписанного** к парте кота, как только тот освободился (§12.84).
@@ -311,6 +318,8 @@ pub(crate) fn assign_study(
     map: Res<BaseMap>,
     tiles: Res<TileRules>,
     rules: Res<SkillRules>,
+    structures: Res<StructureRules>,
+    placed: Query<&Structure>,
     mut commands: Commands,
     students: Query<&Study>,
     mut records: Query<&mut Record>,
@@ -344,6 +353,7 @@ pub(crate) fn assign_study(
     >,
 ) {
     let mut taken: Vec<(i32, i32)> = students.iter().map(|s| s.spot).collect();
+    let owners = owners_of(&map, &structures, &placed);
 
     // Радиста собирающегося отряда парта не берёт (§12.286): его снимает с дела
     // фасад перед цепочкой, чтобы за стол посадил `gather_squad`, — а стоя
@@ -383,7 +393,7 @@ pub(crate) fn assign_study(
             commands.entity(cat_e).remove::<Enrolled>();
             continue;
         }
-        let Some(spot) = nearest_desk(&map, &tiles, skill, at, &taken) else {
+        let Some(spot) = nearest_desk(&map, &tiles, &owners, skill, at, &taken) else {
             continue; // парт нет, все заняты или не дойти — попробуем следующим тиком
         };
         taken.push(spot);
@@ -681,7 +691,7 @@ pub(crate) fn assign_self_study(
             continue; // уже сел — учеником другого навыка или учителем
         }
         let reach = Reach::all(&map, &tiles, at);
-        let mut options: Vec<(i32, (i32, i32))> = desk_cells(&map, &tiles, skill)
+        let mut options: Vec<(i32, (i32, i32))> = desk_cells(&map, &tiles, &owners, skill)
             .filter(|cell| !taken.contains(cell))
             .filter_map(|(x, y)| reach.dist_at(x, y).map(|d| (d, (x, y))))
             .collect();
@@ -853,10 +863,14 @@ pub(crate) fn study(
 
         // Парту могли снести, пока кот шёл: ищем другую свободную, а нет её —
         // учёба кончилась. Занятой считаем и свою, поэтому сравниваем с целью.
-        if !tiles.teaches(map.tile_at(task.spot.0, task.spot.1), task.skill) {
+        if !tiles.teaches(map.tile_at(task.spot.0, task.spot.1), task.skill)
+            || !owners.finished_at(task.spot.0, task.spot.1)
+        {
             let others: Vec<(i32, i32)> =
                 taken.iter().copied().filter(|&c| c != task.spot).collect();
-            let Some(spot) = nearest_desk(&map, &tiles, task.skill, (pos.x, pos.y), &others) else {
+            let Some(spot) =
+                nearest_desk(&map, &tiles, &owners, task.skill, (pos.x, pos.y), &others)
+            else {
                 commands.entity(cat_e).remove::<(Study, Path, Stride)>();
                 continue;
             };
