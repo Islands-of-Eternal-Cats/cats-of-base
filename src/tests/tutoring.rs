@@ -286,3 +286,23 @@ fn a_click_on_a_desk_picks_a_domain_the_cat_can_still_learn() {
     assert!(sim.set_target("a", 2, 1));
     assert_eq!(sim.enrolled_in("a"), Some(relay), "науке учиться некуда");
 }
+
+/// Два ученика одного класса, и каждый — нужный учитель другому (§12.258,
+/// §12.290): знаток «Науки» сел учиться «Связи», знаток «Связи» — «Науке».
+/// Свободного учителя нет, и раньше оба ждали вечно. Ученик без учителя
+/// встаёт за кафедру сам — он и так простаивает, — а приписка к парте
+/// переживает урок, и после него его учат тоже.
+#[test]
+fn two_pupils_teach_each_other_in_turn() {
+    let (mut sim, science) = big_class(&[20, 100, 300]);
+    let relay = sim.set_skill("relay", &[20, 100, 300]);
+    sim.set_taught(relay, 3);
+    sim.add_teaches(DESK, relay);
+    sim.set_xp("a", science, 300);
+    sim.set_xp("b", relay, 300);
+    assert!(sim.teach("a", "relay"));
+    assert!(sim.teach("b", "science"));
+    sim.tick_n(1500);
+    assert_eq!(sim.level_of("b", science), 1, "b выучился «Науке»");
+    assert_eq!(sim.level_of("a", relay), 1, "a выучился «Связи»");
+}

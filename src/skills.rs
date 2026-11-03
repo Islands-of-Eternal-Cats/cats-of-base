@@ -423,6 +423,12 @@ pub(crate) fn assign_tutor(
     placed: Query<&Structure>,
     mut commands: Commands,
     desks: Query<(&Study, Option<&Skills>)>,
+    // Ученики, ждущие учителя, — запасные учителя (§12.258): два класса, где
+    // каждый ученик учитель другому, иначе стоят вечно.
+    pupils: Query<
+        (Entity, &UnitId, &Position, &Study, Option<&Skills>),
+        (Without<Rest>, Without<Healing>, Without<Away>),
+    >,
     cats: Query<
         (
             Entity,
@@ -488,16 +494,33 @@ pub(crate) fn assign_tutor(
         if manned.contains(&lectern) {
             continue; // кафедру уже занял учитель другого домена этого класса
         }
-        let best = cats
+        // Свободный учитель первым; нет его — ученик, который сам сидит без
+        // учителя (§12.258). Он и так простаивает, а приписка к парте
+        // (`Enrolled`) переживёт урок: отпустит класс — `assign_study` вернёт
+        // его за парту. Без этой ветки Морзе ждал учителя «Науки», Антенна —
+        // «Связи», и каждый был нужным учителем другому.
+        let free = cats
             .iter()
             .filter(|(e, ..)| !taken.contains(e))
-            .filter_map(|(e, id, p, skills, ..)| {
+            .map(|(e, id, p, skills, ..)| (false, e, id, p, skills));
+        let idle = pupils
+            .iter()
+            .filter(|(e, _, _, s, _)| {
+                !s.teacher
+                    && !taken.contains(e)
+                    && lectern_of(&map, &tiles, &owners, s.spot)
+                        .is_some_and(|at| !seated.contains(&at))
+            })
+            .map(|(e, id, p, _, skills)| (true, e, id, p, skills));
+        let best = free
+            .chain(idle)
+            .filter_map(|(pupil, e, id, p, skills)| {
                 let xp = skills.map_or(0, |k| k.xp_of(skill));
                 may_tutor(&rules, skill, xp, pupil_xp)
-                    .then(|| (-rules.level(skill, xp), id.0.as_str(), e, (p.x, p.y)))
+                    .then(|| (pupil, -rules.level(skill, xp), id.0.as_str(), e, (p.x, p.y)))
             })
             .min();
-        let Some((_, _, cat_e, at)) = best else {
+        let Some((_, _, _, cat_e, at)) = best else {
             continue; // учить некому — ученик ждёт
         };
         taken.push(cat_e);
