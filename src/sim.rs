@@ -248,6 +248,34 @@ impl Sim {
             .map(|(e, _)| e)
     }
 
+    /// Вылазка, которая **занимает** этот заказ в этом месте (§12.315). У
+    /// обычного заказа место одно, и ответ тот же, что у `mission_of`. У
+    /// зачистки целей столько, сколько очагов (§12.198), и ключ у неё — пара
+    /// (заказ, очаг): два отряда в один очаг не идут, в разные — идут. Ключ
+    /// «только заказ» держал бы второй отряд дома, пока первый жжёт другой
+    /// очаг, хотя тушить есть что и есть кому.
+    fn mission_on(&mut self, def: usize, site: Option<usize>) -> Option<Entity> {
+        let per_site = self
+            .world
+            .resource::<MissionRules>()
+            .0
+            .get(def)
+            .is_some_and(|r| r.cleanses.is_some());
+        let mut q = self.world.query::<(Entity, &Mission)>();
+        q.iter(&self.world)
+            .find(|(_, m)| m.def == def && (!per_site || m.site == site))
+            .map(|(e, _)| e)
+    }
+
+    /// Очаги, куда по этому заказу уже идёт отряд (§12.315).
+    fn sites_taken(&mut self, def: usize) -> Vec<usize> {
+        let mut q = self.world.query::<&Mission>();
+        q.iter(&self.world)
+            .filter(|m| m.def == def)
+            .filter_map(|m| m.site)
+            .collect()
+    }
+
     /// Есть ли кого спасать: хоть один кот остался в плену (§12.40).
     fn has_captive(&mut self) -> bool {
         let mut q = self.world.query_filtered::<Entity, With<Captive>>();
@@ -3587,12 +3615,27 @@ impl Sim {
         // Куда идём (§12.198). Одно выражение на заявку игрока, на правило
         // автовылазки и на прогноз в панели: «куда пойдёт этот отряд» обязано
         // отвечаться одинаково всем троим (инвариант 14).
-        let aim = aim_of(
+        let mut aim = aim_of(
             self.world.resource::<MissionRules>(),
             self.world.resource::<Blights>(),
             def,
             asked,
         );
+        // Цель не названа (правило автовылазки, §12.67) — зачистка берёт
+        // самый запущенный очаг **из тех, куда ещё никто не идёт** (§12.315):
+        // иначе два отряда с одним правилом упирались бы в один очаг, и второй
+        // не уходил бы никогда.
+        if asked.is_none() && rule.cleanses.is_some() {
+            let taken = self.sites_taken(def);
+            let free = targets_of(
+                self.world.resource::<MissionRules>(),
+                self.world.resource::<Blights>(),
+                def,
+            )
+            .into_iter()
+            .find(|s| !taken.contains(s));
+            aim = free.or(aim);
+        }
         // Ворота места, и их двое — по одному на каждый вид заказа (§12.198).
         // Заказ на зачистку без цели — это заказ, которого нет: очаг зачистили,
         // пока отряд собирался, и идти больше некуда. Обычный заказ на
@@ -3611,7 +3654,7 @@ impl Sim {
         if units.len() > rule.squad_max {
             return false;
         }
-        if self.raids_running() >= self.node_count() || self.mission_of(def).is_some() {
+        if self.raids_running() >= self.node_count() || self.mission_on(def, aim).is_some() {
             return false;
         }
         // Известность — ворота: за дело, о котором ещё не слышали, не берутся,
@@ -3788,6 +3831,26 @@ impl Sim {
         let Some(mission_e) = self.mission_of(def) else {
             return false;
         };
+        self.recall(mission_e)
+    }
+
+    /// Отозвать вылазку **отряда с этого места брифинга** (§12.315). Кнопка
+    /// «Отменить» стоит у отряда, и адрес у неё — его стол: по заказу две
+    /// зачистки разных очагов не различить, а у стола вылазка всегда одна.
+    pub fn cancel_mission_at(&mut self, x: i32, y: i32) -> bool {
+        note(&mut self.world, format!("cancel_mission_at {x} {y}"));
+        let mut q = self.world.query::<(Entity, &Mission)>();
+        let Some(mission_e) = q
+            .iter(&self.world)
+            .find(|(_, m)| m.node == (x, y))
+            .map(|(e, _)| e)
+        else {
+            return false;
+        };
+        self.recall(mission_e)
+    }
+
+    fn recall(&mut self, mission_e: Entity) -> bool {
         if self.crew_of(mission_e).iter().any(|&(_, away)| away) {
             return false;
         }

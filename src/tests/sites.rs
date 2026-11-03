@@ -943,3 +943,55 @@ fn the_shipped_ruleset_takes_mission_roads_from_sites() {
         }
     }
 }
+
+// --- два отряда на зачистке (§12.315) -----------------------------------------
+
+/// Мир с двумя слотами и двумя горящими участками одной породы.
+fn two_squads_two_blights() -> (Sim, usize, usize, usize) {
+    let mut sim = sim_from(&["#######", "#a.b.c#", "#.....#", "#######"]);
+    sim.set_gate(1, true);
+    sim.force_tile(1, 2, 1);
+    sim.force_tile(2, 2, 1);
+    let m = sim.set_mission(1, 30, &[(0, 5)]);
+    let kind = sim.set_blight_kind(0, 2, false, 0);
+    let a = sim.set_site("Свалка", (0, 0), &[]);
+    let b = sim.set_site("Шахты", (1, 0), &[a]);
+    sim.set_mission_cleanses(m, kind);
+    sim.seed_blight(a, kind);
+    sim.seed_blight(b, kind);
+    (sim, m, a, b)
+}
+
+/// Зачистка — один заказ с целью на каждый очаг (§12.198), и занимает
+/// отряд **очаг**, а не весь заказ: второй отряд уходит в другой очаг.
+#[test]
+fn two_squads_clean_two_blights_at_once() {
+    let (mut sim, m, a, b) = two_squads_two_blights();
+    assert!(sim.launch_to(m, squad(&["a"]), a), "первый — в первый очаг");
+    assert!(sim.launch_to(m, squad(&["b"]), b), "второй — во второй");
+    assert_eq!(sim.raid_count(), 2);
+    sim.tick_n(60);
+    assert_eq!(sim.blight_at(a), None, "оба очага сняты");
+    assert_eq!(sim.blight_at(b), None);
+}
+
+/// А в один очаг двоих не шлют: ключ — пара (заказ, очаг).
+#[test]
+fn two_squads_never_go_to_one_blight() {
+    let (mut sim, m, a, _) = two_squads_two_blights();
+    assert!(sim.launch_to(m, squad(&["a"]), a));
+    assert!(!sim.launch_to(m, squad(&["b"]), a), "этот очаг уже жгут");
+    assert_eq!(sim.raid_count(), 1);
+}
+
+/// Без названной цели (так ходит правило автовылазки) второй отряд берёт
+/// очаг, куда ещё никто не идёт, а не упирается в занятый.
+#[test]
+fn an_unnamed_cleanup_skips_a_blight_already_taken() {
+    let (mut sim, m, a, b) = two_squads_two_blights();
+    assert!(sim.launch(m, squad(&["a"])));
+    assert!(sim.launch(m, squad(&["b"])), "второй ушёл в свободный очаг");
+    sim.tick_n(60);
+    assert_eq!(sim.blight_at(a), None);
+    assert_eq!(sim.blight_at(b), None);
+}

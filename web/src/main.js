@@ -534,10 +534,15 @@ onPanelClick(raidWinEl, ".raid-go", (b) => {
 });
 // Отзыв ещё не ушедшего отряда (§12.193: пока отряд собирается у
 // шлюза, «Отправить» отвечать нечем — заявка уже принята, — и на её месте стоит
-// живая «Отменить»). Законен он ровно до ухода (§12.22), а `cancel_mission`
-// адресуется заказом, а не номером строки.
+// живая «Отменить»). Законен он ровно до ухода (§12.22), а `cancel_mission_at`
+// адресуется столом отряда: две зачистки разных очагов по заказу не различить
+// (§12.315).
 onPanelClick(raidWinEl, ".raid-stop", (b) =>
-  sendAction({ type: "cancelMission", mission: Number(b.dataset.def) }),
+  sendAction({
+    type: "cancelMission",
+    x: Number(b.dataset.x),
+    y: Number(b.dataset.y),
+  }),
 );
 onPanelClick(raidWinEl, ".raid-auto", (b) =>
   sendAction({
@@ -4997,11 +5002,18 @@ function renderCaptivePanel() {
 //
 // Складывать отряды в пачку, как сделки (§12.83) и заказы (§12.164), **нельзя**:
 // складывать нечего — у каждого своё имя заказа, свой срок и своя репутация.
+// Ключ занятости заказа (§12.315): у зачистки — заказ и очаг, у прочих —
+// один заказ. Тот же ключ, каким ядро (`mission_on`) отклонит заявку.
+function raidKey(def, site) {
+  return meta?.missions?.[def]?.cleanses ? `${def}@${site}` : `${def}`;
+}
+
 function renderMissionPanel(list) {
   const raidsOut = list ?? [];
   // Идущие вылазки — по заказу, а не по счёту: кнопка гасится именно у своей
-  // (§12.59), двух вылазок по одному заказу не бывает.
-  running = new Set(raidsOut.map((m) => m.def));
+  // (§12.59). У зачистки ключ — заказ и очаг (§12.315): в разные очаги идут
+  // разные отряды, и занят только тот, куда уже пошли.
+  running = new Set(raidsOut.map((m) => raidKey(m.def, m.site)));
   // Ноль гаражей — ноль отрядов, и панели нет вовсе: это «выйти некуда»,
   // и говорит об этом дверь «Вылазки» (§12.166), а не пустая панель.
   if (!nodes.length || !meta) {
@@ -9674,8 +9686,13 @@ function raidGate(i, node) {
   // не мешает. Расхождение здесь безопасно и однонаправленно — вид **строже**
   // фасада, то есть обещанного и отклонённого не бывает (ср. §12.111, где
   // запрещено обратное: показать живым то, что фасад отклонит).
-  const ruled = nodes.some((o) => o !== node && o.auto === i && o.auto_on);
-  const taken = running.has(i) || ruled;
+  // Правило соседа на зачистку очаг не держит (§12.315): без названной цели
+  // ядро уведёт его в очаг, куда ещё никто не идёт.
+  const ruled =
+    !def.cleanses &&
+    nodes.some((o) => o !== node && o.auto === i && o.auto_on);
+  // У зачистки занят только выбранный на карте очаг (§12.315).
+  const taken = running.has(raidKey(i, pickedTarget(i))) || ruled;
   // Ворота места (§12.198): участок заказа заражён — или у зачистки не осталось
   // ни одного очага. Считает их ядро (`RaidSnap::reachable`), здесь только
   // называем словом: у обычного заказа это «где горит, туда не ходят», у
@@ -16022,8 +16039,13 @@ function raidCard(i, node) {
   const leadBy = nodes
     .map((o, k) =>
       o !== node &&
-      (o.auto === i ||
-        missionsOut.some((m) => m.x === o.x && m.y === o.y && m.def === i))
+      ((o.auto === i && !meta.missions[i]?.cleanses) ||
+        missionsOut.some(
+          (m) =>
+            m.x === o.x &&
+            m.y === o.y &&
+            raidKey(m.def, m.site) === raidKey(i, pickedTarget(i)),
+        ))
         ? k + 1
         : 0,
     )
@@ -16255,6 +16277,7 @@ function busyCard(raid, node) {
     raid.away
       ? `<button class="tool raid-go off" data-tip="${esc(busyG.title)}">Отправить</button>`
       : `<button class="tool raid-go raid-stop on" data-def="${raid.def}"` +
+        ` data-x="${raid.x}" data-y="${raid.y}"` +
         ' data-tip="Отряд ещё не ушёл — вернуть его и отменить заявку">Отменить</button>',
   ];
   // Повтор снимается прямо отсюда — иначе на всю вылазку его нечем снять, и
