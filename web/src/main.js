@@ -1041,6 +1041,7 @@ worker.onmessage = (e) => {
     // пересоберутся вместе с каркасом штаба.
     mapPick = -1;
     buildToolbar();
+    cam = null; // карта нового мира своя — вписываем заново (§12.321)
     layout();
     drawMap(m.map);
     if (!triedResume) {
@@ -1122,7 +1123,7 @@ function hex(s) {
 // До этого карта 24×16 занимала треть отведённой площади и стояла крошечным
 // пятном посреди пустоты: `TILE` подобран под самый маленький экран, а растёт
 // окно, а не тайл.
-function layout() {
+function layout(keep = false) {
   if (!meta) return;
   // В виде 3/4 стена над верхним рядом пола встаёт **над** картой: лицо и верх
   // северной стены занимают клетку выше (`oblique.js`, высота плюс толщина —
@@ -1156,21 +1157,130 @@ function layout() {
   // сцену режет уже его край.
   const padTop = 8;
   const availH = Math.max(TILE, app.screen.height - padTop - 8);
-  // Не мельчим ниже единицы: `TILE` подобран под самый маленький экран, и на нём
-  // карта просто уезжает под панели, как уезжала всегда.
-  worldScale = Math.max(1, Math.min(availW / w, availH / h));
-  world.scale.set(worldScale);
-  // Влезла — центрируем в полосе между панелями; не влезла (окно меньше карты
-  // при `TILE`, подобранном под самый маленький экран) — центрируем во всей
-  // сцене, как было до §12.109. Прижать её к тулбару значило бы свалить весь
-  // излишек под правую колонку, тогда как раньше он делился поровну.
-  const put = (drawn, pad, avail, whole) =>
-    drawn <= avail
-      ? pad + Math.floor((avail - drawn) / 2)
-      : Math.floor((whole - drawn) / 2);
-  world.x = put(w * worldScale, padLeft, availW, app.screen.width);
-  world.y = put(h * worldScale, padTop, availH, app.screen.height) + rise * worldScale;
+  // Не мельчим ниже единицы: `TILE` подобран под самый маленький экран. Не
+  // влезшую карту игрок двигает и мельчит сам — камерой (§12.321).
+  const fit = Math.min(availW / w, availH / h);
+  band = { left: padLeft, top: padTop, w: availW, h: availH, mapW: w, mapH: h, rise };
+  zoomMin = Math.max(ZOOM_FLOOR, Math.min(1, fit));
+  if (!cam) {
+    worldScale = Math.max(1, fit);
+    // Влезла — центрируем в полосе между панелями; не влезла — прижимаем к
+    // левому краю полосы: дальше игрок двигает её сам, и стартовый вид обязан
+    // показывать клетки, а не прятать их под тулбар (§12.321).
+    const put = (drawn, pad, avail) =>
+      drawn <= avail ? pad + Math.floor((avail - drawn) / 2) : pad;
+    cam = {
+      s: worldScale,
+      x: put(w * worldScale, padLeft, availW),
+      y: put(h * worldScale, padTop, availH) + rise * worldScale,
+      fit: true,
+    };
+  } else if (cam.fit && !keep) {
+    // Игрок камеру не трогал — вид следует за окном, как до §12.321.
+    cam = null;
+    return layout();
+  }
+  applyCam();
 }
+
+// --- камера (§12.321) ------------------------------------------------------
+//
+// Карта вписывается в свободную полосу между панелями, но не мельчит ниже
+// единицы, — и на узком окне её край уходил под палитру, где на клетку не
+// нажать. Камера отдаёт масштаб и сдвиг игроку: колесо (и щипок трекпада) —
+// зум вокруг курсора, правая или средняя кнопка и WASD/стрелки — сдвиг, Home —
+// снова вписать. Ядро и ввод о ней не знают: `tileAt` считает клетку через
+// `world.toLocal()`, который трансформ уже учитывает.
+//
+// Сдвиг зажат так, что карта не уходит из полосы: шире полосы — края не
+// отходят внутрь, уже — не выходят наружу. Любая клетка поэтому достижима, а
+// потерять карту за панелью нельзя.
+const ZOOM_FLOOR = 0.4;
+const ZOOM_CEIL = 3;
+const PAN_SPEED = 900; // пикселей экрана в секунду на клавишах
+let cam = null; // { s, x, y, fit } — null: ещё не вписана
+let band = null; // свободная полоса и размер карты, считает `layout`
+let zoomMin = ZOOM_FLOOR;
+
+function clampCam() {
+  if (!band || !cam) return;
+  cam.s = Math.min(ZOOM_CEIL, Math.max(zoomMin, cam.s));
+  const span = (drawn, pad, avail, v) =>
+    drawn <= avail
+      ? Math.min(pad + avail - drawn, Math.max(pad, v))
+      : Math.min(pad, Math.max(pad + avail - drawn, v));
+  const r = band.rise * cam.s;
+  cam.x = span(band.mapW * cam.s, band.left, band.w, cam.x);
+  cam.y = span(band.mapH * cam.s, band.top, band.h, cam.y - r) + r;
+}
+
+function applyCam() {
+  clampCam();
+  // `worldScale` — разрешение текста в мире (цифры сделок): он печётся в
+  // текстуру, и пересоздавать его на каждом событии жеста — рывки. Догоняет
+  // масштаб, когда жест утих (`settleText`).
+  settleText();
+  world.scale.set(cam.s);
+  world.x = Math.round(cam.x);
+  world.y = Math.round(cam.y);
+  if (hoverAt) updateHover(hoverAt);
+}
+
+let textTimer = 0;
+function settleText() {
+  clearTimeout(textTimer);
+  textTimer = setTimeout(() => {
+    if (cam) worldScale = cam.s;
+  }, 250);
+}
+
+// Зум вокруг точки экрана: клетка под курсором остаётся под курсором.
+function zoomAt(sx, sy, k) {
+  if (!cam) return;
+  const s = Math.min(ZOOM_CEIL, Math.max(zoomMin, cam.s * k));
+  if (s === cam.s) return;
+  cam.x = sx - ((sx - cam.x) * s) / cam.s;
+  cam.y = sy - ((sy - cam.y) * s) / cam.s;
+  cam.s = s;
+  cam.fit = false;
+  applyCam();
+}
+
+// Колесо мыши зумит **плавно**: щелчок колеса копит целевой масштаб, а кадр
+// доводит к нему (`easeZoom` в тикере). Сразу на событии — и зум идёт
+// ступеньками, а частая прокрутка дёргает карту. Щипок трекпада идёт мимо:
+// он и так непрерывный, и любая задержка под пальцами читается вязкостью.
+let zoomGoal = null; // { s, sx, sy }
+function zoomToward(sx, sy, k) {
+  if (!cam) return;
+  const from = zoomGoal?.s ?? cam.s;
+  const s = Math.min(ZOOM_CEIL, Math.max(zoomMin, from * k));
+  zoomGoal = { s, sx, sy };
+}
+function easeZoom(dtMs) {
+  if (!zoomGoal || !cam) return;
+  const a = 1 - Math.exp(-dtMs / 70);
+  const s = cam.s + (zoomGoal.s - cam.s) * a;
+  const done = Math.abs(zoomGoal.s - s) < 0.002;
+  zoomAt(zoomGoal.sx, zoomGoal.sy, (done ? zoomGoal.s : s) / cam.s);
+  if (done) zoomGoal = null;
+}
+
+function panBy(dx, dy) {
+  if (!cam || (!dx && !dy)) return;
+  zoomGoal = null; // тянут — значит, доводить зум уже некуда
+  cam.x += dx;
+  cam.y += dy;
+  cam.fit = false;
+  applyCam();
+}
+
+function resetCam() {
+  cam = null;
+  zoomGoal = null;
+  layout();
+}
+
 app.renderer.on("resize", layout);
 
 // Контур глифа тайла — **один `GraphicsContext` на тип**, а не на клетку.
@@ -7684,6 +7794,8 @@ function updateHover(global) {
 }
 
 app.stage.on("pointerdown", (e) => {
+  // Правая и средняя кнопки двигают камеру (§12.321) и в мир ничего не шлют.
+  if (e.button !== 0) return;
   if (mode === "cursor") {
     command(e.global, e.shiftKey);
     return;
@@ -7715,6 +7827,162 @@ app.stage.on("pointerup", (e) => endDrag(true, e.global));
 // Курсор ушёл со сцены — применяем последнюю рамку в пределах карты: бросать
 // уже нарисованное выделение обиднее, чем применить его на клетку меньше.
 app.stage.on("pointerupoutside", (e) => endDrag(true, e.global));
+
+// Камера с мыши и клавиш (§12.321). Слушатели — на самом холсте: колесо над
+// панелью обязано прокручивать панель, а не карту под ней.
+//
+// Колесо у браузера одно на три жеста, и путать их нельзя:
+// - **щипок трекпада** — колесо с `ctrlKey` (так шлют все браузеры): зум;
+// - **два пальца** — колесо мелкими пиксельными шагами: сдвиг, в любую сторону;
+// - **колесо мыши** — крупные щелчки: зум, плавный.
+// Мышь от трекпада отличаем по самому событию (`wheelKind`), и решение
+// **держится весь жест** — пока события идут без паузы: инерция трекпада под
+// конец даёт шаги, похожие на мышь, и карта переключалась бы с хода на зум.
+const WHEEL_GAP = 200; // мс тишины — и следующий жест опознаётся заново
+let wheelGesture = null; // { kind, at }
+
+function wheelKind(e) {
+  if (e.ctrlKey) return "pinch";
+  // Firefox отдаёт колесо мыши строками, трекпад — пикселями.
+  if (e.deltaMode !== 0) return "mouse";
+  // Chrome и Safari: у трекпада устаревший `wheelDeltaY` ровно −3·deltaY, у
+  // мыши — кратен 120. Firefox поле тоже знает, но отвечает и на мышь, и на
+  // трекпад иначе, — поэтому проверка только в одну сторону.
+  const legacy = e.wheelDeltaY;
+  if (legacy && legacy === -3 * e.deltaY) return "pad";
+  if (legacy && legacy % 120 === 0 && e.deltaX === 0) return "mouse";
+  // Остальное (Windows и прочее): мышь шлёт целые крупные шаги без
+  // горизонтали, трекпад — мелкие и дробные.
+  if (e.deltaX === 0 && Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 50)
+    return "mouse";
+  return "pad";
+}
+
+app.canvas.addEventListener(
+  "wheel",
+  (e) => {
+    e.preventDefault();
+    const r = app.canvas.getBoundingClientRect();
+    const sx = e.clientX - r.left;
+    const sy = e.clientY - r.top;
+    const now = performance.now();
+    // Щипок перебивает жест всегда: пальцы могли разъехаться посреди сдвига.
+    if (e.ctrlKey || !wheelGesture || now - wheelGesture.at > WHEEL_GAP)
+      wheelGesture = { kind: wheelKind(e), at: now };
+    wheelGesture.at = now;
+    const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
+    const dx = e.deltaX * unit;
+    const dy = e.deltaY * unit;
+    if (wheelGesture.kind === "pad") {
+      // Shift с вертикальной прокруткой — горизонталь, как у страницы.
+      if (e.shiftKey && !dx) panBy(-dy, 0);
+      else panBy(-dx, -dy);
+      return;
+    }
+    if (wheelGesture.kind === "pinch") {
+      zoomGoal = null;
+      // Один шаг щипка не больше ×1.5: Firefox изредка шлёт выброс.
+      const d = Math.max(-40, Math.min(40, dy));
+      zoomAt(sx, sy, Math.exp(-d * 0.01));
+      return;
+    }
+    // Мышь: щелчок — ×1.16 вне зависимости от того, сколько пикселей на
+    // щелчок насчитал браузер (100 в Chrome, три строки в Firefox).
+    if (!dy) return;
+    const notches = Math.max(1, Math.min(4, Math.abs(dy) / 100));
+    zoomToward(sx, sy, Math.pow(1.16, -Math.sign(dy) * notches));
+  },
+  { passive: false },
+);
+// Сафари шлёт щипок своими событиями жеста (`scale` от начала жеста), а не
+// колесом с `ctrlKey`; без запрета он масштабирует всю страницу целиком. Если
+// тот же щипок пришёл и колесом, жест молчит: иначе зум удвоился бы.
+let gestureScale = 1;
+app.canvas.addEventListener("gesturestart", (e) => {
+  e.preventDefault();
+  gestureScale = 1;
+});
+app.canvas.addEventListener("gesturechange", (e) => {
+  e.preventDefault();
+  const k = e.scale / gestureScale;
+  gestureScale = e.scale;
+  if (wheelGesture?.kind === "pinch" && performance.now() - wheelGesture.at < 300)
+    return;
+  const r = app.canvas.getBoundingClientRect();
+  zoomGoal = null;
+  zoomAt(e.clientX - r.left, e.clientY - r.top, k);
+});
+app.canvas.addEventListener("gestureend", (e) => e.preventDefault());
+app.ticker.add((t) => easeZoom(t.deltaMS));
+app.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+let camDrag = null; // { id, x, y } — тянут правой или средней кнопкой
+app.canvas.addEventListener("pointerdown", (e) => {
+  if (e.button !== 1 && e.button !== 2) return;
+  e.preventDefault();
+  camDrag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  app.canvas.setPointerCapture(e.pointerId);
+});
+app.canvas.addEventListener("pointermove", (e) => {
+  if (!camDrag || e.pointerId !== camDrag.id) return;
+  panBy(e.clientX - camDrag.x, e.clientY - camDrag.y);
+  camDrag.x = e.clientX;
+  camDrag.y = e.clientY;
+});
+const endCamDrag = (e) => {
+  if (camDrag && e.pointerId === camDrag.id) camDrag = null;
+};
+app.canvas.addEventListener("pointerup", endCamDrag);
+app.canvas.addEventListener("pointercancel", endCamDrag);
+
+// Клавиши сдвига держат, а не жмут: направление собирается из зажатых, а едет
+// карта тикером — с повтором клавиатуры она дёргалась бы рывками.
+const PAN_KEYS = {
+  KeyW: [0, 1],
+  ArrowUp: [0, 1],
+  KeyS: [0, -1],
+  ArrowDown: [0, -1],
+  KeyA: [1, 0],
+  ArrowLeft: [1, 0],
+  KeyD: [-1, 0],
+  ArrowRight: [-1, 0],
+};
+const panHeld = new Set();
+window.addEventListener("keydown", (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  // Окно накрывает карту, и стрелки в нём — его прокрутка, а не камера.
+  if (topWindow()) return;
+  if (PAN_KEYS[e.code]) {
+    panHeld.add(e.code);
+    e.preventDefault();
+  } else if (e.code === "Home" && !e.repeat) {
+    resetCam();
+  }
+});
+window.addEventListener("keyup", (e) => panHeld.delete(e.code));
+window.addEventListener("blur", () => panHeld.clear());
+app.ticker.add((t) => {
+  if (!panHeld.size) return;
+  let dx = 0;
+  let dy = 0;
+  for (const code of panHeld) {
+    dx += PAN_KEYS[code][0];
+    dy += PAN_KEYS[code][1];
+  }
+  const step = (PAN_SPEED * t.deltaMS) / 1000;
+  panBy(Math.sign(dx) * step, Math.sign(dy) * step);
+});
+// Тулбар растёт с раскрытой «Постройкой», колонка справа — с панелями: полоса
+// меняется без ресайза окна. Карту при этом **не вписываем заново** (она
+// прыгала бы под курсором на каждом раскрытии раздела), а лишь зажимаем в
+// новую полосу — так край не уходит под выросшую палитру.
+{
+  const watch = new ResizeObserver(() => layout(true));
+  for (const id of ["toolbar", "side"]) {
+    const el = document.getElementById(id);
+    if (el) watch.observe(el);
+  }
+}
 
 // Клавиши. Escape — отмена начатой протяжки: единственный способ передумать, не
 // отпуская кнопку (уже применённую рамку отменяет ластик).
