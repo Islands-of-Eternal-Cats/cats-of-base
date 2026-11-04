@@ -13645,7 +13645,29 @@ function buildScreenBar() {
       screenBarEl.appendChild(door);
       return { key, door };
     });
+  // Подписи у дверей раскрываются и сворачиваются до глифов; выбор помнит
+  // `localStorage` (`sp-rail`), как вид 3/4. Это осмотр, мир не меняет.
+  const fold = document.createElement("button");
+  fold.className = "tool rail-fold";
+  const paint = () => {
+    const wide = document.body.classList.contains("rail-wide");
+    fold.innerHTML = `<span class="rail-fold-mark">${wide ? "⇤" : "⇥"}</span><span class="door-label">Свернуть</span>`;
+    liveTitle(fold, wide ? "Свернуть до значков" : "Показать подписи");
+  };
+  fold.addEventListener("click", () => {
+    const wide = document.body.classList.toggle("rail-wide");
+    localStorage.setItem(RAIL_KEY, wide ? "wide" : "narrow");
+    paint();
+    layout();
+  });
+  document.body.classList.toggle(
+    "rail-wide",
+    localStorage.getItem(RAIL_KEY) !== "narrow",
+  );
+  paint();
+  screenBarEl.appendChild(fold);
 }
+const RAIL_KEY = "sp-rail";
 
 // Рейка видна и рядом с окнами (они встают правее неё), поэтому подсвечена дверь
 // открытого окна — экрана или коробки; окна с дверью нет — «База». Пишем
@@ -16437,7 +16459,7 @@ function ruleRow(node) {
 // Дверь рейки (§12.311): только глиф. Имя едет в `data-door`, его первой
 // строкой показывает подсказка, и причина отказа остаётся под ним словом.
 function doorHtml(key, name) {
-  return `<svg class="glyph door-glyph" data-door="${name}" aria-label="${name}"><use href="#g-door-${key}"/></svg>`;
+  return `<svg class="glyph door-glyph" data-door="${name}" aria-label="${name}"><use href="#g-door-${key}"/></svg><span class="door-label">${name}</span>`;
 }
 
 function mkTool(html, onClick) {

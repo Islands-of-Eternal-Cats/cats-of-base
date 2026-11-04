@@ -1649,6 +1649,42 @@ main#stage.mode-cursor #mode-banner {
 #screenbar .door-end {
   margin-top: auto;
 }
+/* Подписи дверей: в узкой рейке спрятаны, в широкой стоят справа от глифа. */
+body.rail-wide {
+  --rail-w: 168px;
+}
+#screenbar .door-label {
+  display: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body.rail-wide #screenbar {
+  align-items: stretch;
+  padding: 10px 6px;
+}
+body.rail-wide #screenbar .tool {
+  width: auto;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 8px;
+}
+body.rail-wide #screenbar .door-label {
+  display: inline;
+}
+#screenbar .rail-fold {
+  border-color: transparent;
+  background: none;
+  opacity: 0.7;
+}
+#screenbar .rail-fold:hover {
+  opacity: 1;
+}
+#screenbar .rail-fold-mark {
+  width: 20px;
+  text-align: center;
+  font-size: 16px;
+}
 #screenbar .door-glyph {
   width: 20px;
   height: 20px;
