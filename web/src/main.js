@@ -12975,9 +12975,8 @@ function wikiFacts(key) {
     if (fk === "recipe" && wikiOwnGate(f)) {
       // Метка снимается тем же показом: окно строится на открытии статьи
       // и кадром не перерисовывается, так что прочитанное гаснет к следующему.
-      const added = wikiAdded.delete(f)
-        ? '<span class="wiki-added">дополнено</span>'
-        : "";
+      wikiAdded.delete(f);
+      const added = "";
       if (fe.salvage) add("Разбор", line("→ " + costChips(fe.gives) + added));
       else {
         add(
@@ -13147,9 +13146,6 @@ function wikiIndexHtml() {
           (k) =>
             `<button class="wiki-link" data-key="wikitoc${k}" ` +
             `data-go="${esc(k)}">${esc(wikiName(k))}` +
-            (wikiAddedTo(k)
-              ? '<span class="wiki-added">дополнено</span>'
-              : "") +
             "</button>",
         )
         .join("");
