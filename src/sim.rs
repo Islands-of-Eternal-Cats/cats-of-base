@@ -24,6 +24,7 @@
 //!   * `tick()`          — один фиксированный шаг симуляции;
 //!   * `snapshot()`      — сущности, чертежи и кучи лома (каждый кадр).
 
+use crate::things::Pick;
 use bevy_ecs::prelude::*;
 use wasm_bindgen::prelude::*;
 
@@ -147,6 +148,9 @@ impl Sim {
         // Завал в снимок не идёт (`BaseMap::drag`) — считаем его из
         // восстановленных куч, как конструктор из стартовых.
         let _ = sim.world.run_system_once(note_clutter);
+        // Вещи едут в снимке своими сущностями (§12.317); сверка тут ничего не
+        // меняет, пока снимок цел, и чинит его, если он снят с расхождением.
+        crate::things::reconcile_world(&mut sim.world);
         Ok(sim)
     }
 
@@ -183,7 +187,7 @@ impl Sim {
         let assignee = bp.and_then(|b| b.assignee);
         let delivered: Vec<(usize, i32)> = bp.map(|b| b.delivered.clone()).unwrap_or_default();
         for (item, count) in delivered {
-            self.drop_stack(x, y, item, count);
+            self.drop_stack(x, y, item, count, Some(Place::Held(e)));
         }
         if let Some(cat) = assignee {
             self.world
@@ -210,9 +214,23 @@ impl Sim {
     /// Фасадный двойник `hauling::spill`: тот работает в системе (`Commands` +
     /// `Query`), этот — по миру. Правило одно: кучи одного типа на клетке
     /// сливаются, разных — лежат рядом (§12.21).
-    fn drop_stack(&mut self, x: i32, y: i32, item: usize, count: i32) {
+    ///
+    /// `from` — откуда штуки пришли, если они были где-то в мире (лапы, кот,
+    /// контейнер): вещи переезжают оттуда со своим состоянием (§12.317).
+    /// `None` — штуки рождаются здесь, и вещи им родит сверка.
+    fn drop_stack(&mut self, x: i32, y: i32, item: usize, count: i32, from: Option<Place>) {
         if count <= 0 {
             return;
+        }
+        if let Some(from) = from {
+            crate::things::shift_world(
+                &mut self.world,
+                from,
+                Place::Floor(x, y),
+                item,
+                count,
+                Pick::Spent,
+            );
         }
         let mut q = self.world.query::<(Entity, &Position, &Stack)>();
         let found = q
@@ -1567,10 +1585,12 @@ fn spawn_cat(
     // Неличная вещь заодно становится припиской (§12.268): пришёл в комбинезоне
     // и потерял его — сходит за новым. Личная в приписку не идёт никогда.
     if !gear.is_empty() {
-        let (worn, outfit): (Vec<Worn>, Vec<usize>) = {
+        // Сами вещи с полной прочностью родит сверка (§12.317): здесь
+        // только счёт — что надето.
+        let (worn, outfit): (Vec<usize>, Vec<usize>) = {
             let items = cat.world().resource::<ItemRules>();
             (
-                gear.iter().map(|&i| items.fresh(i)).collect(),
+                gear.to_vec(),
                 gear.iter()
                     .copied()
                     .filter(|&i| !items.personal(i))
@@ -2138,6 +2158,7 @@ impl Sim {
                     collected: ability_index(&i.collected),
                     personal: i.personal,
                     wear: i.wear,
+                    uses: i.uses,
                     slot: i.slot.clone(),
                     skills: i
                         .skills
@@ -2297,6 +2318,9 @@ impl Sim {
         // игрока на паузе ищет путь по карте, и без этого прогона он шёл бы
         // сквозь стартовые кучи, как будто их нет.
         let _ = world.run_system_once(note_clutter);
+        // И вещи стартового склада и стартового снаряжения (§12.317): на паузе
+        // панель клетки уже спрашивает, сколько выходов у лежащего комбинезона.
+        crate::things::reconcile_world(&mut world);
 
         // Описание условий уезжает в `meta` **разобранным ядром** (§12.159): вид
         // называет каждое словом и ставит напротив дату, а порядок остаётся один
@@ -3328,14 +3352,7 @@ impl Sim {
             self.world.get::<Gear>(e),
             plan.coming(e),
         );
-        (!planned.is_empty()).then(|| {
-            Gear(
-                planned
-                    .into_iter()
-                    .map(|item| Worn { item, left: 0 })
-                    .collect(),
-            )
-        })
+        (!planned.is_empty()).then_some(Gear(planned))
     }
 
     /// Надетое или будущее (§12.293): одна развилка на все прогнозы узла.
@@ -3796,7 +3813,7 @@ impl Sim {
             // следующий носильщик.
             if let Some(load) = self.world.get::<Carrying>(cat_e) {
                 let (item, count) = (load.item, load.count);
-                self.drop_stack(from.0, from.1, item, count);
+                self.drop_stack(from.0, from.1, item, count, Some(Place::Paws(cat_e)));
                 self.world.entity_mut(cat_e).remove::<Carrying>();
             }
         }
@@ -3920,6 +3937,8 @@ impl Sim {
         // которую открывает пришедший учёный, открылась бы только со снятием
         // паузы. Прогон тот же, что в `Sim::new`.
         let _ = self.world.run_system_once(note_seen);
+        // Снаряжение новичка — вещи с полной прочностью (§12.317), тоже сразу.
+        crate::things::reconcile_world(&mut self.world);
         // ⚠️ И лента — тем же движением: открытая на паузе постройка без
         // новости всплывала статьёй-модалом, а меткой «новое» в палитре — только
         // со снятием паузы, то есть два ответа на одно событие расходились.
@@ -4057,7 +4076,13 @@ impl Sim {
         self.world.entity_mut(topic_e).despawn();
         for (item, count) in spill.1 {
             if count > 0 {
-                self.drop_stack(spill.0.0, spill.0.1, item, count);
+                self.drop_stack(
+                    spill.0.0,
+                    spill.0.1,
+                    item,
+                    count,
+                    Some(Place::Held(topic_e)),
+                );
             }
         }
         true
@@ -4691,7 +4716,13 @@ impl Sim {
         self.world.entity_mut(order_e).despawn();
         for (item, count) in spill.1 {
             if count > 0 {
-                self.drop_stack(spill.0.0, spill.0.1, item, count);
+                self.drop_stack(
+                    spill.0.0,
+                    spill.0.1,
+                    item,
+                    count,
+                    Some(Place::Held(order_e)),
+                );
             }
         }
         true
@@ -5617,16 +5648,18 @@ impl Sim {
         // Надетое — под ноги.
         let worn = self.world.get::<Gear>(cat_e).map(|g| g.0.clone());
         if let Some(worn) = worn
-            && worn.iter().any(|w| w.item == item)
+            && worn.contains(&item)
         {
-            let kept: Vec<Worn> = worn.into_iter().filter(|w| w.item != item).collect();
+            let kept: Vec<usize> = worn.into_iter().filter(|&w| w != item).collect();
             match kept.is_empty() {
                 true => self.world.entity_mut(cat_e).remove::<Gear>(),
                 false => self.world.entity_mut(cat_e).insert(Gear(kept)),
             };
             let at = self.world.get::<Position>(cat_e).map(|p| (p.x, p.y));
             if let Some((x, y)) = at {
-                self.drop_stack(x, y, item, 1);
+                // Снятая вещь ложится со своей прочностью (§12.317): это и
+                // закрывает лазейку §12.268 «снять и надеть».
+                self.drop_stack(x, y, item, 1, Some(Place::Worn(cat_e)));
             }
         }
     }
@@ -6190,6 +6223,14 @@ impl Sim {
             self.summon_operators(node);
         }
         self.schedule.run(&mut self.world);
+        // Сторож вещей (§12.317): на каждом тике каждого теста вещи сходятся со
+        // счётом. Сверка в цепочке это обеспечивает, так что ловится система,
+        // поменявшая счёт **после** неё и не тронувшая вещи.
+        #[cfg(test)]
+        {
+            let off = crate::things::mismatches(&mut self.world);
+            assert!(off.is_empty(), "вещи разошлись со счётом: {off:?}");
+        }
         // Лента новостей — **после** цепочки (§12.120): новость читает
         // сложившийся тик и мир не меняет, дословно `check_goals`.
         self.note_news();
@@ -6225,7 +6266,7 @@ impl Sim {
             self.release_task(cat_e);
             if let Some(load) = self.world.get::<Carrying>(cat_e) {
                 let (item, count) = (load.item, load.count);
-                self.drop_stack(from.0, from.1, item, count);
+                self.drop_stack(from.0, from.1, item, count, Some(Place::Paws(cat_e)));
                 self.world.entity_mut(cat_e).remove::<Carrying>();
             }
         }
@@ -6406,6 +6447,20 @@ impl Sim {
                 let mut q = self.world.query::<(&UnitId, &Trained)>();
                 q.iter(&self.world)
                     .map(|(id, t)| (id.0.clone(), *t))
+                    .collect()
+            };
+            // Прочность надетого (§12.317) живёт на самих вещах: кот, предмет,
+            // сколько выходов осталось.
+            let worn_left: Vec<(String, usize, i32)> = {
+                let mut q = self.world.query::<(&Thing, &Place, &Wear)>();
+                q.iter(&self.world)
+                    .filter_map(|(t, p, w)| match *p {
+                        Place::Worn(cat) => self
+                            .world
+                            .get::<UnitId>(cat)
+                            .map(|id| (id.0.clone(), t.item, w.0)),
+                        _ => None,
+                    })
                     .collect()
             };
             // Личное дело (§12.N) — тем же боковым запросом и по той же
@@ -6646,7 +6701,16 @@ impl Sim {
                     // Сколько выходов осталось каждой надетой вещи (§12.268),
                     // той же длины, что `gear`; ноль — не изнашивается.
                     gear_left: gear
-                        .map(|g| g.0.iter().map(|w| w.left).collect())
+                        .map(|g| {
+                            g.items()
+                                .map(|item| {
+                                    worn_left
+                                        .iter()
+                                        .find(|(who, i, _)| *who == id.0 && *i == item)
+                                        .map_or(0, |&(.., left)| left)
+                                })
+                                .collect()
+                        })
                         .unwrap_or_default(),
                     // Приписка и ворота на каждую вещь палитры (§12.268): тег
                     // считает `gear::outfit_gate`, то же выражение, что у фасада.
@@ -6782,6 +6846,26 @@ impl Sim {
 
         let mut stacks = Vec::new();
         {
+            // Состояние вещей пола (§12.317): клетка и предмет — ключ кучи.
+            // Списки от свежей штуки к потраченной; у ресурса они пусты.
+            let mut floor: std::collections::BTreeMap<((i32, i32), usize), (Vec<i32>, Vec<i32>)> =
+                std::collections::BTreeMap::new();
+            {
+                let mut q = self
+                    .world
+                    .query::<(&Thing, &Place, Option<&Wear>, Option<&Charges>)>();
+                for (t, p, w, c) in q.iter(&self.world) {
+                    if let Place::Floor(x, y) = *p {
+                        let slot = floor.entry(((x, y), t.item)).or_default();
+                        slot.0.extend(w.map(|w| w.0));
+                        slot.1.extend(c.map(|c| c.0));
+                    }
+                }
+            }
+            for (wears, charges) in floor.values_mut() {
+                wears.sort_unstable_by(|a, b| b.cmp(a));
+                charges.sort_unstable_by(|a, b| b.cmp(a));
+            }
             let mut q = self.world.query::<(&Position, &Stack, Option<&ToStore>)>();
             for (p, s, mark) in q.iter(&self.world) {
                 stacks.push(StackSnap {
@@ -6790,6 +6874,14 @@ impl Sim {
                     item: s.item,
                     count: s.count,
                     marked: mark.is_some(),
+                    wears: floor
+                        .get(&((p.x, p.y), s.item))
+                        .map(|f| f.0.clone())
+                        .unwrap_or_default(),
+                    charges: floor
+                        .get(&((p.x, p.y), s.item))
+                        .map(|f| f.1.clone())
+                        .unwrap_or_default(),
                 });
             }
         }

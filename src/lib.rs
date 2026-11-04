@@ -77,6 +77,7 @@ mod sites;
 mod skills;
 mod slots;
 mod snapshot;
+mod things;
 mod timeline;
 mod trade;
 

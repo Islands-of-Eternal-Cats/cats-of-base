@@ -21,6 +21,7 @@
 //! списания общее с наймом и наукой (`plan_spend`), чтобы две арифметики не
 //! разошлись.
 
+use crate::things::{Pick, ThingsMut, shift};
 use bevy_ecs::prelude::*;
 
 use crate::components::*;
@@ -194,15 +195,28 @@ fn starved(rules: &CraftRules, order: &Craft, free: &[(usize, i32)]) -> bool {
 /// Материал не исчезает **никогда** (инвариант 8), а отмена заказа — это тот же
 /// случай, что отмена площадки (§12.31): сданное возвращается туда, где лежало
 /// бы, не будь заказа. Дальше его увозит обычная уборка.
+///
+/// `from` — контейнер, из которого штуки ложатся: вещи выходят из него со своим
+/// состоянием (§12.317), и разобранный наполовину заказ не возвращает новых.
 pub(crate) fn spill_delivered(
     commands: &mut Commands,
     stacks: &mut Query<(Entity, &Position, &mut Stack)>,
+    things: &mut ThingsMut,
+    from: Entity,
     cell: (i32, i32),
     delivered: &[(usize, i32)],
 ) {
     for &(item, count) in delivered {
         if count > 0 {
             spill(commands, stacks, cell, item, count);
+            shift(
+                things,
+                Place::Held(from),
+                Place::Floor(cell.0, cell.1),
+                item,
+                count,
+                Pick::Spent,
+            );
         }
     }
 }
@@ -284,6 +298,8 @@ pub(crate) fn plan_craft(
     // сколько в нём клеток.
     structs: Res<StructureRules>,
     placed: Query<&Structure>,
+    // Вещи (§12.317): срезанный заказ возвращает завезённое со своим состоянием.
+    mut things: ThingsMut,
 ) {
     // Дешёвый выход для мира без правил (все тесты чужих механик и начало
     // партии). **Заказы правила он обязан учитывать**: снятый порог — это ноль,
@@ -372,7 +388,14 @@ pub(crate) fn plan_craft(
                 }
             }
             order.delivered.retain(|&(_, n)| n > 0);
-            spill_delivered(&mut commands, &mut stacks, cell, &extra);
+            spill_delivered(
+                &mut commands,
+                &mut stacks,
+                &mut things,
+                order_e,
+                cell,
+                &extra,
+            );
             if order.left > 0 {
                 continue;
             }
@@ -470,7 +493,14 @@ pub(crate) fn plan_craft(
                     // Привезённое не исчезает вместе с заказом (§12.31,
                     // инвариант 8): оно ложится кучей на клетку станка, откуда
                     // его увозит обычная уборка.
-                    spill_delivered(&mut commands, &mut stacks, cell, &order.delivered);
+                    spill_delivered(
+                        &mut commands,
+                        &mut stacks,
+                        &mut things,
+                        order_e,
+                        cell,
+                        &order.delivered,
+                    );
                 }
                 commands.entity(order_e).despawn();
                 taken.retain(|&c| c != cell);
@@ -637,6 +667,8 @@ pub(crate) fn assign_craft(
             Without<Path>,
         ),
     >,
+    // Вещи (§12.317): снесённый станок роняет завезённое своим состоянием.
+    mut things: ThingsMut,
 ) {
     // **Снесённый станок уносит свой заказ** (§12.96). Правило то же, по
     // которому снесённая рация уносит правило автовылазки (§12.67): заказ —
@@ -655,7 +687,14 @@ pub(crate) fn assign_craft(
         if let Some(cat_e) = assignee {
             commands.entity(cat_e).remove::<(Crafting, Path, Stride)>();
         }
-        spill_delivered(&mut commands, &mut stacks, cell, &delivered);
+        spill_delivered(
+            &mut commands,
+            &mut stacks,
+            &mut things,
+            order_e,
+            cell,
+            &delivered,
+        );
         commands.entity(order_e).despawn();
     }
 
@@ -750,6 +789,8 @@ pub(crate) fn work_craft(
     cats: Query<(Entity, &Position, &Crafting, Option<&Path>, Option<&Skills>)>,
     mut orders: Query<&mut Craft>,
     mut stacks: Query<(Entity, &Position, &mut Stack)>,
+    // Вещи (§12.317): остаток завезённого уходит со станка своим состоянием.
+    mut things: ThingsMut,
 ) {
     let craft = skill_rules.index_of(SKILL_CRAFT);
     for (cat_e, pos, task, path, skills) in &cats {
@@ -818,7 +859,14 @@ pub(crate) fn work_craft(
         if order.left <= 0 {
             // Лишнего здесь быть не должно, но если оно есть — оно не исчезает
             // (инвариант 8): ложится кучей на клетку станка.
-            spill_delivered(&mut commands, &mut stacks, order.cell, &order.delivered);
+            spill_delivered(
+                &mut commands,
+                &mut stacks,
+                &mut things,
+                task.0,
+                order.cell,
+                &order.delivered,
+            );
             commands.entity(task.0).despawn();
             commands.entity(cat_e).remove::<Crafting>();
         }

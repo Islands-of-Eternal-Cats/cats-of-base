@@ -748,38 +748,66 @@ pub(crate) struct Eating {
     pub(crate) pile: Entity,
 }
 
-/// Что на коте надето, в порядке надевания (§12.29).
+/// Что на коте надето, в порядке надевания (§12.29): индексы палитры `items:`.
 ///
 /// Не инвентарь: предмет надет либо нет, класть в него нечего (§12.21). Компонента
 /// нет — кот не экипирован вовсе, и это нормальное состояние, а не недостача.
 ///
-/// Прочность (§12.268) живёт **только здесь**: кучи и лапы о ней не знают, и
-/// надевается всегда новая вещь. Параллельного вектора «сколько осталось» рядом
-/// не заводим — разъедется с этим.
-#[derive(Component, Clone)]
-pub(crate) struct Gear(pub(crate) Vec<Worn>);
-
-/// Одна надетая вещь: что и сколько выходов она ещё выдержит (§12.268).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Worn {
-    /// Индекс палитры `items:`.
-    pub(crate) item: usize,
-    /// Сколько выходов осталось. У вещи с `wear: 0` — ноль, и он не убывает:
-    /// такая вещь не изнашивается вовсе.
-    pub(crate) left: i32,
-}
+/// Это **счёт**, а не состояние штуки (§12.317): сколько выходов осталось у
+/// надетого комбинезона, знает сама вещь (`Thing` с `Place::Worn` и `Wear`).
+/// До §12.317 прочность жила здесь (`Worn::left`), и снятая вещь её теряла.
+#[derive(Component, Clone, Default)]
+pub(crate) struct Gear(pub(crate) Vec<usize>);
 
 impl Gear {
-    /// Индексы надетого, без прочности.
+    /// Индексы надетого.
     pub(crate) fn items(&self) -> impl Iterator<Item = usize> + '_ {
-        self.0.iter().map(|w| w.item)
+        self.0.iter().copied()
     }
 
     /// Надета ли вещь этого типа.
     pub(crate) fn has(&self, item: usize) -> bool {
-        self.0.iter().any(|w| w.item == item)
+        self.0.contains(&item)
     }
 }
+
+/// Вещь — штука предмета, у которой есть своё состояние (§12.317): `wear` или
+/// `uses` у записи палитры. Ресурсы (лом, ткань, паёк) сущностей не имеют.
+///
+/// **Счёт остаётся главным**: сколько вещей и где, говорят `Stack`, `Carrying`,
+/// `Gear` и `delivered`, а сущность несёт только состояние штуки. Сходятся они
+/// одной системой — `things::reconcile_things`.
+#[derive(Component, Clone, Copy, Debug)]
+pub(crate) struct Thing {
+    /// Индекс палитры `items:`.
+    pub(crate) item: usize,
+}
+
+/// Где вещь (§12.317). Место **одно и одним компонентом**: вещи, лежащей в двух
+/// местах сразу, не бывает по построению.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Place {
+    /// В куче на клетке. Названа клеткой, а не сущностью кучи: кучи сливаются и
+    /// пересоздаются (`spill`, `settle_stacks`), а клетка у вещи остаётся.
+    Floor(i32, i32),
+    /// В лапах у кота (`Carrying`).
+    Paws(Entity),
+    /// Надета на кота (`Gear`).
+    Worn(Entity),
+    /// Сдана в контейнер: площадку, станок, лабораторию или сделку
+    /// (`delivered`).
+    Held(Entity),
+}
+
+/// Сколько выходов вещь ещё выдержит (§12.268, §12.317). Есть только у вещи с
+/// `wear` в рулсете; убывает на конце работы отряда, на нуле вещь исчезает.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Wear(pub(crate) i32);
+
+/// Сколько раз вещь ещё можно применить (§12.317): заряды аптечки. Есть только у
+/// вещи с `uses` в рулсете; пустая вещь исчезает.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Charges(pub(crate) i32);
 
 /// Что игрок велел коту носить — **приписка**, а не задача (§12.268): типы вещей,
 /// без повторов. Форма та же, что у `Enlisted` и `Posted`, и в фильтрах занятости
@@ -2113,7 +2141,7 @@ pub(crate) fn add_delivered(delivered: &mut Vec<(usize, i32)>, item: usize, coun
 /// Свойства предметов по индексу палитры `items:`. Ресурс той же природы, что и
 /// `TileRules`: предмет значит что-то сверх цвета, потому что у него есть
 /// свойство, — а не потому, что код знает его по имени (§12.29).
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub(crate) struct ItemRules(pub(crate) Vec<ItemRule>);
 
 #[derive(Default, Clone)]
@@ -2149,6 +2177,9 @@ pub(crate) struct ItemRule {
     /// Сколько выходов вещь выдерживает на коте (§12.268). Ноль — не
     /// изнашивается (личные вещи и синтетические схемы).
     pub(crate) wear: i32,
+    /// Сколько раз вещь применяют (§12.317): заряды аптечки. Ноль — тратится
+    /// целиком, как ресурс.
+    pub(crate) uses: i32,
     /// Слот на коте (§12.293): в нём одна вещь. Пусто — слота нет, и вещь ни с
     /// чем не спорит (синтетические схемы).
     pub(crate) slot: String,
@@ -2322,12 +2353,15 @@ impl ItemRules {
         self.0.get(item).map_or(0, |r| r.wear)
     }
 
-    /// Новая вещь на коте — с полной прочностью.
-    pub(crate) fn fresh(&self, item: usize) -> Worn {
-        Worn {
-            item,
-            left: self.wear_of(item),
-        }
+    /// Сколько зарядов у новой вещи; ноль — зарядов нет (§12.317).
+    pub(crate) fn uses_of(&self, item: usize) -> i32 {
+        self.0.get(item).map_or(0, |r| r.uses)
+    }
+
+    /// Вещь ли это (§12.317): у штуки есть своё состояние — прочность или
+    /// заряды. Остальное — ресурс, и сущностей у его штук нет.
+    pub(crate) fn is_thing(&self, item: usize) -> bool {
+        self.wear_of(item) > 0 || self.uses_of(item) > 0
     }
 }
 

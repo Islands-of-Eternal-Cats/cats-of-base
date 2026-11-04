@@ -29,6 +29,7 @@
 //! Отдельного claim'а поэтому нет ни у чертежа, ни у сделки, ни у пометки: его
 //! пришлось бы снимать в пяти местах, откуда задачу отбирают, и однажды забыть.
 
+use crate::things::{Pick, ThingsMut, shift};
 use std::cell::OnceCell;
 
 use bevy_ecs::prelude::*;
@@ -727,6 +728,8 @@ pub(crate) fn assign_tidy(
             Without<Path>,
         ),
     >,
+    // Вещи (§12.317): груз под ноги ложится со своей прочностью.
+    mut things: ThingsMut,
 ) {
     if free_cats.is_empty() {
         return;
@@ -776,6 +779,14 @@ pub(crate) fn assign_tidy(
                     count: load.count,
                 },
             ));
+            shift(
+                &mut things,
+                Place::Paws(cat_e),
+                Place::Floor(pos.x, pos.y),
+                load.item,
+                load.count,
+                Pick::Spent,
+            );
             commands.entity(cat_e).remove::<Carrying>();
         }
     }
@@ -940,6 +951,8 @@ pub(crate) fn work_hauls(
     topics_rules: Res<ResearchRules>,
     standing: Query<(&Position, Option<&Path>), With<UnitId>>,
     mut stacks: Query<(Entity, &Position, &mut Stack)>,
+    // Вещи (§12.317): поднятая, сданная и положенная штука везёт свою прочность.
+    mut things: ThingsMut,
 ) {
     // Что уже везут к каждому адресату. Носильщиков у него теперь несколько
     // (§12.48), и берущий с кучи обязан вычесть чужой груз: иначе второй кот
@@ -1023,6 +1036,8 @@ pub(crate) fn work_hauls(
                     let taken = take_needed(
                         &mut commands,
                         &mut stacks,
+                        &mut things,
+                        cat_e,
                         &worked_cells(&map, &rules, (pos.x, pos.y)),
                         &left,
                         carry,
@@ -1067,6 +1082,14 @@ pub(crate) fn work_hauls(
                         .map_or(0, |&(_, n)| n);
                     let given = load.count.min(need);
                     add_delivered(&mut bp.delivered, load.item, given);
+                    shift(
+                        &mut things,
+                        Place::Paws(cat_e),
+                        Place::Held(bp_e),
+                        load.item,
+                        given,
+                        Pick::Spent,
+                    );
                     keep_rest(&mut commands, cat_e, load.item, load.count - given);
                 }
                 commands.entity(cat_e).remove::<Haul>();
@@ -1106,6 +1129,8 @@ pub(crate) fn work_hauls(
                     let taken = take_needed(
                         &mut commands,
                         &mut stacks,
+                        &mut things,
+                        cat_e,
                         &worked_cells(&map, &rules, (pos.x, pos.y)),
                         &left,
                         carry,
@@ -1147,6 +1172,14 @@ pub(crate) fn work_hauls(
                         .map_or(0, |&(_, n)| n);
                     let given = load.count.min(need);
                     add_delivered(&mut order.delivered, load.item, given);
+                    shift(
+                        &mut things,
+                        Place::Paws(cat_e),
+                        Place::Held(order_e),
+                        load.item,
+                        given,
+                        Pick::Spent,
+                    );
                     keep_rest(&mut commands, cat_e, load.item, load.count - given);
                 }
                 commands.entity(cat_e).remove::<Haul>();
@@ -1185,6 +1218,8 @@ pub(crate) fn work_hauls(
                     let taken = take_needed(
                         &mut commands,
                         &mut stacks,
+                        &mut things,
+                        cat_e,
                         &worked_cells(&map, &rules, (pos.x, pos.y)),
                         &left,
                         carry,
@@ -1226,6 +1261,14 @@ pub(crate) fn work_hauls(
                         .map_or(0, |&(_, n)| n);
                     let given = load.count.min(need);
                     add_delivered(&mut topic.delivered, load.item, given);
+                    shift(
+                        &mut things,
+                        Place::Paws(cat_e),
+                        Place::Held(topic_e),
+                        load.item,
+                        given,
+                        Pick::Spent,
+                    );
                     keep_rest(&mut commands, cat_e, load.item, load.count - given);
                 }
                 commands.entity(cat_e).remove::<Haul>();
@@ -1249,6 +1292,8 @@ pub(crate) fn work_hauls(
                     let taken = take_needed(
                         &mut commands,
                         &mut stacks,
+                        &mut things,
+                        cat_e,
                         &worked_cells(&map, &rules, (pos.x, pos.y)),
                         &miss,
                         carry,
@@ -1293,6 +1338,14 @@ pub(crate) fn work_hauls(
                     let given = load.count.min(left).max(0);
                     if load.item == deal.item {
                         deal.delivered += given;
+                        shift(
+                            &mut things,
+                            Place::Paws(cat_e),
+                            Place::Held(deal_e),
+                            load.item,
+                            given,
+                            Pick::Spent,
+                        );
                         keep_rest(&mut commands, cat_e, load.item, load.count - given);
                     }
                 }
@@ -1334,6 +1387,8 @@ pub(crate) fn work_hauls(
                 let taken = take_from_pile(
                     &mut commands,
                     &mut stacks,
+                    &mut things,
+                    cat_e,
                     pile_e,
                     &worked_cells(&map, &rules, (pos.x, pos.y)),
                     portion(carry, free.unwrap_or(0).max(0)),
@@ -1368,6 +1423,14 @@ pub(crate) fn work_hauls(
                             .min(free_space(&map, &rules, &bins, &stock, (x, y), load.item));
                     if given > 0 {
                         spill(&mut commands, &mut stacks, (x, y), load.item, given);
+                        shift(
+                            &mut things,
+                            Place::Paws(cat_e),
+                            Place::Floor(x, y),
+                            load.item,
+                            given,
+                            Pick::Spent,
+                        );
                         note(&mut stock, (x, y), given);
                         keep_rest(&mut commands, cat_e, load.item, load.count - given);
                     }
@@ -1411,6 +1474,8 @@ pub(crate) fn work_hauls(
                     let taken = take_from_pile(
                         &mut commands,
                         &mut stacks,
+                        &mut things,
+                        cat_e,
                         pile_e,
                         &worked_cells(&map, &rules, (pos.x, pos.y)),
                         free,
@@ -1445,6 +1510,14 @@ pub(crate) fn work_hauls(
                     let free = free_space(&map, &rules, &bins, &stock, cell, load.item);
                     let given = load.count.min(free);
                     spill(&mut commands, &mut stacks, cell, load.item, given);
+                    shift(
+                        &mut things,
+                        Place::Paws(cat_e),
+                        Place::Floor(cell.0, cell.1),
+                        load.item,
+                        given,
+                        Pick::Spent,
+                    );
                     note(&mut stock, cell, given);
                     keep_rest(&mut commands, cat_e, load.item, load.count - given);
                 }
@@ -1482,9 +1555,13 @@ fn keep_rest(commands: &mut Commands, cat: Entity, item: usize, left: i32) {
 ///
 /// `at` — клетки, с которыми кот работает (`worked_cells`, §12.142): своя и
 /// заставленные соседи. Со стеллажа берут с прохода, стоять на нём нельзя.
+///
+/// Поднятые вещи уезжают в лапы `cat` со своим состоянием (§12.317).
 fn take_from_pile(
     commands: &mut Commands,
     stacks: &mut Query<(Entity, &Position, &mut Stack)>,
+    things: &mut ThingsMut,
+    cat: Entity,
     pile: Option<Entity>,
     at: &[(i32, i32)],
     want: i32,
@@ -1499,9 +1576,11 @@ fn take_from_pile(
     }
     stack.count -= taken;
     let item = stack.item;
+    let from = Place::Floor(pos.x, pos.y);
     if stack.count <= 0 {
         commands.entity(stack_e).despawn();
     }
+    shift(things, from, Place::Paws(cat), item, taken, Pick::Spent);
     Some((item, taken))
 }
 
@@ -1511,6 +1590,8 @@ fn take_from_pile(
 fn take_needed(
     commands: &mut Commands,
     stacks: &mut Query<(Entity, &Position, &mut Stack)>,
+    things: &mut ThingsMut,
+    cat: Entity,
     at: &[(i32, i32)],
     miss: &[(usize, i32)],
     carry: Option<&Carry>,
@@ -1525,7 +1606,15 @@ fn take_needed(
                 .find(|(_, p, s)| (p.x, p.y) == c && s.item == item && s.count > 0)
                 .map(|(e, ..)| e)
         });
-        if let Some(taken) = take_from_pile(commands, stacks, found, at, portion(carry, need)) {
+        if let Some(taken) = take_from_pile(
+            commands,
+            stacks,
+            things,
+            cat,
+            found,
+            at,
+            portion(carry, need),
+        ) {
             return Some(taken);
         }
     }
@@ -1857,11 +1946,13 @@ pub(crate) fn settle_stacks(
     map: Res<BaseMap>,
     mut commands: Commands,
     mut stacks: Query<(Entity, &mut Position, &mut Stack, Option<&ToStore>)>,
+    // Вещи (§12.317) переезжают вместе с кучей: место у них — клетка.
+    mut things: ThingsMut,
 ) {
     // Первая куча своего типа на клетке остаётся, остальные вливаются в неё.
     let mut keepers: Vec<(((i32, i32), usize), Entity, bool)> = Vec::new();
     let mut moves: Vec<(Entity, (i32, i32))> = Vec::new();
-    let mut merges: Vec<(Entity, Entity, i32, bool)> = Vec::new();
+    let mut merges: Vec<(Entity, Entity, i32, bool, (i32, i32), (i32, i32), usize)> = Vec::new();
 
     for (e, pos, stack, mark) in stacks.iter() {
         let Some(home) = home_of(&map, (pos.x, pos.y)) else {
@@ -1870,9 +1961,15 @@ pub(crate) fn settle_stacks(
         let home = (home, stack.item);
         match keepers.iter().find(|(cell, ..)| *cell == home) {
             // Пометка переживает слияние: иначе жест игрока молча пропадал бы.
-            Some(&(_, keeper, kept_mark)) => {
-                merges.push((e, keeper, stack.count, mark.is_some() && !kept_mark))
-            }
+            Some(&(_, keeper, kept_mark)) => merges.push((
+                e,
+                keeper,
+                stack.count,
+                mark.is_some() && !kept_mark,
+                (pos.x, pos.y),
+                home.0,
+                stack.item,
+            )),
             None => {
                 keepers.push((home, e, mark.is_some()));
                 if (pos.x, pos.y) != home.0 {
@@ -1883,12 +1980,28 @@ pub(crate) fn settle_stacks(
     }
 
     for (e, to) in moves {
-        if let Ok((_, mut pos, ..)) = stacks.get_mut(e) {
+        if let Ok((_, mut pos, stack, _)) = stacks.get_mut(e) {
+            shift(
+                &mut things,
+                Place::Floor(pos.x, pos.y),
+                Place::Floor(to.0, to.1),
+                stack.item,
+                stack.count,
+                Pick::Spent,
+            );
             pos.x = to.0;
             pos.y = to.1;
         }
     }
-    for (e, keeper, count, pass_mark) in merges {
+    for (e, keeper, count, pass_mark, from, to, item) in merges {
+        shift(
+            &mut things,
+            Place::Floor(from.0, from.1),
+            Place::Floor(to.0, to.1),
+            item,
+            count,
+            Pick::Spent,
+        );
         if let Ok((_, _, mut stack, _)) = stacks.get_mut(keeper) {
             stack.count += count;
         }

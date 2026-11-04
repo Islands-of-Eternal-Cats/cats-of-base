@@ -19,6 +19,7 @@
 //! этим не нарушается, а исполняется буквально — у подъёма появился адресат и
 //! дорога к нему.
 
+use crate::things::{Pick, ThingsMut, shift};
 use bevy_ecs::prelude::*;
 
 use crate::components::*;
@@ -323,16 +324,31 @@ pub(crate) fn wear_toll(share: i32) -> i32 {
 /// Износ надетого за вылазку (§12.268): что осталось на коте. Вещь без `wear`
 /// и личная не изнашиваются; дошедшая до нуля исчезает — приписка поведёт кота
 /// за новой.
-pub(crate) fn worn_after(items: &ItemRules, gear: &Gear, share: i32) -> Vec<Worn> {
+///
+/// Прочность живёт на самой вещи (§12.317): здесь она и убывает. Сношенную
+/// вещь уносит сверка — ей больше нет места в `Gear`.
+pub(crate) fn worn_after(
+    items: &ItemRules,
+    gear: &Gear,
+    cat: Entity,
+    things: &mut Query<(&Thing, &Place, &mut Wear)>,
+    share: i32,
+) -> Vec<usize> {
     let toll = wear_toll(share);
-    gear.0
-        .iter()
-        .filter_map(|w| {
-            if items.wear_of(w.item) <= 0 || items.personal(w.item) {
-                return Some(*w);
+    gear.items()
+        .filter(|&item| {
+            if items.wear_of(item) <= 0 || items.personal(item) {
+                return true;
             }
-            let left = w.left - toll;
-            (left > 0).then_some(Worn { item: w.item, left })
+            let Some((.., mut wear)) = things
+                .iter_mut()
+                .find(|(t, p, _)| t.item == item && **p == Place::Worn(cat))
+            else {
+                // Вещи ещё нет — сверка её не догнала; надета она новой.
+                return items.wear_of(item) > toll;
+            };
+            wear.0 -= toll;
+            wear.0 > 0
         })
         .collect()
 }
@@ -413,6 +429,8 @@ pub(crate) fn assign_equip(
     in_paws: Query<(&Haul, &Carrying)>,
     topics: Query<&Research>,
     topic_rules: Res<ResearchRules>,
+    // Вещи (§12.317): надетая из лап уносит с собой свою прочность.
+    mut things: ThingsMut,
 ) {
     // Кто чего недосчитался, в порядке `id`.
     let mut naked: Vec<(&str, Entity, (i32, i32), Vec<usize>, Option<&Carrying>)> = cats
@@ -485,7 +503,7 @@ pub(crate) fn assign_equip(
         if !paws_ok(item) {
             continue;
         }
-        dress_from_paws(&mut commands, &items, cat_e, item, load, gear);
+        dress_from_paws(&mut commands, &mut things, cat_e, item, load, gear);
         if load.count <= 1 {
             // Нести больше нечего — ходка снимается вместе с шагом. Площадка
             // и заказ при этом целы: им не довезли эту штуку, и подвоз поищет
@@ -498,7 +516,7 @@ pub(crate) fn assign_equip(
         let Some(load) = load else { continue };
         if load.count > 0 && missing.contains(&load.item) && paws_ok(load.item) {
             let gear = cats.get(*cat_e).ok().and_then(|c| c.3);
-            dress_from_paws(&mut commands, &items, *cat_e, load.item, load, gear);
+            dress_from_paws(&mut commands, &mut things, *cat_e, load.item, load, gear);
             dressed.push(*cat_e);
         }
     }
@@ -587,16 +605,26 @@ pub(crate) fn own_load(haul: Option<&Haul>) -> bool {
 
 /// Надеть вещь из лап (§12.293): штука уходит из груза на кота. Груз, ставший
 /// пустым, снимается — пустых лап с компонентом не бывает.
+///
+/// Из нескольких в лапах надевается самая свежая (§12.317).
 fn dress_from_paws(
     commands: &mut Commands,
-    items: &ItemRules,
+    things: &mut ThingsMut,
     cat_e: Entity,
     item: usize,
     load: &Carrying,
     gear: Option<&Gear>,
 ) {
     let mut worn = gear.map(|g| g.0.clone()).unwrap_or_default();
-    worn.push(items.fresh(item));
+    worn.push(item);
+    shift(
+        things,
+        Place::Paws(cat_e),
+        Place::Worn(cat_e),
+        item,
+        1,
+        Pick::Freshest,
+    );
     let mut cat = commands.entity(cat_e);
     cat.insert(Gear(worn));
     if load.count > 1 {
@@ -625,12 +653,13 @@ fn claimed(taken: &[(Entity, i32)], pile: Entity) -> i32 {
 pub(crate) fn work_equip(
     map: Res<BaseMap>,
     tiles: Res<TileRules>,
-    items: Res<ItemRules>,
     mut commands: Commands,
     cats: Query<(Entity, &Position, &Equipping, Option<&Gear>), Without<Path>>,
     mut stacks: Query<(&Position, &mut Stack)>,
     deals: Query<&Deal>,
     in_paws: Query<(&Haul, &Carrying)>,
+    // Вещи (§12.317): с кучи надевают самую свежую, и она уносит свою прочность.
+    mut things: ThingsMut,
 ) {
     // Вещь, обещанную покупателю, кот не надевает (§12.50).
     let booked = crate::trade::booked(deals.iter(), in_paws.iter());
@@ -655,10 +684,18 @@ pub(crate) fn work_equip(
         if stack.count <= 0 {
             commands.entity(job.pile).despawn();
         }
+        shift(
+            &mut things,
+            Place::Floor(pile_pos.x, pile_pos.y),
+            Place::Worn(cat_e),
+            job.item,
+            1,
+            Pick::Freshest,
+        );
         // Компонент переписывается целиком: «надетого сверх приписки» не бывает,
         // и собрать список заново дешевле, чем править его на месте.
         let mut worn = gear.map(|g| g.0.clone()).unwrap_or_default();
-        worn.push(items.fresh(job.item));
+        worn.push(job.item);
         commands.entity(cat_e).insert(Gear(worn));
     }
 }

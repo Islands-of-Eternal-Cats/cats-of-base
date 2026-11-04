@@ -407,9 +407,7 @@ fn the_shipped_ruleset_leads_its_scientist_to_samples() {
         .iter()
         .find(|r| r.id == "antenna")
         .expect("Антенна");
-    let carries = items.grants_of_gear(Some(&Gear(
-        antenna.gear.iter().map(|&i| items.fresh(i)).collect(),
-    )));
+    let carries = items.grants_of_gear(Some(&Gear(antenna.gear.clone())));
     assert!(rule.abilities != 0, "вылазка спрашивает возможность отряда");
     assert_eq!(
         carries & rule.abilities,

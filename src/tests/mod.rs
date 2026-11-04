@@ -43,6 +43,7 @@ mod structures;
 mod study;
 mod tech_tree;
 mod terrain;
+mod things;
 mod tidying;
 mod timeline;
 mod trade;
@@ -825,6 +826,7 @@ impl Sim {
                 color: "#000000".to_string(),
                 force: 0,
                 wear: 0,
+                uses: 0,
                 mends: 0,
                 nutrition: 0,
                 // Избранного в синтетическом мире нет, как нет тикеров и
@@ -2192,11 +2194,9 @@ impl Sim {
     /// Надеть на кота вещи мимо шаблона — как личную вещь кандидата (§12.256).
     fn put_gear(&mut self, unit: &str, items: &[usize]) {
         let cat = self.entity_of(unit);
-        let worn = {
-            let rules = self.world.resource::<ItemRules>();
-            items.iter().map(|&i| rules.fresh(i)).collect()
-        };
-        self.world.entity_mut(cat).insert(Gear(worn));
+        self.world.entity_mut(cat).insert(Gear(items.to_vec()));
+        // Вещи с полной прочностью родит сверка (§12.317) — сразу, а не тиком.
+        crate::things::reconcile_world(&mut self.world);
     }
 
     /// Завести перк с вычетом дороги (§12.256): в схеме перков-чисел нет.
@@ -2278,9 +2278,98 @@ impl Sim {
     /// Сколько выходов осталось надетой вещи (§12.268); `None` — не надета.
     fn wear_left(&mut self, unit: &str, item: usize) -> Option<i32> {
         let cat = self.entity_of(unit);
-        self.world
-            .get::<Gear>(cat)
-            .and_then(|g| g.0.iter().find(|w| w.item == item).map(|w| w.left))
+        if !self.world.get::<Gear>(cat).is_some_and(|g| g.has(item)) {
+            return None;
+        }
+        // Прочность живёт на самой вещи (§12.317); у вещи без `wear` её нет.
+        let mut q = self.world.query::<(&Thing, &Place, &Wear)>();
+        Some(
+            q.iter(&self.world)
+                .find(|(t, p, _)| t.item == item && **p == Place::Worn(cat))
+                .map_or(0, |(.., w)| w.0),
+        )
+    }
+
+    /// Прочность каждой вещи предмета на месте `at`, по возрастанию (§12.317).
+    fn wears_in(&mut self, at: Place, item: usize) -> Vec<i32> {
+        let mut q = self.world.query::<(&Thing, &Place, Option<&Wear>)>();
+        let mut v: Vec<i32> = q
+            .iter(&self.world)
+            .filter(|(t, p, _)| t.item == item && **p == at)
+            .map(|(.., w)| w.map_or(0, |w| w.0))
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Прочность вещей предмета в куче на клетке, по возрастанию (§12.317).
+    fn wears_at(&mut self, x: i32, y: i32, item: usize) -> Vec<i32> {
+        self.wears_in(Place::Floor(x, y), item)
+    }
+
+    /// Прочность **всех** вещей предмета, где бы они ни были, по возрастанию
+    /// (§12.317): переходы её не меняют, меняют только износ и трата.
+    fn wears_of(&mut self, item: usize) -> Vec<i32> {
+        let mut q = self.world.query::<(&Thing, Option<&Wear>)>();
+        let mut v: Vec<i32> = q
+            .iter(&self.world)
+            .filter(|(t, _)| t.item == item)
+            .map(|(_, w)| w.map_or(0, |w| w.0))
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Заряды всех вещей предмета, где бы они ни были, по возрастанию (§12.317).
+    fn charges_of(&mut self, item: usize) -> Vec<i32> {
+        let mut q = self.world.query::<(&Thing, Option<&Charges>)>();
+        let mut v: Vec<i32> = q
+            .iter(&self.world)
+            .filter(|(t, _)| t.item == item)
+            .map(|(_, c)| c.map_or(0, |c| c.0))
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Поносить вещи кучи (§12.317): прочность по штуке, как если бы их уже
+    /// надевали. Вещи сперва рождает сверка — как родил бы первый тик.
+    fn set_wears_at(&mut self, x: i32, y: i32, item: usize, wears: &[i32]) {
+        crate::things::reconcile_world(&mut self.world);
+        let mut q = self.world.query::<(Entity, &Thing, &Place)>();
+        let found: Vec<Entity> = q
+            .iter(&self.world)
+            .filter(|(_, t, p)| t.item == item && **p == Place::Floor(x, y))
+            .map(|(e, ..)| e)
+            .collect();
+        assert_eq!(found.len(), wears.len(), "вещей в куче не столько");
+        for (e, &w) in found.into_iter().zip(wears) {
+            self.world.entity_mut(e).insert(Wear(w));
+        }
+    }
+
+    /// Початые аптечки (§12.317): заряды по штуке в куче на клетке.
+    fn set_charges_at(&mut self, x: i32, y: i32, item: usize, charges: &[i32]) {
+        crate::things::reconcile_world(&mut self.world);
+        let mut q = self.world.query::<(Entity, &Thing, &Place)>();
+        let found: Vec<Entity> = q
+            .iter(&self.world)
+            .filter(|(_, t, p)| t.item == item && **p == Place::Floor(x, y))
+            .map(|(e, ..)| e)
+            .collect();
+        assert_eq!(found.len(), charges.len(), "вещей в куче не столько");
+        for (e, &c) in found.into_iter().zip(charges) {
+            self.world.entity_mut(e).insert(Charges(c));
+        }
+    }
+
+    /// Сколько зарядов у новой вещи (§12.317): в схеме — ноль, тратится целиком.
+    fn set_uses(&mut self, item: usize, uses: i32) {
+        let mut rules = self.world.resource_mut::<ItemRules>();
+        if rules.0.len() <= item {
+            rules.0.resize(item + 1, ItemRule::default());
+        }
+        rules.0[item].uses = uses;
     }
 
     /// Сделать вещь личной (§12.256): не снимается, не ломается, не изнашивается.

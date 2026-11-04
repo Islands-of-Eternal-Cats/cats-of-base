@@ -33,6 +33,7 @@
 //! подберёт следующим тиком. Иначе освобождение пришлось бы вписать в каждое
 //! место, где кота с работы снимают, и однажды забыть.
 
+use crate::components::{Charges, Place, Thing};
 use bevy_ecs::prelude::*;
 
 use crate::components::*;
@@ -330,10 +331,43 @@ fn plan_kit(
     items: &ItemRules,
     techs: &Techs,
     booked: &[(usize, i32)],
-) -> Option<(i32, Vec<(Entity, i32)>)> {
+) -> Option<(usize, i32, Vec<(Entity, i32)>)> {
     items.medkits(techs).find_map(|(item, mends)| {
-        plan_spend(piles, &[(item, 1)], booked).map(|takes| (mends, takes))
+        plan_spend(piles, &[(item, 1)], booked).map(|takes| (item, mends, takes))
     })
+}
+
+/// Снять заряд с самой потраченной аптечки на складе (§12.317).
+///
+/// `Some(None)` — заряд снят, аптечка ещё не пуста; `Some(Some(куча))` —
+/// аптечка опустела и ушла, со счёта её кучи снимается штука; `None` — вещей на
+/// складе не нашлось, и аптечка тратится целиком, как до §12.317.
+///
+/// `stores` — складские кучи аптечек в порядке обхода карты; при равных зарядах
+/// берётся первая по нему: какая из одинаковых, в мире не видно, но порядок
+/// задан явно (§11).
+fn spend_charge(
+    commands: &mut Commands,
+    kits: &mut Query<(Entity, &Thing, &Place, &mut Charges)>,
+    stores: &[(Entity, (i32, i32))],
+    item: usize,
+) -> Option<Option<Entity>> {
+    let (_, thing_e, pile_e) = stores
+        .iter()
+        .enumerate()
+        .flat_map(|(order, &(pile_e, (x, y)))| {
+            kits.iter()
+                .filter(move |(_, t, p, _)| t.item == item && **p == Place::Floor(x, y))
+                .map(move |(e, _, _, c)| ((c.0, order), e, pile_e))
+        })
+        .min_by_key(|&(key, ..)| key)?;
+    let (.., mut charges) = kits.get_mut(thing_e).ok()?;
+    charges.0 -= 1;
+    if charges.0 > 0 {
+        return Some(None);
+    }
+    commands.entity(thing_e).despawn();
+    Some(Some(pile_e))
 }
 
 /// Лежачие коты заживают; дошедший медик ускоряет, а на полной шкале кот встаёт.
@@ -363,6 +397,8 @@ pub(crate) fn heal(
     mut stacks: Query<(Entity, &Position, &mut Stack)>,
     deals: Query<&Deal>,
     in_paws: Query<(&Haul, &Carrying)>,
+    // Заряды аптечек (§12.317): лечение тратит заряд, а не всю аптечку.
+    mut kits: Query<(Entity, &Thing, &Place, &mut Charges)>,
 ) {
     if rules.max <= 0 {
         return;
@@ -413,7 +449,28 @@ pub(crate) fn heal(
                         .iter()
                         .map(|(e, p, s)| (e, (p.x, p.y), s.item, s.count)),
                 );
-                if let Some((mends, takes)) = plan_kit(&piles, &items, &techs, &booked) {
+                if let Some((item, mends, takes)) = plan_kit(&piles, &items, &techs, &booked) {
+                    // У аптечки с зарядами тратится заряд самой потраченной
+                    // на складе (§12.317): початые не копятся. Штука уходит со
+                    // склада, только когда зарядов не осталось.
+                    let spent = match items.uses_of(item) > 0 {
+                        true => {
+                            let stores: Vec<(Entity, (i32, i32))> = piles
+                                .iter()
+                                .filter(|&&(_, i, _)| i == item)
+                                .filter_map(|&(e, ..)| {
+                                    stacks.get(e).ok().map(|(_, p, _)| (e, (p.x, p.y)))
+                                })
+                                .collect();
+                            spend_charge(&mut commands, &mut kits, &stores, item)
+                        }
+                        false => None,
+                    };
+                    let takes = match spent {
+                        Some(None) => Vec::new(),
+                        Some(Some(pile_e)) => vec![(pile_e, 1)],
+                        None => takes,
+                    };
                     for (pile_e, taken) in takes {
                         if let Ok((_, _, mut stack)) = stacks.get_mut(pile_e) {
                             stack.count -= taken;

@@ -90,6 +90,8 @@ pub(crate) fn assign_research(
             Without<Path>,
         ),
     >,
+    // Вещи (§12.317): снесённая лаборатория роняет образец своим состоянием.
+    mut things: crate::things::ThingsMut,
 ) {
     let science = skill_rules.index_of(SKILL_SCIENCE);
     let owners = owners_of(&map, &structs, &placed);
@@ -105,7 +107,14 @@ pub(crate) fn assign_research(
         // заказ уходит со станком. Завезённый образец при этом **роняем кучей**
         // на клетку (§12.31, инвариант 8): материал не горит.
         if !tiles.is_lab(map.tile_at(topic.cell.0, topic.cell.1)) {
-            spill_delivered(&mut commands, &mut stacks, topic.cell, &topic.delivered);
+            spill_delivered(
+                &mut commands,
+                &mut stacks,
+                &mut things,
+                topic_e,
+                topic.cell,
+                &topic.delivered,
+            );
             for &cat_e in &topic.assignees {
                 commands
                     .entity(cat_e)

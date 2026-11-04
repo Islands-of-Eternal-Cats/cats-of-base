@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 49;
+pub(crate) const FORMAT: u32 = 50;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -128,6 +128,11 @@ pub(crate) const SAVED: &[&str] = &[
     "Craft",
     "Deal",
     "Mission",
+    // Вещи (§12.317): сущность, место и параметры штуки.
+    "Thing",
+    "Place",
+    "Wear",
+    "Charges",
     // Ресурсы состояния. Карта живёт в `map.rs`, остальные — в `components.rs`.
     "BaseMap",
     "SimTime",
@@ -441,9 +446,10 @@ pub(crate) struct EntityDto {
     pub(crate) record: Option<RecordDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) perks: Option<Vec<String>>,
-    /// Надетое парами (предмет, сколько выходов осталось) — §12.268; `FORMAT` 43.
+    /// Надетое — предметы (§12.268). Сколько выходов осталось, знает сама вещь
+    /// (`thing`, §12.317); `FORMAT` 50.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) gear: Option<Vec<(usize, i32)>>,
+    pub(crate) gear: Option<Vec<usize>>,
     /// Приписка снаряжения (§12.268).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) outfit: Option<Vec<usize>>,
@@ -522,6 +528,29 @@ pub(crate) struct EntityDto {
     pub(crate) deal: Option<DealDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) mission: Option<MissionDto>,
+    /// Вещь (§12.317): предмет, место и параметры штуки.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) thing: Option<ThingDto>,
+}
+
+/// Вещь в снимке (§12.317). Место с котом или контейнером — номером сущности.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct ThingDto {
+    pub(crate) item: usize,
+    pub(crate) place: PlaceDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) wear: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) charges: Option<i32>,
+}
+
+/// Где вещь (§12.317). Ссылки — номера сущностей в списке снимка.
+#[derive(Serialize, Deserialize)]
+pub(crate) enum PlaceDto {
+    Floor(i32, i32),
+    Paws(u32),
+    Worn(u32),
+    Held(u32),
 }
 
 /// Куда кот несёт груз. Ссылки — номера сущностей в списке снимка.
@@ -760,9 +789,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                 skills: e.get::<Skills>().map(|s| s.xp.clone()),
                 stats: e.get::<Stats>().map(|s| s.0.clone()),
                 perks: e.get::<Perks>().map(|p| p.0.clone()),
-                gear: e
-                    .get::<Gear>()
-                    .map(|g| g.0.iter().map(|w| (w.item, w.left)).collect()),
+                gear: e.get::<Gear>().map(|g| g.0.clone()),
                 outfit: e.get::<Outfit>().map(|o| o.0.clone()),
                 carrying: e.get::<Carrying>().map(|c| (c.item, c.count)),
 
@@ -879,6 +906,23 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                     abilities: m.abilities,
                     gather: m.gather,
                 }),
+                thing: match (e.get::<Thing>(), e.get::<Place>()) {
+                    (Some(t), Some(p)) => {
+                        let place = match *p {
+                            Place::Floor(x, y) => Some(PlaceDto::Floor(x, y)),
+                            Place::Paws(c) => at(c).map(PlaceDto::Paws),
+                            Place::Worn(c) => at(c).map(PlaceDto::Worn),
+                            Place::Held(c) => at(c).map(PlaceDto::Held),
+                        };
+                        place.map(|place| ThingDto {
+                            item: t.item,
+                            place,
+                            wear: e.get::<Wear>().map(|w| w.0),
+                            charges: e.get::<Charges>().map(|c| c.0),
+                        })
+                    }
+                    _ => None,
+                },
             }
         })
         .collect();
@@ -1005,7 +1049,7 @@ fn restore_seen(world: &mut World, file: &SaveFile) {
             seen.mark(item);
         }
         if let Some(gear) = &dto.gear {
-            for &(item, _) in gear {
+            for &item in gear {
                 seen.mark(item);
             }
         }
@@ -1212,9 +1256,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
             e.insert(Perks(v.clone()));
         }
         if let Some(v) = &dto.gear {
-            e.insert(Gear(
-                v.iter().map(|&(item, left)| Worn { item, left }).collect(),
-            ));
+            e.insert(Gear(v.clone()));
         }
         if let Some(v) = &dto.outfit {
             e.insert(Outfit(v.clone()));
@@ -1349,6 +1391,25 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
         }
         if let Some((item, count)) = dto.stack {
             e.insert(Stack { item, count });
+        }
+        if let Some(t) = &dto.thing {
+            let place = match t.place {
+                PlaceDto::Floor(x, y) => Some(Place::Floor(x, y)),
+                PlaceDto::Paws(n) => at(n).map(Place::Paws),
+                PlaceDto::Worn(n) => at(n).map(Place::Worn),
+                PlaceDto::Held(n) => at(n).map(Place::Held),
+            };
+            // Место, которого в снимке нет, — вещь уходит: сверка после загрузки
+            // родит на нужном месте свежую.
+            if let Some(place) = place {
+                e.insert((Thing { item: t.item }, place));
+                if let Some(w) = t.wear {
+                    e.insert(Wear(w));
+                }
+                if let Some(c) = t.charges {
+                    e.insert(Charges(c));
+                }
+            }
         }
         if dto.to_store {
             e.insert(ToStore);

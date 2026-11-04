@@ -21,6 +21,7 @@ use crate::research::{assign_research, work_research};
 use crate::seen::note_seen;
 use crate::sites::grow_blights;
 use crate::skills::{assign_self_study, assign_study, assign_tutor, study, train_skills};
+use crate::things::reconcile_things;
 use crate::timeline::run_timeline;
 use crate::trade::run_trade;
 
@@ -226,6 +227,7 @@ pub(crate) fn build_schedule() -> Schedule {
         escape_voids,
         spread_units,
         settle_stacks,
+        reconcile_things,
         sleep,
         doze,
         heal,

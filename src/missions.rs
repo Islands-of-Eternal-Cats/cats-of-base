@@ -982,6 +982,8 @@ pub(crate) fn run_missions(
     map: Res<BaseMap>,
     tiles: Res<TileRules>,
     mut stacks: Query<(Entity, &Position, &mut Stack)>,
+    // Надетые вещи с прочностью (§12.317): износ снимается с них самих.
+    mut worn_things: Query<(&Thing, &Place, &mut Wear)>,
 ) {
     let RaidRules {
         missions: rules,
@@ -1296,14 +1298,15 @@ pub(crate) fn run_missions(
                 // анализатор Антенны другого пути в мир не имеет, и его потеря
                 // заперла бы образцы навсегда.
                 if let Ok((.., Some(gear), _, _, _, _)) = crew.get(cat_e) {
-                    let kept: Vec<Worn> = match out.failed {
-                        true => gear
-                            .0
-                            .iter()
-                            .copied()
-                            .filter(|w| items.personal(w.item))
-                            .collect(),
-                        false => crate::gear::worn_after(&items, gear, out.share),
+                    let kept: Vec<usize> = match out.failed {
+                        true => gear.items().filter(|&i| items.personal(i)).collect(),
+                        false => crate::gear::worn_after(
+                            &items,
+                            gear,
+                            cat_e,
+                            &mut worn_things,
+                            out.share,
+                        ),
                     };
                     match kept.is_empty() {
                         true => commands.entity(cat_e).remove::<Gear>(),
