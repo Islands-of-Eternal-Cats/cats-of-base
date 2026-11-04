@@ -165,6 +165,25 @@ fn one_teacher_teaches_a_whole_class() {
     assert_eq!(sim.xp_of("d", science), 300, "учитель за учёбу не растёт");
 }
 
+/// Четвёртый ученик большой парты встаёт в очередь и садится к тому же
+/// учителю, когда класс доучится (§12.325) — без второго клика игрока.
+#[test]
+fn a_fourth_pupil_waits_for_the_next_class() {
+    let (mut sim, science) = big_class(&[20, 100, 300]);
+    sim.set_xp("d", science, 300); // третий уровень
+    for pupil in ["a", "b", "c"] {
+        assert!(sim.teach(pupil, "science"), "{pupil} сел за парту");
+    }
+    assert_eq!(sim.teach_gate("e", science), "taken", "мест больше нет");
+    assert!(sim.teach("e", "science"), "но запись принята");
+    assert!(!sim.is_studying("e"), "и он ждёт");
+
+    sim.tick_n(800);
+    for pupil in ["a", "b", "c", "e"] {
+        assert_eq!(sim.level_of(pupil, science), 1, "{pupil} выучился");
+    }
+}
+
 /// К одному месту учителя садится один учитель, сколько бы учеников ни ждало
 /// (§12.287): до него на каждого ученика шёл бы свой учитель.
 #[test]
@@ -305,6 +324,60 @@ fn two_pupils_teach_each_other_in_turn() {
     sim.tick_n(1500);
     assert_eq!(sim.level_of("b", science), 1, "b выучился «Науке»");
     assert_eq!(sim.level_of("a", relay), 1, "a выучился «Связи»");
+}
+
+/// Кафедру держит учитель «Связи» — ученик «Науки» за эту парту не садится,
+/// а ждёт в очереди (§12.326). Сядь он, просидел бы без дела весь чужой урок:
+/// учитель у кафедры один и учит одному домену (§12.290).
+#[test]
+fn a_pupil_does_not_sit_into_another_domains_lesson() {
+    let (mut sim, science) = big_class(&[200, 400, 600]);
+    let relay = sim.set_skill("relay", &[200, 400, 600]);
+    sim.set_taught(relay, 3);
+    sim.add_teaches(DESK, relay);
+    sim.set_xp("d", relay, 600); // учитель «Связи»
+    sim.set_xp("e", science, 600); // учитель «Науки»
+    assert!(sim.teach("a", "relay"));
+    sim.tick_n(30);
+    assert!(sim.is_teaching("d"), "урок «Связи» идёт");
+
+    assert_eq!(
+        sim.teach_gate("b", science),
+        "taken",
+        "место есть, но урок чужой"
+    );
+    assert!(sim.teach("b", "science"), "запись встала в очередь");
+    sim.tick_n(20);
+    assert!(!sim.is_studying("b"), "за парту под чужой урок он не сел");
+    assert!(
+        !sim.is_teaching("e"),
+        "и учителя «Науки» к занятой кафедре не звали"
+    );
+
+    sim.tick_n(1200);
+    assert_eq!(sim.level_of("a", relay), 1, "урок «Связи» закончился");
+    assert_eq!(sim.level_of("b", science), 1, "и «Наука» пришла следом");
+}
+
+/// Ученик «Науки» уже сидел за партой и ждал учителя, а кафедру занял учитель
+/// «Связи» — ученик встаёт и возвращается в очередь, приписка остаётся
+/// (§12.326). Иначе он простоял бы весь чужой урок.
+#[test]
+fn a_waiting_pupil_stands_up_when_another_lesson_starts() {
+    let (mut sim, _) = big_class(&[200, 400, 600]);
+    let relay = sim.set_skill("relay", &[200, 400, 600]);
+    sim.set_taught(relay, 3);
+    sim.add_teaches(DESK, relay);
+    assert!(sim.teach("b", "science"), "учителя «Науки» на базе нет");
+    sim.tick_n(10);
+    assert!(sim.is_studying("b"), "сел ждать");
+
+    sim.set_xp("d", relay, 600);
+    assert!(sim.teach("a", "relay"));
+    sim.tick_n(30);
+    assert!(sim.is_teaching("d"), "урок «Связи» начался");
+    assert!(!sim.is_studying("b"), "ученик «Науки» встал");
+    assert!(sim.is_enrolled("b"), "но запись не потерял");
 }
 
 /// Недостроенная парта не учит (§12.282): клетки штампа строятся порознь, и

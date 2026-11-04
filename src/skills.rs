@@ -178,11 +178,44 @@ fn desk_cells<'a>(
         .filter(move |&(x, y)| tiles.teaches(map.tile_at(x, y), skill) && owners.finished_at(x, y))
 }
 
+/// Идущие уроки: `(место учителя, домен)` по всем, кто сидит или идёт на
+/// место учителя (§12.258). Учитель держит кафедру одним доменом (§12.290).
+pub(crate) fn lessons_of<'a>(
+    studies: impl IntoIterator<Item = &'a Study>,
+) -> Vec<((i32, i32), usize)> {
+    studies
+        .into_iter()
+        .filter(|s| s.teacher)
+        .map(|s| (s.spot, s.skill))
+        .collect()
+}
+
+/// Закрыта ли парта `desk` для домена `skill` чужим уроком (§12.326): за её
+/// кафедрой учитель **другого** домена. Сесть туда значило бы сидеть без дела
+/// весь чужой урок — учитель у кафедры один и учит одному (§12.290), — поэтому
+/// такое место для этого домена считается занятым: ученик из очереди ждёт за
+/// работой, а сядет, когда кафедра освободится. Парта без кафедры не
+/// закрывается ничем.
+pub(crate) fn lesson_bars(
+    map: &BaseMap,
+    tiles: &TileRules,
+    owners: &Owners,
+    desk: (i32, i32),
+    skill: usize,
+    lessons: &[((i32, i32), usize)],
+) -> bool {
+    lectern_of(map, tiles, owners, desk)
+        .is_some_and(|at| lessons.iter().any(|&(l, k)| l == at && k != skill))
+}
+
 /// Ближайшая свободная парта по **уже готовому** обходу.
 ///
 /// Обход отдаётся снаружи, потому что снимок считает ворота по всем доменам
 /// сразу: `Reach::all` — это два вектора на всю карту, и строить его на каждый
 /// домен значило бы гонять BFS шесть раз на кота каждым кадром.
+///
+/// Свободна — значит не занята учеником и не закрыта чужим уроком
+/// (`lesson_bars`, §12.326).
 pub(crate) fn nearest_desk_at(
     map: &BaseMap,
     tiles: &TileRules,
@@ -190,9 +223,11 @@ pub(crate) fn nearest_desk_at(
     reach: &Reach,
     skill: usize,
     taken: &[(i32, i32)],
+    lessons: &[((i32, i32), usize)],
 ) -> Option<(i32, i32)> {
     desk_cells(map, tiles, owners, skill)
         .filter(|cell| !taken.contains(cell))
+        .filter(|&cell| !lesson_bars(map, tiles, owners, cell, skill, lessons))
         .filter_map(|(x, y)| reach.dist_at(x, y).map(|d| (d, (x, y))))
         .min_by_key(|&(d, _)| d)
         .map(|(_, cell)| cell)
@@ -210,9 +245,10 @@ pub(crate) fn nearest_desk(
     skill: usize,
     from: (i32, i32),
     taken: &[(i32, i32)],
+    lessons: &[((i32, i32), usize)],
 ) -> Option<(i32, i32)> {
     let reach = Reach::all(map, tiles, from);
-    nearest_desk_at(map, tiles, owners, &reach, skill, taken)
+    nearest_desk_at(map, tiles, owners, &reach, skill, taken, lessons)
 }
 
 /// Ворота обучения: куда сажать — или почему нельзя.
@@ -236,8 +272,14 @@ pub(crate) enum Desk {
     Topped,
     /// Парт этого домена на базе нет ни одной.
     Missing,
-    /// Парты есть, но все заняты или до них не дойти.
+    /// Парты есть и до них дойти можно, но все заняты: кот **встаёт в
+    /// очередь** (§12.325) — запись ставится, а сядет он, когда парта
+    /// освободится. Это не отказ, а ответ «когда».
     Taken,
+    /// Парты есть, но до свободной не дойти и занятой, которая освободится,
+    /// на пути тоже нет: очередь ждала бы вечно, поэтому это отказ (§12.325).
+    /// Чинится стройкой, а не ожиданием — отсюда отдельное слово.
+    Far,
 }
 
 impl Desk {
@@ -250,6 +292,7 @@ impl Desk {
             Desk::Topped => "topped",
             Desk::Missing => "nodesk",
             Desk::Taken => "taken",
+            Desk::Far => "far",
         }
     }
 }
@@ -271,6 +314,7 @@ pub(crate) fn desk_gate(
     skill: usize,
     away: bool,
     taken: &[(i32, i32)],
+    lessons: &[((i32, i32), usize)],
 ) -> Desk {
     if rules.taught_cap(skill) <= 0 {
         return Desk::Untaught;
@@ -287,7 +331,17 @@ pub(crate) fn desk_gate(
     if desk_cells(map, tiles, owners, skill).next().is_none() {
         return Desk::Missing;
     }
-    nearest_desk_at(map, tiles, owners, reach, skill, taken).map_or(Desk::Taken, Desk::Open)
+    if let Some(spot) = nearest_desk_at(map, tiles, owners, reach, skill, taken, lessons) {
+        return Desk::Open(spot);
+    }
+    // Свободной достижимой нет. Очередь осмысленна, только если до какой-то
+    // парты дойти можно вообще — тогда она освободится, и `assign_study`
+    // посадит кота сам (§12.325). Иначе ждать нечего.
+    if desk_cells(map, tiles, owners, skill).any(|(x, y)| reach.dist_at(x, y).is_some()) {
+        Desk::Taken
+    } else {
+        Desk::Far
+    }
 }
 
 /// Сажает **приписанного** к парте кота, как только тот освободился (§12.84).
@@ -353,6 +407,7 @@ pub(crate) fn assign_study(
     >,
 ) {
     let mut taken: Vec<(i32, i32)> = students.iter().map(|s| s.spot).collect();
+    let lessons = lessons_of(students.iter());
     let owners = owners_of(&map, &structures, &placed);
 
     // Радиста собирающегося отряда парта не берёт (§12.286): его снимает с дела
@@ -393,7 +448,7 @@ pub(crate) fn assign_study(
             commands.entity(cat_e).remove::<Enrolled>();
             continue;
         }
-        let Some(spot) = nearest_desk(&map, &tiles, &owners, skill, at, &taken) else {
+        let Some(spot) = nearest_desk(&map, &tiles, &owners, skill, at, &taken, &lessons) else {
             continue; // парт нет, все заняты или не дойти — попробуем следующим тиком
         };
         taken.push(spot);
@@ -811,6 +866,10 @@ pub(crate) fn study(
             )
         })
         .collect();
+    let lessons: Vec<((i32, i32), usize)> = tutors
+        .iter()
+        .map(|&(spot, skill, ..)| (spot, skill))
+        .collect();
     let pupils: Vec<((i32, i32), usize, i32)> = students
         .iter()
         .filter(|(_, _, s, ..)| !s.teacher)
@@ -861,6 +920,16 @@ pub(crate) fn study(
             continue;
         }
 
+        // Кафедру его парты занял учитель другого домена (§12.326): урок за
+        // ней чужой, и сидеть тут — простоять его целиком. Встаёт, а приписка
+        // (`Enrolled`) остаётся — `assign_study` посадит снова, когда кафедра
+        // освободится или найдётся другая парта. Так же уходит и ученик,
+        // который сел раньше, чем пришёл чужой учитель.
+        if lesson_bars(&map, &tiles, &owners, task.spot, task.skill, &lessons) {
+            commands.entity(cat_e).remove::<(Study, Path, Stride)>();
+            continue;
+        }
+
         // Парту могли снести, пока кот шёл: ищем другую свободную, а нет её —
         // учёба кончилась. Занятой считаем и свою, поэтому сравниваем с целью.
         if !tiles.teaches(map.tile_at(task.spot.0, task.spot.1), task.skill)
@@ -868,9 +937,15 @@ pub(crate) fn study(
         {
             let others: Vec<(i32, i32)> =
                 taken.iter().copied().filter(|&c| c != task.spot).collect();
-            let Some(spot) =
-                nearest_desk(&map, &tiles, &owners, task.skill, (pos.x, pos.y), &others)
-            else {
+            let Some(spot) = nearest_desk(
+                &map,
+                &tiles,
+                &owners,
+                task.skill,
+                (pos.x, pos.y),
+                &others,
+                &lessons,
+            ) else {
                 commands.entity(cat_e).remove::<(Study, Path, Stride)>();
                 continue;
             };

@@ -56,8 +56,8 @@ use crate::schedule::build_schedule;
 use crate::seen::note_seen;
 use crate::sites::{Step, aim_danger, aim_of, next_step, site_is_clear, stage_danger, targets_of};
 use crate::skills::{
-    Desk, SKILL_RAID, SKILL_SCIENCE, class_sizes, desk_cap, desk_gate, lectern_of, level_cap_of,
-    level_of, tutor_cap, xp_ceiling,
+    Desk, SKILL_RAID, SKILL_SCIENCE, class_sizes, desk_cap, desk_gate, lectern_of, lesson_bars,
+    level_cap_of, level_of, tutor_cap, xp_ceiling,
 };
 use crate::slots::{Owners, seats_at, slot_cells};
 use crate::snapshot::{
@@ -1533,6 +1533,13 @@ impl Sim {
     fn taken_desks(&mut self) -> Vec<(i32, i32)> {
         let mut q = self.world.query::<&Study>();
         q.iter(&self.world).map(|s| s.spot).collect()
+    }
+
+    /// Идущие уроки: `(место учителя, домен)` — тем же `lessons_of`, что у
+    /// раздатчика (§12.326).
+    fn lessons(&mut self) -> Vec<((i32, i32), usize)> {
+        let mut q = self.world.query::<&Study>();
+        crate::skills::lessons_of(q.iter(&self.world))
     }
 }
 
@@ -5328,6 +5335,7 @@ impl Sim {
             from,
         );
         let owners = self.owners();
+        let lessons = self.lessons();
         desk_gate(
             self.world.resource::<BaseMap>(),
             self.world.resource::<TileRules>(),
@@ -5339,6 +5347,7 @@ impl Sim {
             skill,
             away,
             &taken,
+            &lessons,
         )
     }
 
@@ -5352,8 +5361,10 @@ impl Sim {
         // Пять отказов подряд, которые тут стояли россыпью, живут теперь одним
         // выражением — тем же, каким кнопка в «Личном деле» называет причину
         // словом (инвариант 14).
-        let Desk::Open(spot) = self.desk_gate_of(unit_id, skill) else {
-            return false;
+        let spot = match self.desk_gate_of(unit_id, skill) {
+            Desk::Open(spot) => spot,
+            Desk::Taken => return self.enqueue_study(unit_id, skill),
+            _ => return false,
         };
         // Открытые ворота уже сказали, что кот на базе.
         let Some(cat_e) = self.unit_on_base(unit_id) else {
@@ -5388,6 +5399,33 @@ impl Sim {
             },
             Path { steps: path },
         ));
+        true
+    }
+
+    /// Записать кота в очередь к партам (§12.325): свободной нет, но до них
+    /// дойти можно. Ставится одна приписка (`Enrolled`) — без `Study`, без
+    /// маршрута и **без снятия с дела**: запись это конфигурация, а не задача
+    /// (инвариант 7), и пока парты заняты, кот работает как работал. Посадит
+    /// его `assign_study`, когда парта освободится, — тем же путём, каким
+    /// возвращает за парту ученика, которого увели сон или рана (§12.84).
+    ///
+    /// Сеанс **другого** домена, который кот сейчас сидит учеником, снимается:
+    /// игрок сказал «учись этому», и `train_skills`, подняв кота по старому
+    /// домену, снял бы вместе с ним и новую запись. Учителя не трогаем —
+    /// отпустит класс, тогда и сядет.
+    fn enqueue_study(&mut self, unit_id: &str, skill: usize) -> bool {
+        let Some(cat_e) = self.unit_on_base(unit_id) else {
+            return false;
+        };
+        let other_lesson = self
+            .world
+            .get::<Study>(cat_e)
+            .is_some_and(|s| !s.teacher && s.skill != skill);
+        let mut cat = self.world.entity_mut(cat_e);
+        if other_lesson {
+            cat.remove::<(Study, Path, Stride)>();
+        }
+        cat.insert(Enrolled { skill });
         true
     }
 
@@ -5443,6 +5481,18 @@ impl Sim {
             .into_iter()
             .filter(|&c| Some(c) != own)
             .collect();
+        // Кафедру держит учитель другого домена (§12.326): за этой партой
+        // сейчас чужой урок, и клик остаётся приказом «иди туда».
+        let lessons = self.lessons();
+        let barred = {
+            let owners = self.owners();
+            let map = self.world.resource::<BaseMap>();
+            let tiles = self.world.resource::<TileRules>();
+            lesson_bars(map, tiles, &owners, (x, y), skill, &lessons)
+        };
+        if barred {
+            return false;
+        }
         let (x, y) = if taken.contains(&(x, y)) {
             let owners = self.owners();
             let map = self.world.resource::<BaseMap>();
@@ -6439,6 +6489,7 @@ impl Sim {
                     .map(|s| s.spot)
                     .collect()
             };
+            let lessons = self.lessons();
             // Кто сидит за партой без учителя (§12.258): причина простоя
             // словом (§12.53) — игрок приписал ученика сам и обязан видеть,
             // почему тот сидит без дела. Тем же `lectern_of` и тем же `tutor_cap`,
@@ -6728,6 +6779,7 @@ impl Sim {
                                     i,
                                     away.is_some(),
                                     &taken,
+                                    &lessons,
                                 )
                                 .tag(),
                                 self_study: self_studies

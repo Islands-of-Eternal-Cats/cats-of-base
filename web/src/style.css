@@ -961,6 +961,7 @@ main#stage.mode-cursor #mode-banner {
   margin-bottom: 2px;
 }
 .slot-pop .slot-pick,
+.slot-pop .slot-teach,
 .slot-row {
   flex-direction: row;
   align-items: center;
@@ -982,9 +983,20 @@ main#stage.mode-cursor #mode-banner {
   color: var(--muted);
   font-size: 11px;
 }
+/* Строка состояния («Наука 1 · в очереди к парте», §12.325) стоит в той же
+   сетке, что кнопки списка: имя слева, подпись прижата вправо. */
+.slot-row.lock {
+  display: flex;
+}
 .slot-row.empty,
 .slot-row.lock {
   color: var(--muted);
+}
+/* «Учить» под вещами слота (§12.325): решение другого рода, чем приписка, —
+   отделено чертой. */
+.slot-pop .slot-teach {
+  border-top: 1px solid var(--line);
+  color: var(--accent);
 }
 /* Не умеет «Связь» (§12.291): место держим, значок прячем. */
 .crew-duty.void {

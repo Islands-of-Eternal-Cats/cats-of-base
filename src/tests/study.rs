@@ -88,12 +88,14 @@ fn a_desk_holds_one_cat() {
     let (mut sim, _) = sim_with_desk();
 
     assert!(sim.teach("a", "science"));
-    assert!(!sim.teach("b", "science"), "вторая парта не выросла");
+    // Второго запись ставит в очередь (§12.325), но не сажает.
+    assert!(sim.teach("b", "science"), "встал в очередь");
+    assert_eq!(sim.desk_of("b"), None, "вторая парта не выросла");
     assert_eq!(sim.desk_of("a"), Some((3, 1)));
 
-    // Построили вторую — второму ученику есть куда сесть.
+    // Построили вторую — ученик из очереди садится за неё сам.
     sim.force_tile(4, 1, 1);
-    assert!(sim.teach("b", "science"));
+    sim.tick_n(1);
     assert_eq!(sim.desk_of("b"), Some((4, 1)), "и это именно вторая");
 }
 
@@ -470,10 +472,83 @@ fn the_teach_gate_names_a_desk_behind_a_wall() {
 
     assert_eq!(
         sim.teach_gate("a", science),
-        "taken",
+        "far",
         "свободна, но за стеной"
     );
-    assert!(!sim.teach("a", "science"), "и фасад отказывает");
+    assert!(
+        !sim.teach("a", "science"),
+        "и фасад отказывает: ждать нечего"
+    );
+    assert!(
+        !sim.is_enrolled("a"),
+        "в очередь к недостижимой парте не пишут"
+    );
+}
+
+// --- Очередь к партам (§12.325) -----------------------------------------
+//
+// «Учить» — это запись, а не посадка: все парты заняты — кот встаёт в очередь
+// и садится сам, когда парта освободится. До §12.325 это был отказ, и игрок
+// помнил, кого ещё прокликать.
+
+/// Свободной парты нет — запись всё равно встаёт, а сядет кот, когда сосед
+/// доучится и отдаст парту.
+#[test]
+fn a_pupil_sent_to_a_taken_desk_waits_in_line() {
+    let (mut sim, science) = sim_with_desk();
+    assert!(sim.teach("b", "science"), "сосед сел");
+    assert_eq!(sim.teach_gate("a", science), "taken");
+
+    assert!(sim.teach("a", "science"), "запись принята");
+    assert!(sim.is_enrolled("a"), "приписка стоит");
+    assert!(!sim.is_studying("a"), "но за парту он не сел");
+
+    sim.tick_n(60);
+    assert_eq!(sim.level_of("b", science), 1, "сосед выучился и встал");
+    assert_eq!(
+        sim.level_of("a", science),
+        1,
+        "и очередь дошла до него сама"
+    );
+    assert!(!sim.is_enrolled("a"), "уровень получен — запись снята");
+}
+
+/// Запись в очередь — конфигурация, а не задача (инвариант 7): кот не
+/// бросает начатую стройку ради парты, которая ещё занята.
+#[test]
+fn a_pupil_in_line_keeps_working() {
+    let (mut sim, _) = sim_with_desk();
+    sim.set_cost(2, 0);
+    assert!(sim.teach("b", "science"));
+    assert!(sim.add_blueprint(2, 1, 2), "чертёж рядом с котом");
+    sim.tick_n(1);
+    assert!(sim.has_assignment("a"), "кот взялся строить");
+
+    assert!(sim.teach("a", "science"), "встал в очередь");
+    assert!(sim.has_assignment("a"), "и стройку не бросил");
+}
+
+/// Запись другому домену снимает идущий урок: иначе `train_skills`, подняв
+/// кота по старому домену, снял бы вместе с уроком и новую запись.
+#[test]
+fn a_new_line_replaces_the_lesson_of_another_domain() {
+    let (mut sim, science) = sim_with_desk();
+    let relay = sim.set_skill("relay", &[20, 100]);
+    sim.set_taught(relay, 1);
+    sim.set_teaches(2, relay);
+    sim.force_tile(5, 1, 2);
+    assert!(sim.teach("a", "science"), "a сел за «Науку»");
+    assert!(
+        sim.teach("b", "relay"),
+        "b занял единственную парту «Связи»"
+    );
+    sim.tick_n(3);
+
+    assert!(sim.teach("a", "relay"), "a встал в очередь к «Связи»");
+    assert!(!sim.is_studying("a"), "урок «Науки» снят");
+    sim.tick_n(80);
+    assert_eq!(sim.level_of("a", relay), 1, "и «Связь» он получил");
+    assert_eq!(sim.level_of("a", science), 0, "а «Науку» нет — её отменили");
 }
 
 /// Сторож инварианта 14: открытые ворота и успех `teach` — одно и то же.
@@ -498,8 +573,9 @@ fn the_teach_gate_is_open_exactly_when_teach_succeeds() {
         setup(&mut sim, science);
         let gate = sim.teach_gate("a", science);
         assert_eq!(gate, want, "ворота назвали не тот отказ");
+        // Принимает команда и свободную парту, и очередь к занятым (§12.325).
         assert_eq!(
-            gate.is_empty(),
+            gate.is_empty() || gate == "taken",
             sim.teach("a", "science"),
             "ворота и фасад разошлись на «{want}»",
         );

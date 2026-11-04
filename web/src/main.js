@@ -503,6 +503,7 @@ onPanelClick(raidWinEl, ".crew-slot", (b) => {
 // Строка списка — приписка, та же команда, что «Носить»/«Снять» в «Личном
 // деле». Замену прежней вещи в слоте делает ядро (`Sim::set_outfit`).
 onPanelClick(raidWinEl, ".slot-pick", pickSlotItem);
+onPanelClick(raidWinEl, ".slot-teach", teachFromSlot);
 // То же в «Личном деле» (§12.297): карточка слота нажимается целиком, а
 // кнопка-якорь списка — внутри неё.
 onPanelClick(dossierEl, ".dos-slot", (card) => {
@@ -510,6 +511,7 @@ onPanelClick(dossierEl, ".dos-slot", (card) => {
   if (b && toggleSlot(b, "dos")) syncDossier();
 });
 onPanelClick(dossierEl, ".slot-pick", pickSlotItem);
+onPanelClick(dossierEl, ".slot-teach", teachFromSlot);
 dossierEl.addEventListener("mousedown", (e) => {
   if (!e.target.closest(".slot-pop, .dos-slot")) closeSlotPop();
 });
@@ -1012,6 +1014,7 @@ worker.onmessage = (e) => {
     soundQuiet = true;
     awaySeen = null;
     knownSeen = -1;
+    teachSeen = null;
     meta = m.meta;
     paletteColors = meta.palette.map((p) => hex(p.color));
     itemColors = (meta.items ?? []).map((i) => hex(i.color));
@@ -3064,6 +3067,7 @@ function renderSnapshot(snap) {
   renderNews(snap);
   soundSquads(snap);
   soundResearch(snap);
+  soundLessons(snap);
   syncDoors(snap);
   syncNewsMarks();
   syncStockWindow();
@@ -8046,6 +8050,9 @@ const KEEPS_CELL = new Set([
   // Снятие с учёбы (§12.147) — там же и по тому же доводу: кнопка стоит в
   // панели парты, и снятое выделение спрятало бы ответ («парта свободна»).
   "unteach",
+  // «Учить» (§12.196, §12.325) — из «Личного дела» и из списка слота в штабе,
+  // модалов поверх карты: довод `setOutfit`.
+  "teach",
   // Приписка снаряжения (§12.268) — из окна «Личное дело», модала поверх
   // карты: гасить под ним выделение значит стирать то, к чему вернутся.
   "setOutfit",
@@ -8120,6 +8127,7 @@ function syncLightStats() {
 let soundQuiet = true;
 let awaySeen = null;
 let knownSeen = -1;
+let teachSeen = null;
 let soundBtn = null;
 let soundBusBtns = [];
 
@@ -8168,6 +8176,22 @@ function soundSquads(snap) {
     }
   }
   awaySeen = now;
+}
+
+// Звонок на урок (§12.326): учитель дошёл до кафедры и начал учить — занятие
+// `teach` у стоящего кота появилось между снимками. Стоящего, а не идущего:
+// звонок — это начало урока, а не решение его начать. Базовую линию снимает
+// первый снимок мира (`teachSeen = null` на `ready`), иначе загрузка партии с
+// идущим уроком прозвенела бы сразу.
+function soundLessons(snap) {
+  const now = new Set(
+    snap.entities
+      .filter((e) => e.job === "teach" && !e.moving)
+      .map((e) => e.id),
+  );
+  if (teachSeen && !soundQuiet && [...now].some((id) => !teachSeen.has(id)))
+    play("bell");
+  teachSeen = now;
 }
 
 // Тема изучена: число `known` у тем выросло между снимками. Базовая линия —
@@ -12540,8 +12564,13 @@ const TEACH_WHY = {
   // `topped` слова здесь не имеет намеренно: кнопки у него нет вовсе, а
   // «дальше только практика» стоит строкой под полоской навыка.
   nodesk: "Парт этого домена на базе нет — постройте класс",
-  taken: "Все парты этого домена заняты или до них не дойти",
+  // `taken` отказом не является (§12.325): все парты заняты, и «Учить»
+  // ставит кота в очередь. Его слово — `TEACH_QUEUE`.
+  far: "До парт этого домена не дойти — нужен проход",
 };
+// Подсказка «Учить», когда свободной парты нет, а очередь есть (§12.325).
+const TEACH_QUEUE =
+  "Все парты заняты — встанет в очередь и сядет сам, когда парта освободится";
 
 // Слово по тегу ворот приписки (§12.268). Считает ядро (`gear::outfit_gate`),
 // вид только называет — как `TEACH_WHY`.
@@ -12551,6 +12580,62 @@ const OUTFIT_WHY = {
   unknown: "База ещё не поняла эту вещь",
   slot: "Слот занят личной вещью — её не снять",
 };
+
+// Отказ, который чинится учёбой, несёт кнопку учёбы (§12.325). Под списком
+// слота — строка на каждый навык, которого коту не хватает хоть на одну вещь
+// этого слота: «Учить: Наука». Навык берётся из `skills` предмета, ворота —
+// тег ядра (`SkillSnap::teach`), то есть та же кнопка «Учить», что в «Личном
+// деле», только стоит она там, где возник вопрос. Строка одна на навык, а не
+// на вещь: две вещи с «Наукой 1» — один урок.
+function slotTeachRows(e, slot, open) {
+  const want = new Map(); // индекс навыка → нужный уровень
+  (meta.items ?? []).forEach((def, i) => {
+    if (def.slot !== slot.id || def.personal || !open[i]) return;
+    if ((e.outfit_gates ?? [])[i] !== "unskilled") return;
+    for (const [id, n] of def.skills ?? new Map()) {
+      const k = (meta.skills ?? []).findIndex((d) => d.id === id);
+      if (k < 0 || (e.skills?.[k]?.level ?? 0) >= n) continue;
+      want.set(k, Math.max(want.get(k) ?? 0, n));
+    }
+  });
+  const rows = [];
+  for (const [k, n] of [...want].sort((a, b) => a[0] - b[0])) {
+    const def = meta.skills[k];
+    const label = esc(def.label || def.id);
+    const s = e.skills?.[k];
+    if (e.study === k) {
+      // Уже записан: строка состояния, а отменяют в «Личном деле».
+      rows.push(
+        `<div class="slot-row lock"><span class="slot-name">${label} ${n}</span>` +
+          `<span class="slot-meta">${atStudy(e) ? "учится за партой" : "в очереди к парте"}</span></div>`,
+      );
+      continue;
+    }
+    // До нужного уровня парта не доведёт — учёбы, которую можно заказать,
+    // нет; причину уже называет строка вещи («нужна Наука 2»).
+    if (!s || s.teach === "topped" || s.teach === "untaught" || !skillOpen(k))
+      continue;
+    const why = TEACH_WHY[s.teach];
+    const tip =
+      why ??
+      (s.teach === "taken"
+        ? TEACH_QUEUE
+        : `Посадить за парту: ${label} ${s.level + 1}, потом вернуться и надеть`);
+    rows.push(
+      `<button class="tool slot-teach${why ? " off" : ""}" data-skill="${esc(def.id)}"` +
+        ` data-tip="${esc(tip)}"><span class="slot-name">Учить: ${label}</span>` +
+        `<span class="slot-meta">нужна ${label} ${n}${s.teach === "taken" ? " · в очередь" : ""}</span></button>`,
+    );
+  }
+  return rows;
+}
+
+// «Учить» из списка слота (§12.325): та же команда, что в «Личном деле».
+// Список не закрываем — строка тем же кадром скажет «в очереди» или «учится».
+function teachFromSlot(b) {
+  if (b.classList.contains("off") || !slotPick) return;
+  sendAction({ type: "teach", id: slotPick.id, skill: b.dataset.skill });
+}
 
 // Отказ `unskilled` (§12.269): какое умение нужно вещи — из `meta`, а не
 // текстом, чтобы слово не разошлось с рулсетом. Набор приезжает `Map`.
@@ -12806,6 +12891,7 @@ function syncSlotPop(host) {
         `<span class="${have ? "" : "bad"}">${have ? `на базе ${have}` : "нет на базе"}</span></span></button>`,
     );
   });
+  rows.push(...slotTeachRows(e, slot, open));
   if (rows.length === (curDef ? 1 : 0)) {
     // Отказ без причины недопустим (§12.53): пустой список называет, почему.
     rows.push(
@@ -13045,8 +13131,12 @@ function syncDossier() {
       btn,
       why ??
         (learning
-          ? "Отменить приписку: за партой он больше не нужен"
-          : `Посадить за парту: доведёт до ${s.desk} очков опыта`),
+          ? atStudy(e)
+            ? "Отменить приписку: за партой он больше не нужен"
+            : "В очереди к парте: сядет, когда освободится. Снять — отменить запись"
+          : s.teach === "taken"
+            ? TEACH_QUEUE
+            : `Посадить за парту: доведёт до ${s.desk} очков опыта`),
     );
   }
 
