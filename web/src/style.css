@@ -3216,6 +3216,34 @@ body.rail-wide #screenbar .door-label {
 .map-site.idle .map-name {
   fill: var(--muted);
 }
+/* Неразведанный участок (§12.320) — силуэт: пунктирный контур и «?», без
+   ореола, знака, имени и курсора-руки. Место и рёбра остаются — карта мерит
+   расстояния, и очагу есть куда ползти. */
+.map-fog-mark {
+  display: none;
+  fill: var(--muted);
+  font-size: 16px;
+  font-weight: 700;
+  text-anchor: middle;
+  pointer-events: none;
+}
+.map-site.fog {
+  cursor: default;
+}
+.map-site.fog .map-fog-mark {
+  display: inline;
+}
+.map-site.fog .map-halo,
+.map-site.fog .map-glyph,
+.map-site.fog .map-name,
+.map-site.fog .map-plate {
+  display: none;
+}
+.map-site.fog .map-ring {
+  stroke: var(--muted);
+  stroke-dasharray: 3 4;
+  opacity: 0.6;
+}
 .map-site.mine .map-ring {
   stroke-dasharray: 4 3;
 }

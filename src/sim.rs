@@ -151,6 +151,10 @@ impl Sim {
         // Вещи едут в снимке своими сущностями (§12.317); сверка тут ничего не
         // меняет, пока снимок цел, и чинит его, если он снят с расхождением.
         crate::things::reconcile_world(&mut sim.world);
+        // Снимок старше §12.320 разведанных участков не везёт (`#[serde(default)]`):
+        // добираем их по самому миру — открытым заказам и очагам. Историю
+        // («был открыт, а теперь закрыт») старый снимок не знает и знать не может.
+        sim.note_sites();
         Ok(sim)
     }
 
@@ -717,6 +721,41 @@ impl Sim {
             }
         }
         self.world.resource_mut::<News>().started = true;
+        self.note_sites();
+    }
+
+    /// Отметить разведанные участки (§12.320) — часть того же наблюдателя,
+    /// что лента: ворота заказа считает фасад, и второго их экземпляра не
+    /// заводим. Разведан участок с заказом, открытым известностью и
+    /// технологией (`raid_is_open`; доверие не спрашивается — строку «нужна
+    /// репутация» игрок обязан увидеть на карте), и участок с очагом вместе с
+    /// соседями: туда очаг поползёт, а прогноз называет место по имени.
+    fn note_sites(&mut self) {
+        let count = self.world.resource::<SiteRules>().0.len();
+        let missions = self.world.resource::<MissionRules>().0.len();
+        let mut found: Vec<usize> = Vec::new();
+        for def in 0..missions {
+            let site = self.world.resource::<MissionRules>().0[def].site;
+            if let Some(site) = site
+                && self.raid_is_open(def)
+            {
+                found.push(site);
+            }
+        }
+        {
+            let rules = self.world.resource::<SiteRules>();
+            let blights = self.world.resource::<Blights>();
+            for i in 0..count {
+                if blights.at(i).is_some() {
+                    found.push(i);
+                    found.extend(rules.0[i].links.iter().copied());
+                }
+            }
+        }
+        let mut met = self.world.resource_mut::<SitesMet>();
+        for site in found {
+            met.mark(site);
+        }
     }
 
     /// Отряд миссии: кто в нём и ушёл ли он уже с базы.
@@ -2228,6 +2267,7 @@ impl Sim {
         // выбранные рулсетом.
         world.insert_resource(Seen(vec![false; rs.items.len()]));
         world.insert_resource(RaidsMet(vec![false; rs.missions.len()]));
+        world.insert_resource(SitesMet(vec![false; rs.sites.len()]));
         world.insert_resource(RecruitsMet(vec![false; rs.recruits.len()]));
         world.insert_resource(Mastery::default());
         // Лента новостей (§12.120). Базовой линии у неё пока нет: снимет её
@@ -2405,7 +2445,7 @@ impl Sim {
                 .collect()
         };
         let schedule = build_schedule();
-        Ok(Sim {
+        let mut sim = Sim {
             world,
             schedule,
             structures,
@@ -2430,7 +2470,12 @@ impl Sim {
             day: rs.day,
             news: rs.news,
             ruleset: fingerprint(ruleset_yaml),
-        })
+        };
+        // Разведанные участки (§12.320) — сразу, по доводу `note_seen` выше:
+        // партия открывается на паузе, и карта штаба до первого тика
+        // показала бы одни силуэты.
+        sim.note_sites();
+        Ok(sim)
     }
 
     /// Снять снимок партии (§12.45). Наружу — JSON-текст: главный поток кладёт
@@ -7115,6 +7160,7 @@ impl Sim {
             let rules = self.world.resource::<SiteRules>();
             let brules = self.world.resource::<BlightRules>();
             let blights = self.world.resource::<Blights>();
+            let met = self.world.resource::<SitesMet>();
             rules
                 .0
                 .iter()
@@ -7123,6 +7169,7 @@ impl Sim {
                     let blight = blights.at(i);
                     let step = next_step(brules, rules, blights, i);
                     SiteSnap {
+                        met: met.met(i),
                         links: site.links.clone(),
                         blight: blight.map(|b| b.def),
                         stage: blight.map_or(0, |b| b.stage),

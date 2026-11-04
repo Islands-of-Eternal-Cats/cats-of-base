@@ -1241,6 +1241,31 @@ impl RecruitsMet {
     }
 }
 
+/// Участки внешнего мира, разведанные хоть раз (§12.320). Дословно `RaidsMet`:
+/// монотонна, как `Seen`, отмечает её наблюдатель `note_news`, едет в снимок.
+///
+/// Разведан участок, на котором открылся заказ (известностью и технологией —
+/// доверие не спрашивается: строку «нужна репутация» игрок обязан увидеть), или
+/// до которого дотянулся очаг — сам он **и его соседи**: туда очаг поползёт, и
+/// прогноз «расползётся на …» не вправе называть место, которого игрок не знает.
+/// Неразведанный участок вид рисует силуэтом без имени и знака.
+#[derive(Resource, Default)]
+pub(crate) struct SitesMet(pub(crate) Vec<bool>);
+
+impl SitesMet {
+    pub(crate) fn met(&self, site: usize) -> bool {
+        self.0.get(site).copied().unwrap_or(false)
+    }
+
+    /// Отметить. Растёт, если палитра длиннее, — как `RaidsMet::mark`.
+    pub(crate) fn mark(&mut self, site: usize) {
+        if self.0.len() <= site {
+            self.0.resize(site + 1, false);
+        }
+        self.0[site] = true;
+    }
+}
+
 impl RaidsMet {
     /// Был ли заказ открыт целиком хоть раз.
     pub(crate) fn met(&self, def: usize) -> bool {

@@ -161,6 +161,7 @@ fn sim_from(rows: &[&str]) -> Sim {
     // Пустая она ровно один тик — `note_seen` отметит всё, что схема положила.
     world.insert_resource(Seen::default());
     world.insert_resource(RaidsMet::default());
+    world.insert_resource(SitesMet::default());
     world.insert_resource(RecruitsMet::default());
     world.insert_resource(Mastery::default());
     world.insert_resource(PerkRules::default());
@@ -2478,6 +2479,11 @@ impl Sim {
     }
 
     /// Что на участке: `(порода, ступень)`; `None` — чисто.
+    /// Разведан ли участок (§12.320) — ровно то, что уходит в `SiteSnap::met`.
+    fn site_met(&self, site: usize) -> bool {
+        self.world.resource::<SitesMet>().met(site)
+    }
+
     fn blight_at(&self, site: usize) -> Option<(usize, i32)> {
         self.world
             .resource::<Blights>()

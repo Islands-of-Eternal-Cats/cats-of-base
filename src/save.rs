@@ -175,6 +175,9 @@ pub(crate) const SAVED: &[&str] = &[
     // Заказы, открытые хоть раз (§12.246): без этого загруженная партия
     // спрятала бы в строку «нужна репутация» заказ, который игрок уже видел.
     "RaidsMet",
+    // Разведанные участки (§12.320): без этого загруженная партия снова
+    // спрятала бы участок, чьи заказы с тех пор закрылись.
+    "SitesMet",
     "RecruitsMet",
     // До какого уровня дорастали коты базы (§12.257): без этого загруженная
     // партия закрыла бы парту, если учёный сейчас в плену.
@@ -357,6 +360,10 @@ pub(crate) struct StateDto {
     /// Заказы, открытые целиком хоть раз (§12.246). Позиционно по `missions:`.
     #[serde(default)]
     pub(crate) raids_met: Vec<bool>,
+    /// Разведанные участки (§12.320). Позиционно по `sites:`. `default` тут
+    /// безопасен по доводу `seen`: `load_from` добирает пустую линию по миру.
+    #[serde(default)]
+    pub(crate) sites_met: Vec<bool>,
     /// Кандидаты, открытые целиком хоть раз (§12.272). Позиционно по `recruits:`.
     #[serde(default)]
     pub(crate) recruits_met: Vec<bool>,
@@ -970,6 +977,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
             techs: world.resource::<Techs>().0.clone(),
             seen: world.resource::<Seen>().0.clone(),
             raids_met: world.resource::<RaidsMet>().0.clone(),
+            sites_met: world.resource::<SitesMet>().0.clone(),
             recruits_met: world.resource::<RecruitsMet>().0.clone(),
             mastery: world.resource::<Mastery>().0.clone(),
             chronicle: chronicle.0.iter().map(|h| (h.def, h.ready)).collect(),
@@ -1156,6 +1164,14 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
         for (def, &m) in s.raids_met.iter().enumerate() {
             if m {
                 met.mark(def);
+            }
+        }
+    }
+    {
+        let mut met = world.resource_mut::<SitesMet>();
+        for (site, &m) in s.sites_met.iter().enumerate() {
+            if m {
+                met.mark(site);
             }
         }
     }

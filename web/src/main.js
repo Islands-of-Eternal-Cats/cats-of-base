@@ -10171,6 +10171,16 @@ function syncRaidMap() {
   raidUi.marks.forEach((g, i) => {
     const st = sites[i] ?? {};
     const lit = st.blight != null;
+    // Туман (§12.320): участок, о котором база ещё ничего не знает, стоит
+    // силуэтом — место и рёбра есть, имени, знака и дороги нет. Разведку
+    // помнит ядро (`SiteSnap::met`, монотонно), вид её не выводит.
+    const fog = st.met === false;
+    if (g.classList.contains("fog") !== fog) {
+      g.classList.toggle("fog", fog);
+      g.ownerSVGElement
+        ?.querySelector(`.map-road[data-site="${i}"]`)
+        ?.style.setProperty("display", fog ? "none" : "");
+    }
     g.classList.toggle("on", i === pick);
     g.classList.toggle("hot", lit);
     g.classList.toggle("mine", going.has(i));
@@ -15157,7 +15167,7 @@ function buildSiteGraph(holder) {
   const roads = all
     .map((_, i) =>
       roadLines[i].length
-        ? `<polyline class="map-road" points="${roadLines[i].map((p) => p.map((v) => v.toFixed(1)).join(",")).join(" ")}"/>`
+        ? `<polyline class="map-road" data-site="${i}" points="${roadLines[i].map((p) => p.map((v) => v.toFixed(1)).join(",")).join(" ")}"/>`
         : "",
     )
     .join("");
@@ -15230,6 +15240,8 @@ function buildSiteGraph(holder) {
           `<g class="map-count" transform="translate(${SITE_R * 0.8},${SITE_R * 0.62})" style="display:none">` +
           `<circle r="9"/><text class="map-stage" y="4"></text></g>` +
           siteName(s.label || s.id, SITE_R + 22) +
+          // Неразведанный участок (§12.320) — знак вопроса вместо глифа и имени.
+          `<text class="map-fog-mark" y="6">?</text>` +
           `<g class="map-claim squad-tag" transform="translate(${SITE_R * 0.95},${-SITE_R * 0.95})" style="display:none">` +
           `<rect x="-9" y="-9" width="18" height="18" rx="4"/><text y="4"></text></g>` +
           `<g class="map-rule rule-tag" transform="translate(${-SITE_R * 0.95},${-SITE_R * 0.95})" style="display:none">` +
@@ -15266,6 +15278,9 @@ function buildSiteGraph(holder) {
       raidWinAt = { x, y };
     };
     g.onmousedown = () => {
+      // Неразведанный участок не выбирается (§12.320): колонке нечего о нём
+      // сказать, а подпись под картой назвала бы его по имени.
+      if (g.classList.contains("fog")) return;
       mapPick = i;
       readNews(
         "raid",

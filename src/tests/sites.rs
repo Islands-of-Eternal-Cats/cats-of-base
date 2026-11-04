@@ -266,6 +266,72 @@ fn a_placeless_order_is_never_closed_by_the_map() {
     assert!(sim.launch(m, squad(&["a", "b"])), "заявка принята");
 }
 
+// --- разведка (§12.320) ----------------------------------------------------
+
+/// Участок разведан, когда на нём открылся заказ; участок без заказов — нет.
+#[test]
+fn a_site_is_found_by_its_first_open_order() {
+    let (mut sim, m) = sim_with_gate(&["#######", "#a...b#", "#######"], (3, 1), 2, 10);
+    let dump = sim.set_site("Свалка", (0, 0), &[]);
+    let empty = sim.set_site("Шахты", (1, 0), &[dump]);
+    sim.set_mission_site(m, dump);
+
+    sim.tick_n(1);
+    assert!(sim.site_met(dump), "заказ открыт — участок разведан");
+    assert!(!sim.site_met(empty), "заказов нет — и знать о нём нечего");
+}
+
+/// Заказ, до которого база не доросла, участок не открывает: на карте он
+/// назвал бы место раньше, чем там появилось дело.
+#[test]
+fn a_locked_order_does_not_reveal_its_site() {
+    let (mut sim, m) = sim_with_gate(&["#######", "#a...b#", "#######"], (3, 1), 2, 10);
+    let dump = sim.set_site("Свалка", (0, 0), &[]);
+    sim.set_mission_site(m, dump);
+    sim.set_mission_fame(m, 0, 20);
+
+    sim.tick_n(1);
+    assert!(!sim.site_met(dump), "известности мало — участок в тумане");
+    sim.set_fame(20);
+    sim.tick_n(1);
+    assert!(sim.site_met(dump), "доросли — разведан");
+}
+
+/// Очаг открывает и свой участок, и соседей — туда он поползёт, и прогноз
+/// называет их по имени. Дальше соседей туман стоит.
+#[test]
+fn a_blight_reveals_its_site_and_neighbours() {
+    let mut sim = sim_from(&["#####", "#a..#", "#####"]);
+    let kind = sim.set_blight_kind(0, 1, false, 0);
+    let a = sim.set_site("А", (0, 0), &[]);
+    let b = sim.set_site("Б", (1, 0), &[a]);
+    let c = sim.set_site("В", (2, 0), &[b]);
+    sim.seed_blight(a, kind);
+
+    sim.tick_n(1);
+    assert!(sim.site_met(a), "горящий участок разведан");
+    assert!(sim.site_met(b), "и сосед, куда очаг поползёт");
+    assert!(!sim.site_met(c), "а сосед соседа — нет");
+}
+
+/// Разведанное не забывается: очаг снят, заказов на участке нет, а участок
+/// остаётся на карте с именем.
+#[test]
+fn a_found_site_stays_found() {
+    let (mut sim, m) = sim_with_gate(&["#######", "#a...b#", "#######"], (3, 1), 2, 10);
+    let kind = sim.set_blight_kind(0, 2, false, 0);
+    let site = sim.set_site("Свалка", (0, 0), &[]);
+    sim.set_mission_cleanses(m, kind);
+    sim.seed_blight(site, kind);
+    sim.tick_n(1);
+    assert!(sim.site_met(site));
+
+    assert!(sim.launch_to(m, squad(&["a", "b"]), site));
+    sim.tick_n(30);
+    assert_eq!(sim.blight_at(site), None, "очаг снят");
+    assert!(sim.site_met(site), "а участок по-прежнему разведан");
+}
+
 // --- зачистка --------------------------------------------------------------
 
 /// Заказ на зачистку открыт там, где очаг, и нигде больше.
@@ -994,4 +1060,44 @@ fn an_unnamed_cleanup_skips_a_blight_already_taken() {
     sim.tick_n(60);
     assert_eq!(sim.blight_at(a), None);
     assert_eq!(sim.blight_at(b), None);
+}
+
+/// На старте боевой партии разведаны только участки с открытыми заказами:
+/// шахты и отстойник заказов не имеют вовсе, теплицы ждут технологии (§12.320).
+#[test]
+fn the_shipped_ruleset_starts_with_unexplored_sites() {
+    let rs = shipped();
+    let at = |id: &str| rs.sites.iter().position(|s| s.id == id).expect(id);
+    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    assert!(
+        sim.site_met(at("junkyard")),
+        "свалка с заказом разведана с нулевого тика"
+    );
+    for id in ["mines", "sump", "greenhouse"] {
+        assert!(!sim.site_met(at(id)), "«{id}» на старте в тумане");
+    }
+}
+
+/// Разведка переживает снимок, а снимок старше неё добирается по миру.
+#[test]
+fn explored_sites_survive_a_save() {
+    let core = include_str!("../../assets/rulesets/core.yaml");
+    let rs = shipped();
+    let mines = rs.sites.iter().position(|s| s.id == "mines").unwrap();
+    let dump = rs.sites.iter().position(|s| s.id == "junkyard").unwrap();
+    let mut live = Sim::new(core).expect("рулсет");
+    live.world.resource_mut::<SitesMet>().mark(mines);
+
+    let json = live.save().expect("снимок");
+    let loaded = Sim::load_from(core, &json).expect("загрузка");
+    assert!(loaded.site_met(mines), "разведанное помнится");
+
+    let mut old: serde_json::Value = serde_json::from_str(&json).unwrap();
+    old["state"].as_object_mut().unwrap().remove("sites_met");
+    let old = Sim::load_from(core, &old.to_string()).expect("старый снимок грузится");
+    assert!(
+        old.site_met(dump),
+        "участок с открытым заказом добран по миру"
+    );
+    assert!(!old.site_met(mines), "а историю старый снимок не знает");
 }
