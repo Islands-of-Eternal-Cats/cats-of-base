@@ -1348,7 +1348,9 @@ pub(crate) fn run_missions(
                 && blights.at(site).is_some_and(|b| b.def == kind)
             {
                 if out.share >= 100 {
-                    blights.clear(site);
+                    // Земля выжжена на круг роста этой породы (§12.323).
+                    let ward = blight_rules.0.get(kind).map_or(0, |b| b.grows);
+                    blights.scorch(site, ward);
                 } else {
                     blights.knock(site);
                 }

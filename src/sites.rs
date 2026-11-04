@@ -52,7 +52,11 @@ fn free_neighbour(sites: &SiteRules, blights: &Blights, site: usize) -> Option<u
         .links
         .iter()
         .copied()
-        .find(|&n| blights.at(n).is_none())
+        .filter(|&n| blights.at(n).is_none())
+        // Выжженный сосед (§12.323) годится, но позже: очаг ждёт, пока земля
+        // остынет. Свободный сейчас — первым по порядку `links`, иначе тот, что
+        // остынет раньше; прогноз называет его и срок честно.
+        .min_by_key(|&n| blights.ward_at(n))
 }
 
 /// Что будет на следующем шаге и через сколько тиков.
@@ -71,17 +75,19 @@ pub(crate) fn next_step(
     if rule.grows == 0 {
         return None;
     }
-    let step = if blight.stage < rules.top_stage(blight.def) {
-        Step::Grow(blight.stage + 1)
+    let left = rule.grows.saturating_sub(blight.age);
+    let (step, left) = if blight.stage < rules.top_stage(blight.def) {
+        (Step::Grow(blight.stage + 1), left)
     } else if rule.spreads {
         match free_neighbour(sites, blights, site) {
-            Some(n) => Step::Spread(n),
-            None => Step::Held,
+            // На выжженную землю — не раньше, чем она остынет (§12.323).
+            Some(n) => (Step::Spread(n), left.max(blights.ward_at(n))),
+            None => (Step::Held, left),
         }
     } else {
-        Step::Held
+        (Step::Held, left)
     };
-    Some((step, rule.grows.saturating_sub(blight.age)))
+    Some((step, left))
 }
 
 /// Растит и расползает очаги — единственная система модуля.
@@ -103,6 +109,12 @@ pub(crate) fn grow_blights(
     sites: Res<SiteRules>,
     mut blights: ResMut<Blights>,
 ) {
+    // Выжженная земля остывает первой (§12.323): очаг, ждавший на пороге,
+    // садится в тот тик, когда счёт дошёл до нуля, — как с соседом, которого
+    // освободили (§12.198).
+    for ward in &mut blights.1 {
+        *ward = ward.saturating_sub(1);
+    }
     for site in 0..blights.0.len() {
         let Some(mut blight) = blights.at(site) else {
             continue;
@@ -126,7 +138,7 @@ pub(crate) fn grow_blights(
                 blight.stage = stage;
                 blight.age = 0;
             }
-            Some(Step::Spread(to)) => {
+            Some(Step::Spread(to)) if blights.ward_at(to) == 0 => {
                 blights.seed(to, blight.def);
                 blight.age = 0;
             }

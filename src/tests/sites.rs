@@ -1101,3 +1101,111 @@ fn explored_sites_survive_a_save() {
     );
     assert!(!old.site_met(mines), "а историю старый снимок не знает");
 }
+
+// --- выжженная земля (§12.323) ----------------------------------------------
+
+/// Отправить зачистку на участок и дождаться конца работы — тика, когда очаг
+/// сняли.
+fn cleanse_until_back(sim: &mut Sim, m: usize, site: usize) {
+    assert!(sim.launch_to(m, squad(&["a", "b"]), site));
+    let mut guard = 0;
+    while sim.mission_phase() != Some("back") {
+        sim.tick_n(1);
+        guard += 1;
+        assert!(guard < 200, "стадия «домой» так и не настала");
+    }
+}
+
+/// Сосед на пределе ждал на пороге и садился на очищенный участок тем же
+/// тиком — полная зачистка на заражённой карте не значила ничего. Выжженный
+/// участок держится круг роста той породы, что с него сняли.
+#[test]
+fn a_scorched_site_keeps_a_ripe_neighbour_out_for_one_growth() {
+    let (mut sim, m) = sim_with_gate(&["#######", "#a...b#", "#######"], (3, 1), 2, 10);
+    let kind = sim.set_blight_kind(30, 1, true, 0);
+    let dump = sim.set_site("Свалка", (0, 0), &[]);
+    let mines = sim.set_site("Шахты", (1, 0), &[dump]);
+    sim.set_mission_cleanses(m, kind);
+    sim.seed_blight(dump, kind);
+    sim.seed_blight(mines, kind);
+    // Шахтам ползти некуда — счётчик стоит на пороге.
+    sim.tick_n(40);
+    assert_eq!(sim.site_step(mines), Some((Step::Held, 0)));
+
+    cleanse_until_back(&mut sim, m, dump);
+    assert_eq!(sim.blight_at(dump), None, "выжгли целиком");
+    let ward = sim.world.resource::<Blights>().ward_at(dump);
+    assert!(ward > 0 && ward < 30, "земля выжжена на круг роста: {ward}");
+    assert_eq!(
+        sim.site_step(mines),
+        Some((Step::Spread(dump), ward)),
+        "прогноз называет и куда, и когда — когда земля остынет"
+    );
+
+    sim.tick_n(ward as usize - 1);
+    assert_eq!(sim.blight_at(dump), None, "пока выжжено — чисто");
+    sim.tick_n(1);
+    assert_eq!(
+        sim.blight_at(dump),
+        Some((kind, 1)),
+        "остыла — очаг вернулся тем же тиком"
+    );
+}
+
+/// Выжженный сосед не держит очаг, если рядом есть свободный: тот берётся
+/// первым, а выжженный — только когда остальные заняты.
+#[test]
+fn a_blight_prefers_open_ground_to_scorched_ground() {
+    let mut sim = sim_from(&["#####", "#a..#", "#####"]);
+    let kind = sim.set_blight_kind(10, 1, true, 0);
+    let a = sim.set_site("Свалка", (0, 0), &[]);
+    let b = sim.set_site("Шахты", (1, 0), &[a]);
+    let c = sim.set_site("Отстойник", (2, 0), &[a]);
+    sim.seed_blight(a, kind);
+    sim.world.resource_mut::<Blights>().scorch(b, 100);
+
+    assert_eq!(
+        sim.site_step(a),
+        Some((Step::Spread(c), 10)),
+        "в обход выжженного"
+    );
+    sim.tick_n(10);
+    assert_eq!(sim.blight_at(c), Some((kind, 1)));
+    assert_eq!(sim.blight_at(b), None, "выжженный не тронут");
+}
+
+/// Неполная зачистка землю не выжигает: очаг там остался, выжигать нечего.
+#[test]
+fn a_partial_cleanup_scorches_nothing() {
+    let (mut sim, m) = sim_with_gate(&["#######", "#a...b#", "#######"], (3, 1), 2, 10);
+    // Ступень тяжелее отряда, но не вдвое — как в `a_partial_cleanup_knocks_one_stage_off`.
+    let kind = sim.set_blight_kind(0, 5, false, 1);
+    let site = sim.set_site("Свалка", (0, 0), &[]);
+    sim.set_mission_cleanses(m, kind);
+    sim.seed_blight(site, kind);
+    if let Some(slot) = sim.world.resource_mut::<Blights>().0.get_mut(site)
+        && let Some(b) = slot.as_mut()
+    {
+        b.stage = 4;
+    }
+    cleanse_until_back(&mut sim, m, site);
+    assert_eq!(sim.blight_at(site), Some((kind, 3)), "ступень сбита");
+    assert_eq!(sim.world.resource::<Blights>().ward_at(site), 0, "и только");
+}
+
+/// Выжженная земля переживает снимок, а снимок старше неё грузится без неё.
+#[test]
+fn scorched_ground_survives_a_save() {
+    let core = include_str!("../../assets/rulesets/core.yaml");
+    let mut live = Sim::new(core).expect("рулсет");
+    live.world.resource_mut::<Blights>().scorch(2, 321);
+
+    let json = live.save().expect("снимок");
+    let loaded = Sim::load_from(core, &json).expect("загрузка");
+    assert_eq!(loaded.world.resource::<Blights>().ward_at(2), 321);
+
+    let mut old: serde_json::Value = serde_json::from_str(&json).unwrap();
+    old["state"].as_object_mut().unwrap().remove("wards");
+    let old = Sim::load_from(core, &old.to_string()).expect("старый снимок грузится");
+    assert_eq!(old.world.resource::<Blights>().ward_at(2), 0);
+}

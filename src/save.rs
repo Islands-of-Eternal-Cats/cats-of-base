@@ -327,6 +327,11 @@ pub(crate) struct StateDto {
     /// снимок с другим рулсетом сюда не доедет (`fingerprint`).
     #[serde(default)]
     pub(crate) blights: Vec<Option<(usize, i32, u64)>>,
+    /// Выжженная земля (§12.323): сколько тиков ещё участок не принимает
+    /// расползание. Позиционно по `sites:`. `default` безопасен: у снимка до
+    /// §12.323 выжженных участков не было, и ноль — ровно его мир.
+    #[serde(default)]
+    pub(crate) wards: Vec<u64>,
     /// Правило излишка: предмет, **куда** его девать и сколько штук база
     /// придерживает (§12.87, §12.88, §12.115).
     ///
@@ -957,6 +962,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                 .iter()
                 .map(|slot| slot.map(|b| (b.def, b.stage, b.age)))
                 .collect(),
+            wards: world.resource::<Blights>().1.clone(),
             selling: world
                 .resource::<Selling>()
                 .0
@@ -1137,6 +1143,14 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
         };
         if let Some(cell) = world.resource_mut::<Blights>().0.get_mut(site) {
             *cell = Some(Blight { def, stage, age });
+        }
+    }
+    {
+        let mut blights = world.resource_mut::<Blights>();
+        for (site, &ward) in s.wards.iter().enumerate() {
+            if let Some(cell) = blights.1.get_mut(site) {
+                *cell = ward;
+            }
         }
     }
     world.resource_mut::<Selling>().0 = s

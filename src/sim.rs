@@ -2106,7 +2106,7 @@ impl Sim {
         ));
         // Стартовый посев (§12.198): мир не обязан начинаться чистым, ровно как
         // база не начинается голым полом (`build:`).
-        let mut blights = Blights(vec![None; rs.sites.len()]);
+        let mut blights = Blights(vec![None; rs.sites.len()], vec![0; rs.sites.len()]);
         for (i, s) in rs.sites.iter().enumerate() {
             if let Some(def) = blight_index(&s.blight) {
                 blights.seed(i, def);
@@ -7185,6 +7185,7 @@ impl Sim {
                             Some(Step::Spread(to)) => Some(to),
                             _ => None,
                         },
+                        ward: blights.ward_at(i),
                     }
                 })
                 .collect()
