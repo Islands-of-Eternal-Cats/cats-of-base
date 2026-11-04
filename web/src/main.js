@@ -4265,7 +4265,9 @@ function renderCellPanel(snap) {
   if (piles.length) {
     const chips = piles
       .map(
-        (s) => `${itemGlyph(s.item)}` + `${esc(itemLabel(s.item))} ${s.count}`,
+        (s) =>
+          `${itemGlyph(s.item)}` +
+          `${esc(itemLabel(s.item))} ${s.count}${pieceState(s)}`,
       )
       .join(" · ");
     parts.push(`<div class="cat-sub">${chips}</div>`);
@@ -12242,6 +12244,18 @@ function skillNeedWhy(def) {
   return `Не умеет им пользоваться: нужна ${parts.join(", ")}`;
 }
 
+// Состояние вещей кучи (§12.317): у каждой штуки свои выходы и заряды, и
+// «Комбинезон 3» не говорит, что один из трёх сношен до последнего выхода.
+// Порядок приходит из ядра — от свежей к потраченной. У ресурса списков нет.
+function pieceState(s) {
+  const parts = [];
+  if ((s.wears ?? []).length)
+    parts.push(`выходы ${s.wears.join("/")}`);
+  if ((s.charges ?? []).length)
+    parts.push(`заряды ${s.charges.join("/")}`);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+
 // Сколько выходов осталось надетой вещи; ноль — не изнашивается.
 function wearLeft(e, item) {
   const k = (e.gear ?? []).indexOf(item);
@@ -12871,6 +12885,12 @@ function wikiFacts(key) {
     if (entry.nutrition > 0) uses.push("идёт в еду");
     if (entry.mends > 0) uses.push("ускоряет лечение");
     add("Годен", uses.join(" · "));
+    // Состояние штуки (§12.317): сколько выходов у новой вещи и на сколько
+    // лечений хватает аптечки — спрошено у рулсета, а не переписано в текст.
+    if (entry.wear > 0)
+      add("Выдерживает", plural(entry.wear, "выход", "выхода", "выходов"));
+    if (entry.uses > 0)
+      add("Заряды", plural(entry.uses, "применение", "применения", "применений"));
     // Кто вещь носит (§12.269): то же `skills`, что держит ворота приписки.
     add(
       "Носит",
