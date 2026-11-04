@@ -2107,7 +2107,7 @@ note_seen → check_goals`.
 
 ## Тесты
 
-1033 теста живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `jobs` · `demolition` ·
+1034 теста живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `jobs` · `demolition` ·
 `hauling` · `tidying` · `skills` · `stats` · `study` · `research` · `needs` · `news` · `food` · `health` · `items` · `layers` · `missions` · `muster` ·
 `captivity` · `fame` · `factions` · `trade` · `terrain` · `timeline` · `gear` · `crafting` · `crowd` · `panel` ·
 `goals` · `hand` · `record` · `relay` · `sampling` · `save` · `seen` · `self_study` · `sites` · `structures` · `things` · `tutoring` · `bins` · `tech_tree` · `wiki`); общие хелперы и сборка мира —

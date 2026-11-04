@@ -603,3 +603,43 @@ fn a_raid_names_the_recruits_it_would_drive_away() {
     sim.set_standing(faction, 10);
     assert!(sim.raid_drops(hit).is_empty(), "закрытого закрывать нечем");
 }
+
+/// Заказ под очагом из штаба спрятан (§12.242), значит и лента о нём молчит,
+/// пока горит, — а заговаривает, когда место выжгли (§12.324). На живой
+/// партии известность доросла до «Логова рейдеров», сидящего под очагом, и
+/// лента объявила заказ, которого в колонке не было.
+#[test]
+fn a_raid_under_a_blight_opens_only_when_its_site_is_clear() {
+    let mut sim = sim_bare();
+    let kind = sim.set_blight_kind(0, 1, false, 0);
+    let lair = sim.set_site("Логово", (0, 0), &[]);
+    let job = sim.set_mission(1, 10, &[]);
+    sim.set_mission_site(job, lair);
+    sim.set_mission_fame(job, 0, 60);
+    sim.seed_blight(lair, kind);
+    sim.tick_n(2);
+
+    sim.set_fame(60);
+    sim.tick_n(1);
+    assert!(
+        sim.news().is_empty(),
+        "место горит — заказа нет: {:?}",
+        sim.news()
+    );
+
+    sim.world.resource_mut::<Blights>().clear(lair);
+    sim.tick_n(1);
+    assert_eq!(
+        sim.news(),
+        vec![(NewsKind::Raid, job, true)],
+        "выжгли — открылся"
+    );
+
+    sim.seed_blight(lair, kind);
+    sim.tick_n(1);
+    assert_eq!(
+        sim.news().last(),
+        Some(&(NewsKind::Raid, job, false)),
+        "очаг вернулся — карточка пропала, и лента это говорит"
+    );
+}
