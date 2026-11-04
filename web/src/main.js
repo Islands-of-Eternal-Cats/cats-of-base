@@ -16456,7 +16456,7 @@ function ruleRow(node) {
   );
 }
 
-// Дверь рейки (§12.311): только глиф. Имя едет в `data-door`, его первой
+// Дверь рейки (§12.311, §12.316): глиф и подпись (её прячет узкая рейка). Имя едет в `data-door`, его первой
 // строкой показывает подсказка, и причина отказа остаётся под ним словом.
 function doorHtml(key, name) {
   return `<svg class="glyph door-glyph" data-door="${name}" aria-label="${name}"><use href="#g-door-${key}"/></svg><span class="door-label">${name}</span>`;
