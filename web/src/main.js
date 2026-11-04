@@ -10232,6 +10232,10 @@ setTimeout(() => terrainTexture(SITE_LAND, SITE_LAND), 0);
 // и изгибы дороги. Собирается вместе с графом (`buildSiteGraph`), читается
 // значками отрядов (`syncRaidTrips`).
 let siteTrails = [];
+// Путь только до кружка участка, без дороги (§12.322): по нему идёт заказ,
+// пришедший на участок извне, — зачистка очага работает на месте, а не ведёт
+// караван.
+let siteApproaches = [];
 
 // Какой участок выбран прямо сейчас: названный игроком или, пока он не называл,
 // самый запущенный очаг. Одно выражение на карту, на кнопку заказа и на
@@ -10347,7 +10351,11 @@ function syncRaidTrips() {
   if (!layer) return;
   const seen = new Set();
   missionsOut.forEach((m) => {
-    const trail = siteTrails[m.site];
+    // Вдоль дороги участка идёт только **его собственный** заказ — тот, чью
+    // дорогу пишет участок (`take_roads_from_sites`). Зачистка очага (§12.198)
+    // приходит на участок со своей дорогой и работает в кружке (§12.322).
+    const walks = (meta?.missions ?? [])[m.def]?.site === meta?.sites?.[m.site]?.id;
+    const trail = (walks ? siteTrails : siteApproaches)[m.site];
     // Пунктир пути виден уже на сборе: цель занята с заявки, а не с ухода.
     if (m.site < 0 || !trail) return;
     const key = `${m.x},${m.y}`;
@@ -10381,7 +10389,7 @@ function syncRaidTrips() {
     // там значок остаётся.
     // Отряд ещё на базе (собирается или только вышел) не рисуется тоже: где он,
     // и так ясно, а цель уже названа плашкой у кружка и пунктиром пути.
-    const there = m.way >= 1000 && !(meta?.sites?.[m.site]?.road ?? []).length;
+    const there = m.way >= 1000 && !(walks && (meta?.sites?.[m.site]?.road ?? []).length);
     const show = there || !(m.way > 0) ? "none" : "";
     if (mark.style.display !== show) mark.style.display = show;
     const what = (meta?.missions ?? [])[m.def]?.label ?? "";
@@ -15430,7 +15438,8 @@ function buildSiteGraph(holder) {
   const roadLines = all.map((s) =>
     (s.road ?? []).length ? smoothTrail([s.at ?? [0, 0], ...s.road].map(P)) : [],
   );
-  siteTrails = all.map((s, i) => [...bowedTrail(P(home), P(s.at ?? [0, 0])), ...roadLines[i].slice(1)]);
+  siteApproaches = all.map((s) => bowedTrail(P(home), P(s.at ?? [0, 0])));
+  siteTrails = all.map((_, i) => [...siteApproaches[i], ...roadLines[i].slice(1)]);
   const [hx, hy] = P(home);
   const roads = all
     .map((_, i) =>
