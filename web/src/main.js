@@ -565,9 +565,19 @@ onPanelClick(raidWinEl, ".raid-pause", (b) =>
 // Переключение узла внутри окна — осмотр, а не команда: `sendAction` тут не при
 // чём. Отряды листаются на месте, чтобы «перекинуть кота с узла на узел» не
 // требовало закрывать окно и искать вторую рацию на карте.
+//
+// Вкладка заодно выбирает на карте участок, где у отряда дело (§12.318):
+// иначе после щелчка по вкладке колонка заказов показывает чужой участок, и
+// карточку идущей вылазки приходится искать кружком вручную. Выбор при этом
+// становится выбором игрока (`mapPick`), как клик по кружку.
 onPanelClick(raidWinEl, ".raidwin-tab", (b) => {
-  raidWinAt = { x: Number(b.dataset.x), y: Number(b.dataset.y) };
+  const x = Number(b.dataset.x);
+  const y = Number(b.dataset.y);
+  raidWinAt = { x, y };
+  const at = nodeSite(x, y);
+  if (at >= 0) mapPick = at;
   renderRaidWindow();
+  if (at >= 0) scrollToSiteCard(at);
 });
 onPanelClick(raidWinEl, ".raidwin-close", () => closeRaidWindow());
 // Клик по затемнению — тот же выход, что и Escape: окно модальное, и промах
@@ -10029,6 +10039,19 @@ function siteOfRaid(i) {
   if (m.site) return siteIndexOf(m.site);
   if (m.cleanses) return (raids[i]?.targets ?? [])[0] ?? -1;
   return -1;
+}
+
+// Участок, где у отряда дело (§12.318): цель идущей вылазки — она заморожена в
+// заявке (§12.22) и едет из ядра (`MissionSnap::site`), — иначе участок заказа
+// его правила автовылазки (§12.294) — тем же выражением, каким правило метится
+// на карте: у зачистки цель выбирают при отправке (§12.199), и заранее места
+// у неё нет. `-1` — дела нет, и выбор на карте не трогают.
+function nodeSite(x, y) {
+  const m = missionsOut.find((o) => o.x === x && o.y === y);
+  if (m) return m.site ?? -1;
+  const auto = nodeAt(x, y)?.auto ?? -1;
+  if (auto < 0) return -1;
+  return siteIndexOf(meta?.missions?.[auto]?.site) ?? -1;
 }
 
 // Точка на ломаной на доле `f` её длины (0…1): там стоит значок отряда.
