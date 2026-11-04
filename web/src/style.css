@@ -3206,6 +3206,16 @@ body.rail-wide #screenbar .door-label {
 .rule-tag.paused {
   opacity: 0.45;
 }
+/* Участок без дела (§12.319) — тусклым: прозрачностью, а не `filter`, по
+   доводу `.map-halo`. Выбранный держит рамку выбора в полную силу. */
+.map-site.idle .map-ring,
+.map-site.idle .map-glyph,
+.map-site.idle:not(.on) .map-halo {
+  opacity: 0.35;
+}
+.map-site.idle .map-name {
+  fill: var(--muted);
+}
 .map-site.mine .map-ring {
   stroke-dasharray: 4 3;
 }
