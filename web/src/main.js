@@ -15648,10 +15648,24 @@ function buildSiteGraph(holder) {
       const [x, y] = list[(list.indexOf(now) + 1) % list.length].split(",").map(Number);
       raidWinAt = { x, y };
     };
-    g.onmousedown = () => {
+    g.onmousedown = (e) => {
       // Неразведанный участок не выбирается (§12.320): колонке нечего о нём
       // сказать, а подпись под картой назвала бы его по имени.
       if (g.classList.contains("fog")) return;
+      // Клик по самому участку, куда ходит правило, тоже ведёт к его отряду
+      // (§12.327): плашка «↻N» мала, а смотрят на участок ради заказа, у
+      // которого отряд уже есть. Открыт один из отрядов правила — остаёмся на
+      // нём; листать по кругу — дело плашки, её клик сюда только всплывает.
+      if (!e.target.closest(".map-rule")) {
+        const list = (g.querySelector(".map-rule").dataset.nodes || "")
+          .split(";")
+          .filter(Boolean);
+        const now = raidWinAt ? `${raidWinAt.x},${raidWinAt.y}` : "";
+        if (list.length && !list.includes(now)) {
+          const [x, y] = list[0].split(",").map(Number);
+          raidWinAt = { x, y };
+        }
+      }
       mapPick = i;
       readNews(
         "raid",
