@@ -1006,6 +1006,13 @@ main#stage.mode-cursor #mode-banner {
   filter: none;
   opacity: 1;
   border-color: var(--accent);
+  color: var(--accent);
+}
+/* Глиф рации вместо эмодзи (§12.330): эмодзи рисуется у каждой системы
+   по-своему и был единственным цветным пятном в строке. */
+.crew-duty .stat-g {
+  width: 18px;
+  height: 18px;
 }
 
 /* Панель миссии — под панелью кота, той же колонкой: отряд набирает симуляция,
@@ -2057,6 +2064,38 @@ body.rail-wide #screenbar .door-label {
 .crew-field .stat.on {
   color: var(--text);
   font-weight: 600;
+}
+/* Значок характеристики с числом (§12.328): глиф красится цветом обёртки,
+   так что приглушённая реакция и выделенная различаются тем же правилом, что
+   и раньше. Число прижато к значку — это одна величина, а не две. */
+.crew-field .stat-ic {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: help;
+}
+.crew-field .stat-g {
+  width: 13px;
+  height: 13px;
+  vertical-align: 0;
+}
+/* Ведущий — компасом у имени (§12.328): роль, а не характеристика. Краска на
+   обёртке: у глифа инлайн `color: currentColor` (`glyphHtml`). */
+.crew-guide {
+  display: inline-flex;
+  margin-left: 4px;
+  color: var(--accent);
+  vertical-align: -2px;
+  cursor: help;
+}
+.crew-guide .stat-g {
+  width: 13px;
+  height: 13px;
+}
+/* Кандидат в проводники — прогноз, а не то, что есть: компас бледный. */
+.crew-guide.soon {
+  color: var(--muted);
+  opacity: 0.7;
 }
 /* Снятая сложность — единственное зелёное в списке: это выигрыш, и он один на
    бригаду (проводник не суммируется, а заменяется). */
