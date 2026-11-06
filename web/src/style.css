@@ -811,7 +811,38 @@ main#stage.mode-cursor #mode-banner {
 }
 .crew-row {
   display: flex;
+  align-items: center;
   gap: 4px;
+}
+/* Карточка кота — сама строка, а не кнопка в ней (§12.335): слоты и рация
+   стоят внутри рамки, справа. Вложить их в кнопку `.crew-pick` нельзя —
+   кнопка в кнопке недопустима, и разбор HTML закрыл бы внешнюю на первой же
+   внутренней. Поэтому рамку, фон и её состояния носит строка, а `.crew-pick`
+   остаётся прозрачной мишенью «зачислить / исключить» на всю левую часть. */
+.raidwin-crew .crew-row {
+  padding-right: 6px;
+  background: #1b1f2a;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.raidwin-crew .crew-row:has(> .crew-pick:not(.off):hover) {
+  border-color: #3b4560;
+}
+.raidwin-crew .crew-row:has(> .crew-pick.on) {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.raidwin-crew .crew-row:has(> .crew-pick.idle) {
+  border-color: var(--bad);
+  box-shadow: inset 0 0 0 1px var(--bad);
+}
+.raidwin-crew .crew-row .crew-pick,
+.raidwin-crew .crew-row .crew-pick.on,
+.raidwin-crew .crew-row .crew-pick.idle {
+  align-self: stretch;
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
 }
 /* Имя, поле и занятие — в столбик, а не в строку: колонка штаба всё равно уже
    окна, и в строку они сжимали друг друга до многоточия разом. Имя важнее —
@@ -874,6 +905,12 @@ main#stage.mode-cursor #mode-banner {
 .crew-note.bad {
   color: var(--bad);
 }
+/* Занятие, которое на «кого взять» не отвечает («дремлет», «несёт Лом»),
+   бледнее серого (§12.336): строка стоит всегда ради ровной высоты карточки,
+   но читаться наравне с «ждёт отряд» не должна. */
+.crew-note.quiet {
+  opacity: 0.6;
+}
 /* Занят наукой или мастерской: пойдёт, но бросит работу. Не отказ, а цена
    решения — поэтому «ожидание», а не красный. */
 .crew-note.toil {
@@ -885,12 +922,13 @@ main#stage.mode-cursor #mode-banner {
   filter: grayscale(1);
   opacity: 0.55;
 }
-/* Слоты снаряжения в строке кота (§12.293): колонка из двух кнопок между
-   строкой и рацией. Пусто — пунктир и контур слота, надето — глиф в рамке
-   акцента, приписано и не взято — пунктир (красный, если взять негде). */
+/* Слоты снаряжения в строке кота (§12.293): с §12.335 — рядом, в строку,
+   внутри карточки, между текстом и рацией. Колонкой из двух они задавали
+   карточке высоту вдвое больше портрета. Пусто — пунктир и контур слота,
+   надето — глиф в рамке акцента, приписано и не взято — пунктир (красный,
+   если взять негде). */
 .crew-kit {
   display: flex;
-  flex-direction: column;
   justify-content: center;
   gap: 4px;
   flex: 0 0 auto;
@@ -2073,6 +2111,19 @@ body.rail-wide #screenbar .door-label {
   align-items: center;
   gap: 2px;
   cursor: help;
+}
+/* Значки строки — рядом через отступ, без «·» между ними (§12.334). */
+.crew-field .stat-row {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  vertical-align: middle;
+}
+.crew-field .stat-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
 }
 .crew-field .stat-g {
   width: 13px;
