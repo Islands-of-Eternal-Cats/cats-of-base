@@ -4142,68 +4142,8 @@ function renderCatPanel(entities) {
     );
   }
 
-  // У бодрости два порога, и они забирают кота по-разному (§12.33): выше
-  // `tired` он работает, ниже — уходит спать освободившись, ниже `critical` —
-  // бросает начатое. Оба надо назвать словами: без них полоска на 30 % и
-  // полоска на 10 % выглядят одинаково, а кот с них ведёт себя по-разному.
-  // **Только когда просели** (§12.53): полная шкала не отвечает ни на один
-  // вопрос игрока, а три полных полоски подряд прячут ту одну, которая и
-  // объясняет, почему кот ведёт себя странно.
-  if (e.energy_max > 0 && e.energy < e.energy_max) {
-    const pct = Math.round((e.energy / e.energy_max) * 100);
-    const spent = e.energy_critical > 0 && e.energy <= e.energy_critical;
-    const note = spent
-      ? "на исходе сил: бросит работу"
-      : e.energy <= e.energy_tired
-        ? "устал: доработает и пойдёт спать"
-        : "";
-    parts.push(
-      '<div class="cat-skill">' +
-        `<div class="cat-row"><span>Бодрость</span><b>${pct}%</b></div>` +
-        `<div class="bar"><i class="${spent ? "spent" : "rest"}" style="width:${pct}%"></i></div>` +
-        (note ? `<div class="cat-sub">${note}</div>` : "") +
-        "</div>",
-    );
-  }
-  // Сытость — вторая потребность (§12.36). Цена голода списывается с бодрости,
-  // а не со шкалы рядом, поэтому «голоден» надо назвать словом: иначе игрок
-  // видит, что коты всё время спят, и не связывает это с пустым складом.
-  if (e.fed_max > 0 && e.fed < e.fed_max) {
-    const pct = Math.round((e.fed / e.fed_max) * 100);
-    const starving = e.fed <= 0;
-    const note = starving
-      ? "голодает: бодрость горит вдвое"
-      : e.fed <= e.fed_hungry
-        ? "проголодался"
-        : "";
-    parts.push(
-      '<div class="cat-skill">' +
-        `<div class="cat-row"><span>Сытость</span><b>${pct}%</b></div>` +
-        `<div class="bar"><i class="${starving ? "starving" : "fed"}" style="width:${pct}%"></i></div>` +
-        (note ? `<div class="cat-sub">${note}</div>` : "") +
-        "</div>",
-    );
-  }
-  // Здоровье — третья шкала (§12.37). Её роняет только провал вылазки, поэтому
-  // просевшая полоска всегда означает «этот кот только что вернулся с плохой
-  // вылазки», а порог надо назвать словом: ниже него кота не берут в отряд, и
-  // без подписи игрок прочитает молчащую кнопку как поломку.
-  if (e.health_max > 0 && e.health < e.health_max) {
-    const pct = Math.round((e.health / e.health_max) * 100);
-    const hurt = e.health <= e.health_hurt;
-    const note = hurt
-      ? "ранен: не работает и в отряд не идёт"
-      : e.health < e.health_max
-        ? "царапины"
-        : "";
-    parts.push(
-      '<div class="cat-skill">' +
-        `<div class="cat-row"><span>Здоровье</span><b>${pct}%</b></div>` +
-        `<div class="bar"><i class="${hurt ? "hurt" : "health"}" style="width:${pct}%"></i></div>` +
-        (note ? `<div class="cat-sub">${note}</div>` : "") +
-        "</div>",
-    );
-  }
+  // Шкалы — только просевшие (§12.53); в «Личном деле» те же, но все (§12.341).
+  parts.push(...needBars(e, false));
   // Пленный — тоже «нет на базе», но по таймеру он не вернётся: за ним надо
   // сходить. Разные слова здесь — это разные решения игрока (§12.40).
   if (e.captive)
@@ -7124,6 +7064,77 @@ function recipeLabel(def) {
 // Причина остановки при этом остаётся словом строкой ниже («потолок», «предел:
 // Ум 5»), то есть исчезает картинка, а не ответ. В «Личном деле» полоска
 // остаётся: там навыки стоят столбиком и читаются друг относительно друга.
+// Бодрость, сытость и здоровье — **одно выражение** на панель кота и на
+// «Личное дело» (§12.341): пороги и слова под шкалой разойтись не могут.
+function needBars(e, always) {
+  const parts = [];
+  // У бодрости два порога, и они забирают кота по-разному (§12.33): выше
+  // `tired` он работает, ниже — уходит спать освободившись, ниже `critical` —
+  // бросает начатое. Оба надо назвать словами: без них полоска на 30 % и
+  // полоска на 10 % выглядят одинаково, а кот с них ведёт себя по-разному.
+  // В панели — **только когда просели** (§12.53): полная шкала не отвечает ни
+  // на один вопрос игрока, а три полных полоски подряд прячут ту одну, которая
+  // и объясняет, почему кот ведёт себя странно. В «Личном деле» — всегда
+  // (`always`, §12.341): там спрашивают «каков этот кот целиком», и полная
+  // шкала там тоже ответ.
+  if (e.energy_max > 0 && (always || e.energy < e.energy_max)) {
+    const pct = Math.round((e.energy / e.energy_max) * 100);
+    const spent = e.energy_critical > 0 && e.energy <= e.energy_critical;
+    const note = spent
+      ? "на исходе сил: бросит работу"
+      : e.energy <= e.energy_tired
+        ? "устал: доработает и пойдёт спать"
+        : "";
+    parts.push(
+      '<div class="cat-skill">' +
+        `<div class="cat-row"><span>Бодрость</span><b>${pct}%</b></div>` +
+        `<div class="bar"><i class="${spent ? "spent" : "rest"}" style="width:${pct}%"></i></div>` +
+        (note ? `<div class="cat-sub">${note}</div>` : "") +
+        "</div>",
+    );
+  }
+  // Сытость — вторая потребность (§12.36). Цена голода списывается с бодрости,
+  // а не со шкалы рядом, поэтому «голоден» надо назвать словом: иначе игрок
+  // видит, что коты всё время спят, и не связывает это с пустым складом.
+  if (e.fed_max > 0 && (always || e.fed < e.fed_max)) {
+    const pct = Math.round((e.fed / e.fed_max) * 100);
+    const starving = e.fed <= 0;
+    const note = starving
+      ? "голодает: бодрость горит вдвое"
+      : e.fed <= e.fed_hungry
+        ? "проголодался"
+        : "";
+    parts.push(
+      '<div class="cat-skill">' +
+        `<div class="cat-row"><span>Сытость</span><b>${pct}%</b></div>` +
+        `<div class="bar"><i class="${starving ? "starving" : "fed"}" style="width:${pct}%"></i></div>` +
+        (note ? `<div class="cat-sub">${note}</div>` : "") +
+        "</div>",
+    );
+  }
+  // Здоровье — третья шкала (§12.37). Её роняет только провал вылазки, поэтому
+  // просевшая полоска всегда означает «этот кот только что вернулся с плохой
+  // вылазки», а порог надо назвать словом: ниже него кота не берут в отряд, и
+  // без подписи игрок прочитает молчащую кнопку как поломку.
+  if (e.health_max > 0 && (always || e.health < e.health_max)) {
+    const pct = Math.round((e.health / e.health_max) * 100);
+    const hurt = e.health <= e.health_hurt;
+    const note = hurt
+      ? "ранен: не работает и в отряд не идёт"
+      : e.health < e.health_max
+        ? "царапины"
+        : "";
+    parts.push(
+      '<div class="cat-skill">' +
+        `<div class="cat-row"><span>Здоровье</span><b>${pct}%</b></div>` +
+        `<div class="bar"><i class="${hurt ? "hurt" : "health"}" style="width:${pct}%"></i></div>` +
+        (note ? `<div class="cat-sub">${note}</div>` : "") +
+        "</div>",
+    );
+  }
+  return parts;
+}
+
 function skillBlock(e, def, i, note, flat) {
   const s = e.skills?.[i];
   if (!s) return "";
@@ -12667,6 +12678,16 @@ function buildDossier(roster) {
     ui.rows.push({ row, live, btn, selfBtn, def, i });
   });
 
+  // Состояние (§12.341): бодрость, сытость, здоровье — всегда, в отличие от
+  // панели. Узел один, содержимое — `setHtml` на изменении.
+  ui.needsHead = document.createElement("div");
+  ui.needsHead.className = "cat-row";
+  ui.needsHead.innerHTML = "<span>Состояние</span>";
+  right.appendChild(ui.needsHead);
+  ui.needs = document.createElement("div");
+  ui.needs.className = "dos-needs";
+  right.appendChild(ui.needs);
+
   ui.kit = document.createElement("div");
   ui.kit.className = "cat-sub";
   right.appendChild(ui.kit);
@@ -13201,6 +13222,12 @@ function syncDossier() {
   }
   setHtml(ui.job, job);
   liveTitle(ui.job, (!e.stuck && JOB_TIPS[e.job]) || "");
+
+  // Шкалы — те же, что в панели кота, но все три (§12.341). Нет ни одной
+  // (схема без потребностей) — нет и заголовка.
+  const needs = needBars(e, true);
+  ui.needsHead.hidden = !needs.length;
+  setHtml(ui.needs, needs.join(""));
 
   // Врождённое и перки — одной строкой: и то и другое дано коту навсегда.
   const stats = (meta.stats ?? [])
@@ -16083,15 +16110,16 @@ function summaryHtml(raid, node) {
     // плохое: проводника нет вовсе, и сложность заказа никто не режет
     // (у пустого отряда вместо этого «в отряде никого», §12.188).
     (crew.length && !guide ? "<div>проводника нет</div>" : "") +
-    // Тропы и прибор сбора (§12.256) — свойства отряда, а не кота, поэтому и
-    // стоят в шапке рядом с проводником. Числа уже в сроке из ядра; здесь
-    // только их подпись словом.
-    fieldTraits(away ? raid : node) +
+    // Что отряд даёт заказу сверх силы (§12.340): проводник, тропы, радист и
+    // прибор сбора — значками с числом, как в строке кота. До §12.340 тропы
+    // и сбор стояли здесь словами, а вычета сложности и связи у отряда дома
+    // не было вовсе — их приходилось собирать по строкам котов.
+    squadStats(away, raid, node, guide) +
     // Имён остальных здесь нет (§12.334): состав поимённо стоит прямо под
     // сводкой, а неготовые обведены там красной рамкой. Осталось то, чего в
     // строках нет: связь ушедшего отряда и пустой отряд словом (§12.188 —
     // «проводника нет» про пустой отряд правды не говорит).
-    summarySub(away ? commsPart(raid) : [], crew.length) +
+    summarySub(away ? commsLost(raid) : [], crew.length) +
     "</div>"
   );
 }
@@ -16101,16 +16129,65 @@ function summarySub(comms, crewCount) {
   return sub ? `<div class="cat-sub">${sub}</div>` : "";
 }
 
-// Строка «тропы · сбор образцов» в шапке отряда (§12.256). Пусто — нет ни
-// того, ни другого, и строки нет: отсутствие перка не новость.
-function fieldTraits(src) {
-  const parts = [
-    src?.trails ? `тропы: дорога −${src.trails} %` : "",
-    src?.samples
-      ? `сбор образцов: работа <b class="bad">+${src.samples} %</b>`
-      : "",
-  ].filter(Boolean);
-  return parts.length ? `<div class="cat-sub">${parts.join(" · ")}</div>` : "";
+// Суммарные свойства отряда в сводке (§12.340) — строкой значков с числом:
+// вычет сложности проводником, тропы, радист и прибор сбора. Чего нет, того
+// и нет в строке: отсутствие перка не новость (§12.256).
+//
+// ⚠️ **Тропы и связь не складываются в одно «время в пути»**, хотя оба режут
+// дорогу. Тропы режут её целиком, а радист ускоряет только часть (`linked_span`
+// в ядре), значит их сумма своя у каждого заказа, — и посчитанная здесь она
+// была бы вторым экземпляром правила срока (инвариант 14). Точный срок по
+// заказу стоит в его карточке, из ядра (`spans`, `linked_spans`).
+//
+// Числа — из ядра: вычет — `guide_cut` проводника, тропы и сбор — `trails` и
+// `samples` (у ушедшего — замороженные на вылазке), связь — `operator_boost`
+// у отряда дома (прогноз приписанного радиста) и `boost` у ушедшего, пока
+// радист держит эфир.
+function squadStats(away, raid, node, guide) {
+  const src = away ? raid : node;
+  const chip = (glyph, text, tip, cls = "") =>
+    `<span class="stat stat-ic on${cls}" data-tip="${esc(tip)}">${statGlyph(glyph)}${text}</span>`;
+  const out = [];
+  const lead = (lastSnap?.entities ?? []).find((e) => e.id === guide);
+  const cut = lead?.guide_cut ?? 0;
+  if (cut > 0) {
+    out.push(
+      chip("guide", `−${cut} %`, `Сложность заказов −${cut} %: ведёт ${guide}`),
+    );
+  }
+  if (src?.trails) {
+    out.push(
+      chip(
+        "trails",
+        `−${src.trails} %`,
+        `Знание троп: дорога отряда −${src.trails} %`,
+      ),
+    );
+  }
+  const boost = away ? (raid.manned ? (node?.boost ?? 0) : 0) : (node?.operator_boost ?? 0);
+  if (boost > 0) {
+    const who = node?.operator ? ` · радист ${node.operator}` : "";
+    out.push(
+      chip(
+        "relay",
+        `−${roadCut(boost)} %`,
+        `Связь: дорога отряда ${roadCutWord(boost)}${who}` +
+          (away ? "" : ". Пока радист держит эфир"),
+      ),
+    );
+  }
+  if (src?.samples) {
+    out.push(
+      chip(
+        "sampling",
+        `<b class="bad">+${src.samples} %</b>`,
+        `Сбор образцов: отряд привезёт образцы, работа на месте +${src.samples} %`,
+      ),
+    );
+  }
+  return out.length
+    ? `<div class="crew-field squad-stats"><span class="stat-row">${out.join("")}</span></div>`
+    : "";
 }
 
 // Состав: заголовок группы и строка кота — свои узлы, а группы (§12.73) — это
@@ -16802,16 +16879,13 @@ function roadCutWord(pct) {
 
 // Связь режет дорогу: срок ползёт вниз быстрее обычного, и без подписи это
 // выглядит поломкой, а не радистом, который сел к рации. Связь именная (§12.278):
-// говорим про радиста **этого** отряда.
-function commsPart(raid) {
-  // Процент, а не срезанные тики: «дорога −7» без единицы не читается и ползёт
-  // сама. Ускорение отряда считает ядро (`NodeSnap::boost`).
+// говорим про радиста **этого** отряда — значком в сводке (`squadStats`).
+// Оборвавшаяся связь у ушедшего отряда — словом (§12.340): число ушло в
+// строку значков сводки, а оборванная связь значка не имеет — она «было и
+// кончилось», и срезанное не отнимается.
+function commsLost(raid) {
   const node = nodeAt(raid.x, raid.y);
-  if (raid.manned && (node?.boost ?? 0) > 0) {
-    const who = node.operator ? ` · ${esc(node.operator)}` : "";
-    return [`связь: дорога ${roadCutWord(node.boost)}${who}`];
-  }
-  // Срезанное не отнимается: оборвавшаяся связь называет себя, но цифры нет.
+  if (raid.manned && (node?.boost ?? 0) > 0) return [];
   return raid.comms > 0 ? ["связь оборвалась"] : [];
 }
 

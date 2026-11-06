@@ -2112,6 +2112,16 @@ body.rail-wide #screenbar .door-label {
   gap: 2px;
   cursor: help;
 }
+/* Суммарные свойства отряда в сводке штаба (§12.340): те же значки, что в
+   строке кота, только чуть крупнее — это итог, а не слагаемое. */
+.raidwin-sumtext .squad-stats {
+  font-size: 13px;
+  margin-top: 2px;
+}
+.raidwin-sumtext .squad-stats .stat-g {
+  width: 15px;
+  height: 15px;
+}
 /* Значки строки — рядом через отступ, без «·» между ними (§12.334). */
 .crew-field .stat-row {
   display: inline-flex;
@@ -3728,4 +3738,10 @@ body.rail-wide #screenbar .door-label {
   color: #e0705a;
   font-size: 12px;
   margin-top: 4px;
+}
+
+/* Состояние в «Личном деле» (§12.341): те же шкалы, что в панели кота, но все
+   три всегда; отступ отделяет их от строки лап и раздела «Снаряжение». */
+.dos-needs {
+  margin-bottom: 10px;
 }
