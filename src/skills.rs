@@ -160,9 +160,29 @@ pub(crate) fn may_tutor(rules: &SkillRules, skill: usize, teacher_xp: i32, pupil
     rules.level(skill, teacher_xp) >= floor && tutor_cap(rules, skill, teacher_xp) > pupil_xp
 }
 
-/// Почему подходящий учитель не придёт к парте сейчас (§12.344). Порядок
-/// вариантов — от самого долгого к самому короткому: поле дольше сбора, сбор
-/// дольше рации, рация дольше чужого урока. Из занятых называем самого скорого.
+/// Признаки занятости кандидата в учителя (§12.344, §12.345) — одним
+/// кортежем на все запросы, чтобы `Gone::of` читал везде одно и то же:
+/// поле, отряд, рация, сон, лечение и короткие дела (еда, сборы за
+/// снаряжением, лечение раненого).
+pub(crate) type TutorFlags = (
+    Has<Away>,
+    Has<Squad>,
+    Has<OnDuty>,
+    Has<Rest>,
+    Has<Healing>,
+    Has<Eating>,
+    Has<Equipping>,
+    Has<Treating>,
+);
+
+/// Почему подходящий учитель не придёт к парте сейчас (§12.344, §12.345).
+/// Порядок вариантов — от самого долгого к самому короткому; из занятых
+/// называем самого скорого.
+///
+/// С §12.345 сюда входит **всё**, что не даёт `assign_tutor` поднять кота к
+/// кафедре в этот же тик, — сон, лечение и короткие дела тоже. Ученик,
+/// севший ждать спящего учителя, ждал впустую, если тот, проснувшись, уходил
+/// в отряд, — а между вылазками учитель только и делает, что спит.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Gone {
     /// В поле (`Away`): вернётся с вылазкой.
@@ -171,8 +191,14 @@ pub(crate) enum Gone {
     Squad,
     /// Сидит у рации или за столом брифинга радистом (`OnDuty`).
     Radio,
+    /// Лежит раненым (`Healing`).
+    Heal,
+    /// Спит (`Rest`).
+    Sleep,
     /// Учит класс за другой партой.
     Class,
+    /// Ест, идёт за снаряжением или лечит раненого — освободится скоро.
+    Busy,
 }
 
 impl Gone {
@@ -182,16 +208,26 @@ impl Gone {
             Gone::Field => "field",
             Gone::Squad => "squad",
             Gone::Radio => "radio",
+            Gone::Heal => "heal",
+            Gone::Sleep => "sleep",
             Gone::Class => "class",
+            Gone::Busy => "busy",
         }
     }
 
     /// Чем занят кот — по его компонентам; `None` — свободен для урока.
     /// `teaching` — кафедра, за которой он сейчас учит (или идёт учить).
     pub(crate) fn of(
-        away: bool,
-        squad: bool,
-        duty: bool,
+        (away, squad, duty, rest, heal, eat, equip, treat): (
+            bool,
+            bool,
+            bool,
+            bool,
+            bool,
+            bool,
+            bool,
+            bool,
+        ),
         teaching: Option<(i32, i32)>,
         lectern: Option<(i32, i32)>,
     ) -> Option<Gone> {
@@ -201,8 +237,14 @@ impl Gone {
             Some(Gone::Squad)
         } else if duty {
             Some(Gone::Radio)
+        } else if heal {
+            Some(Gone::Heal)
+        } else if rest {
+            Some(Gone::Sleep)
         } else if teaching.is_some_and(|t| Some(t) != lectern) {
             Some(Gone::Class)
+        } else if eat || equip || treat {
+            Some(Gone::Busy)
         } else {
             None
         }
@@ -225,10 +267,13 @@ pub(crate) enum Tutor {
 ///
 /// Ученик за партой без учителя (§12.258) сидел сколько угодно — и если
 /// единственный, кто может учить, ходит в поле, он сидел неделями. Теперь
-/// он садится, только когда учитель **может прийти сейчас**: не в поле, не в
-/// отряде (в том числе собирающемся), не у рации и не учит другой класс. Это
-/// долгие обязательства; сон, еда и лечение — короткие, и ради них ученика с
-/// парты не гоняем — учитель после них придёт.
+/// он садится, только когда учитель **может прийти сейчас** — то есть когда
+/// `assign_tutor` поднял бы его к кафедре в этот же тик: не в поле, не в
+/// отряде (в том числе собирающемся), не у рации, не спит, не лежит раненым,
+/// не учит другой класс и не занят коротким делом (еда, снаряжение, лечение
+/// раненого). До §12.345 сон и еда считались паузой, которую ученик ждёт за
+/// партой, — и между вылазками ученик ждал спящего бойца, который, проснувшись,
+/// уходил в отряд. Теперь ученик работает, а к парте они идут вдвоём.
 ///
 /// Кандидаты — `(кот, имя, навыки, чем занят)`, сам ученик среди них
 /// отсекается. Учить может и другой ждущий ученик: таких `assign_tutor`
@@ -267,27 +312,18 @@ pub(crate) fn tutor_for<'a>(
 /// считается занятым чужим уроком.
 #[allow(clippy::type_complexity)]
 pub(crate) fn tutor_cands<'a>(
-    q: &'a Query<(
-        Entity,
-        &UnitId,
-        Option<&Skills>,
-        Has<Away>,
-        Has<Squad>,
-        Has<OnDuty>,
-        Option<&Study>,
-    )>,
+    q: &'a Query<(Entity, &UnitId, Option<&Skills>, TutorFlags, Option<&Study>)>,
     lectern: Option<(i32, i32)>,
 ) -> impl Iterator<Item = (Entity, &'a str, &'a Skills, Option<Gone>)> + 'a {
-    q.iter()
-        .filter_map(move |(e, id, skills, away, squad, duty, study)| {
-            let teaching = study.filter(|s| s.teacher).map(|s| s.spot);
-            Some((
-                e,
-                id.0.as_str(),
-                skills?,
-                Gone::of(away, squad, duty, teaching, lectern),
-            ))
-        })
+    q.iter().filter_map(move |(e, id, skills, flags, study)| {
+        let teaching = study.filter(|s| s.teacher).map(|s| s.spot);
+        Some((
+            e,
+            id.0.as_str(),
+            skills?,
+            Gone::of(flags, teaching, lectern),
+        ))
+    })
 }
 
 /// Клетки парт этого домена на карте — в порядке обхода, а не по расстоянию.
@@ -522,15 +558,7 @@ pub(crate) fn assign_study(
     mut records: Query<&mut Record>,
     missions: Query<&Mission>,
     // Кто может прийти учить (§12.344): ученика без учителя не сажаем.
-    tutors: Query<(
-        Entity,
-        &UnitId,
-        Option<&Skills>,
-        Has<Away>,
-        Has<Squad>,
-        Has<OnDuty>,
-        Option<&Study>,
-    )>,
+    tutors: Query<(Entity, &UnitId, Option<&Skills>, TutorFlags, Option<&Study>)>,
     free_cats: Query<
         (
             Entity,
@@ -1011,14 +1039,7 @@ pub(crate) fn study(
     )>,
     // Кто может прийти учить (§12.344) — без `Study`: тот уже занят запросом
     // выше на запись, а кафедры учителей берём из него же.
-    cats: Query<(
-        Entity,
-        &UnitId,
-        Option<&Skills>,
-        Has<Away>,
-        Has<Squad>,
-        Has<OnDuty>,
-    )>,
+    cats: Query<(Entity, &UnitId, Option<&Skills>, TutorFlags)>,
 ) {
     let teaching: Vec<(Entity, (i32, i32))> = students
         .iter()
@@ -1112,22 +1133,17 @@ pub(crate) fn study(
             continue;
         }
 
-        // Учителю не прийти (§12.344): единственный, кто может учить, ушёл в
-        // поле, в отряд, к рации или учит другой класс. Ученик встаёт и идёт
-        // работать, приписка остаётся — `assign_study` посадит его снова, когда
+        // Учителю не прийти (§12.344, §12.345): единственный, кто может учить,
+        // ушёл в поле, в отряд, к рации, уснул, ранен, учит другой класс или
+        // занят коротким делом. Ученик встаёт и идёт работать, приписка остаётся — `assign_study` посадит его снова, когда
         // учитель освободится. Правило «в простое» сюда не относится: его
         // ученик учителя не ждёт и так (§12.314).
         if !task.auto
             && let Some(lectern) = lectern_of(&map, &tiles, &owners, task.spot)
         {
-            let cands = cats.iter().filter_map(|(e, id, sk, away, squad, duty)| {
+            let cands = cats.iter().filter_map(|(e, id, sk, flags)| {
                 let at = teaching.iter().find(|(t, _)| *t == e).map(|(_, s)| *s);
-                Some((
-                    e,
-                    id.0.as_str(),
-                    sk?,
-                    Gone::of(away, squad, duty, at, Some(lectern)),
-                ))
+                Some((e, id.0.as_str(), sk?, Gone::of(flags, at, Some(lectern))))
             });
             let xp = skills.map_or(0, |s| s.xp_of(task.skill));
             if tutor_for(&rules, task.skill, cat_e, xp, cands) != Tutor::Comes {

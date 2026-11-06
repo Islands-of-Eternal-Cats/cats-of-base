@@ -401,32 +401,48 @@ fn a_pupil_does_not_sit_into_another_domains_lesson() {
     assert_eq!(sim.level_of("b", science), 1, "и «Наука» пришла следом");
 }
 
-/// Ученик «Науки» уже сидел за партой и ждал учителя, а кафедру занял учитель
-/// «Связи» — ученик встаёт и возвращается в очередь, приписка остаётся
-/// (§12.326). Иначе он простоял бы весь чужой урок.
+/// Учитель спит — ученик за парту не садится, а работает (§12.345): между
+/// вылазками боец только и делает, что спит, и проснувшись уходит в отряд.
+/// Проснулся свободным — к парте идут оба.
 #[test]
-fn a_waiting_pupil_stands_up_when_another_lesson_starts() {
-    let (mut sim, science) = big_class(&[200, 400, 600]);
-    let relay = sim.set_skill("relay", &[200, 400, 600]);
-    sim.set_taught(relay, 3);
-    sim.add_teaches(DESK, relay);
-    // Учитель «Науки» есть, но спит: короткий перерыв ученик ждёт за партой
-    // (§12.344), и как раз тогда кафедру может занять чужой урок.
-    sim.set_xp("c", science, 600);
+fn a_pupil_does_not_wait_for_a_sleeping_teacher() {
+    let (mut sim, science) = classroom(ROOM);
+    sim.set_xp("b", science, 300);
     sim.set_needs(1000, 300, 1);
-    sim.set_energy("c", 0); // лежанок нет — валится спать на полу
+    sim.set_energy("a", 1000);
+    sim.set_energy("b", 0); // лежанок нет — валится спать на полу
     sim.tick_n(3);
-    assert!(sim.is_resting("c"), "учитель «Науки» спит");
-    assert!(sim.teach("b", "science"));
-    sim.tick_n(10);
-    assert!(sim.is_studying("b"), "сел ждать");
+    assert!(sim.is_resting("b"), "учитель спит");
 
-    sim.set_xp("d", relay, 600);
-    assert!(sim.teach("a", "relay"));
-    sim.tick_n(30);
-    assert!(sim.is_teaching("d"), "урок «Связи» начался");
-    assert!(!sim.is_studying("b"), "ученик «Науки» встал");
-    assert!(sim.is_enrolled("b"), "но запись не потерял");
+    assert!(sim.teach("a", "science"), "запись, а не отказ");
+    sim.tick_n(10);
+    assert!(sim.is_enrolled("a"));
+    assert!(!sim.is_studying("a"), "спящего за партой не ждёт");
+
+    sim.set_energy("b", 1000); // выспался
+    sim.tick_n(5);
+    assert!(!sim.is_resting("b"), "проснулся");
+    assert!(sim.is_studying("a"), "ученик сел");
+    assert!(sim.is_teaching("b"), "учитель пошёл к кафедре");
+}
+
+/// Учитель уснул посреди урока — ученик встаёт и идёт работать, приписка
+/// остаётся (§12.345): сидеть ему пришлось бы весь сон.
+#[test]
+fn a_pupil_stands_up_when_the_teacher_falls_asleep() {
+    let (mut sim, science) = classroom(ROOM);
+    sim.set_xp("b", science, 300);
+    assert!(sim.teach("a", "science"));
+    sim.tick_n(10);
+    assert!(sim.is_teaching("b"), "урок идёт");
+
+    sim.set_needs(1000, 300, 1);
+    sim.set_energy("a", 1000);
+    sim.set_energy("b", 0);
+    sim.tick_n(3);
+    assert!(sim.is_resting("b"), "учитель уснул");
+    assert!(!sim.is_studying("a"), "ученик встал");
+    assert!(sim.is_enrolled("a"), "но запись не потерял");
 }
 
 /// Недостроенная парта не учит (§12.282): клетки штампа строятся порознь, и

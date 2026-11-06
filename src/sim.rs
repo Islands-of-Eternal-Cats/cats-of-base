@@ -5969,24 +5969,14 @@ impl Sim {
                 .map(|(e, s)| (e, s.spot))
                 .collect()
         };
-        let mut q = self.world.query::<(
-            Entity,
-            &UnitId,
-            Option<&Skills>,
-            Has<Away>,
-            Has<Squad>,
-            Has<OnDuty>,
-        )>();
+        let mut q = self
+            .world
+            .query::<(Entity, &UnitId, Option<&Skills>, crate::skills::TutorFlags)>();
         let world = &self.world;
         let xp = world.get::<Skills>(cat_e).map_or(0, |s| s.xp_of(skill));
-        let cands = q.iter(world).filter_map(|(e, id, sk, away, squad, duty)| {
+        let cands = q.iter(world).filter_map(|(e, id, sk, flags)| {
             let at = teaching.iter().find(|(t, _)| *t == e).map(|(_, s)| *s);
-            Some((
-                e,
-                id.0.as_str(),
-                sk?,
-                Gone::of(away, squad, duty, at, lectern),
-            ))
+            Some((e, id.0.as_str(), sk?, Gone::of(flags, at, lectern)))
         });
         tutor_for(world.resource::<SkillRules>(), skill, cat_e, xp, cands)
     }
