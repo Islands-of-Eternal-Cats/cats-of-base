@@ -432,6 +432,23 @@ fn the_teach_gate_names_a_cat_who_is_away() {
     assert_eq!(sim.teach_gate("b", science), "away");
 }
 
+/// Доученный кот в поле — всё равно доученный (§12.342): потолок парты
+/// постоянный, а вылазка кончится, и тег `away` обещал бы учёбу после
+/// возвращения, которой не будет.
+#[test]
+fn the_teach_gate_names_the_ceiling_before_absence() {
+    let (mut sim, science) = sim_with_desk();
+    sim.set_xp("b", science, 20);
+    sim.set_gate(2, true);
+    sim.force_tile(6, 1, 2);
+    let m = sim.set_mission(1, 50, &[]);
+    sim.launch(m, vec!["b".to_string()]);
+    sim.tick_n(6);
+    assert!(sim.is_away("b"), "ушёл");
+
+    assert_eq!(sim.teach_gate("b", science), "topped");
+}
+
 /// Доученного парта не берёт: отправленный за неё кот встал бы с неё в тот же
 /// тик, а игрок прочёл бы это как поломку.
 #[test]
