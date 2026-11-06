@@ -6840,6 +6840,7 @@ impl Sim {
                         .iter()
                         .find(|(who, _)| who == &id.0)
                         .map_or(-1, |(_, skill)| *skill as i32),
+                    lesson: study.map_or(-1, |s| s.skill as i32),
                     // Какой домен растёт и растёт ли сейчас (§12.17): панель
                     // кота показывает один навык, и выбирает его ядро.
                     training: trained.map_or(-1, |t| t.skill as i32),

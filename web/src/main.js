@@ -2875,8 +2875,10 @@ function renderSnapshot(snap) {
     // заказа станка: своё выражение прогресса, а не поворот самого глифа.
     c.studyProgress.visible = studying;
     if (studying) {
-      const sk = e.skills?.[e.study];
-      const p = sk && sk.next > 0 ? Math.min(1, sk.xp / sk.next) : 1;
+      // Навык — задача за партой (`lesson`), а не приписка: у севшего по
+      // правилу «в простое» приписки нет, и полоска рисовалась полной
+      // (§12.338). Доля — та же, что в карточке парты.
+      const p = lessonFrac(e, e.lesson ?? e.study);
       // Низ, как у заказа станка (§12.96): та же дорожка-и-заливка, то же
       // место относительно фигуры — под лапами, а не над головой рядом с
       // книжкой, где стоят состояния, а не счётный прогресс.
@@ -3967,6 +3969,16 @@ const JOB_TIPS = {
 // Занятия, которые говорят о самом отряде, — их строка штаба не прячет (§12.332).
 const SQUAD_JOBS = new Set(["squad", "brief", "equip", "relay"]);
 
+// Вылазка, которую кот сейчас собирает: боец — по составу, радист — по столу
+// своей приписки (§12.285).
+function squadMissionOf(e) {
+  return (lastSnap?.missions ?? []).find(
+    (m) =>
+      (m.squad ?? []).includes(e.id) ||
+      (e.job === "brief" && m.x === e.post_x && m.y === e.post_y),
+  );
+}
+
 function jobLabel(e) {
   const going = !!e.moving;
   switch (e.job) {
@@ -4000,8 +4012,15 @@ function jobLabel(e) {
       return going ? "идёт к раненому" : "лечит раненого";
     case "equip":
       return going ? "идёт за снаряжением" : "снаряжается";
-    case "squad":
-      return going ? "идёт к шлюзу" : "ждёт отряд";
+    // Боец отряда (§12.337): что он делает, зависит от стадии сбора, а не от
+    // задачи — задача у него одна (`Squad`) от «Отправить» до шлюза. Стадию
+    // везёт вылазка (`briefing`, `march`), вид её только называет. До §12.337
+    // бойцы за столом «ждали отряд» весь брифинг, а радист рядом его слушал.
+    case "squad": {
+      const m = squadMissionOf(e);
+      if (going) return m?.march ? "идёт к шлюзу" : "идёт к столу";
+      return m?.briefing ? "слушает брифинг" : "ждёт отряд";
+    }
     case "haul":
       return e.carrying > 0
         ? `несёт ${itemLabel(e.carrying_item)}`
@@ -4024,8 +4043,12 @@ function jobLabel(e) {
     case "relay":
       return going ? "идёт к рации" : "держит связь с отрядом";
     // Радист на брифинге своего отряда (§12.286): стул за столом, а не рация.
-    case "brief":
-      return going ? "идёт на брифинг" : "слушает брифинг";
+    // Радист садится раньше, чем начнётся брифинг (§12.337): пока за столом
+    // не все, он ждёт отряд, как и бойцы рядом с ним.
+    case "brief": {
+      if (going) return "идёт на брифинг";
+      return squadMissionOf(e)?.briefing ? "слушает брифинг" : "ждёт отряд";
+    }
     case "build":
       return going ? "идёт на площадку" : "строит";
     case "demolish":
@@ -5394,15 +5417,7 @@ function squadRow(node, m) {
   // («ждут, пока выспится») остаются подписью под полоской: справа они
   // переносились бы на вторую строку и растили ту самую высоту, ради которой
   // §12.172 выравнивала полоску.
-  const mark = !m
-    ? "дома"
-    : m.away
-      ? (RAID_PHASE[m.phase] ?? "в поле")
-      : m.march
-        ? "к шлюзу"
-        : m.briefing
-          ? "брифинг"
-          : "сбор";
+  const mark = squadMark(m);
   // Подпись под полоской — **по какому делу**: заказ у занятого отряда, а у
   // того, что дома, — его состояние словом (правило повтора, пустой состав,
   // «ждут приказа»). У отряда дома заказа нет, и «—» на этом месте было бы
@@ -6035,6 +6050,25 @@ function tileDefAt(x, y) {
   return t >= 0 ? meta.palette[t] : null;
 }
 
+// Докуда ученик дошёл за партой, 0…1 — **одно выражение** на полоску под
+// котом на карте и на карточку парты (§12.338): до него карта считала от нуля
+// опыта, а карточка — от порога уровня, и одна и та же учёба показывалась
+// двумя долями.
+// Доля считается от порога текущего уровня, как в `skillBlock`: «Учить» —
+// один уровень (§12.269), и полоска от нуля опыта показывала бы у ученика
+// с набранными уровнями долю всего пути, а не того, что парта ему даёт.
+// Цель — порог следующего уровня (`next`), но не выше потолка парты: `desk`
+// сам по себе — весь путь, докуда парта доводит, а не один уровень.
+function lessonFrac(e, i) {
+  const skill = e.skills?.[i];
+  if (!skill) return 0;
+  const levels = (meta.skills ?? [])[i]?.levels ?? [];
+  const from = skill.level > 0 ? (levels[skill.level - 1] ?? 0) : 0;
+  const to = skill.next > 0 ? Math.min(skill.next, skill.desk) : skill.desk;
+  if (to <= from) return 0;
+  return Math.max(0, Math.min(1, (skill.xp - from) / (to - from)));
+}
+
 function deskCell(snap, x, y, def) {
   const domains = deskDomains(def);
   if (!domains.length) return [];
@@ -6066,28 +6100,14 @@ function deskCell(snap, x, y, def) {
     }
     return out;
   }
-  // Домен — приписка ученика (§12.290): парта учит нескольким.
-  const i = domains.includes(cat.study) ? cat.study : domains[0];
-  const skill = cat.skills?.[i];
-  // Доля считается от порога текущего уровня, как в `skillBlock`: «Учить» —
-  // один уровень (§12.269), и полоска от нуля опыта показывала бы у ученика
-  // с набранными уровнями долю всего пути, а не того, что парта ему даёт.
-  const levels = (meta.skills ?? [])[i]?.levels ?? [];
-  const from = skill && skill.level > 0 ? (levels[skill.level - 1] ?? 0) : 0;
-  // Цель — порог следующего уровня (`next`), но не выше потолка парты:
-  // `desk` сам по себе — весь путь, докуда парта доводит, а не один уровень.
-  const to = skill
-    ? skill.next > 0
-      ? Math.min(skill.next, skill.desk)
-      : skill.desk
-    : 0;
-  const pct =
-    skill && to > from
-      ? Math.max(
-          0,
-          Math.min(100, Math.round(((skill.xp - from) / (to - from)) * 100)),
-        )
-      : 0;
+  // Домен — то, чему кот учится за партой сейчас (`lesson`, §12.338), иначе
+  // приписка (§12.290): парта учит нескольким.
+  const i = domains.includes(cat.lesson)
+    ? cat.lesson
+    : domains.includes(cat.study)
+      ? cat.study
+      : domains[0];
+  const pct = Math.round(lessonFrac(cat, i) * 100);
   // Имя ученика стоит в заголовке, а не отдельной строкой под полоской: «sp2
   // занимается» при сидящем коте не добавляет к «Наука · sp2 — 25 %» ничего,
   // и вместе с «здесь: sp2» ниже одно и то же имя стояло трижды. Строка
@@ -7409,6 +7429,19 @@ function nodeAt(tx, ty) {
         (n.seats ?? []).some(([sx, sy]) => sx === tx && sy === ty),
     ) ?? null
   );
+}
+
+// Короткое слово «чем отряд занят» (§12.173): одно на строку панели «Отряды»
+// и вкладку штаба (§12.337). У ушедших — стадия из ядра (§12.168), у
+// собирающихся — где они в сборе, у отряда дома — «дома». Вкладка до §12.337
+// писала «в поле» по `node.busy`, то есть с самого «Отправить», — и отряд,
+// слушающий брифинг за столом, числился ушедшим.
+function squadMark(m) {
+  if (!m) return "дома";
+  if (m.away) return RAID_PHASE[m.phase] ?? "в поле";
+  if (m.march) return "к шлюзу";
+  if (m.briefing) return "брифинг";
+  return "сбор";
 }
 
 // Чем занят отряд, который ещё не ушёл (§12.279): рассаживается за столом,
@@ -15967,7 +16000,11 @@ function renderRaidWindow() {
             (o, i) =>
               `<button class="tool raidwin-tab${o === node ? " on" : ""}"` +
               ` data-key="tab@${o.x},${o.y}" data-x="${o.x}" data-y="${o.y}">` +
-              `${esc(o.name)}${o.busy ? " · в поле" : ""}</button>`,
+              `${esc(o.name)}${
+                o.busy
+                  ? ` · ${squadMark(missionsOut.find((m) => m.x === o.x && m.y === o.y))}`
+                  : ""
+              }</button>`,
           )
           .join("")
       : "";
