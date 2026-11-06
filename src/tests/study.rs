@@ -348,22 +348,6 @@ fn a_demolished_desk_moves_the_student_or_ends_the_lesson() {
     assert_eq!(sim.xp_of("a", science), xp, "опыт остался при коте");
 }
 
-/// Ушедшего на вылазку не учат: его позиция — это шлюз, с которого он ушёл, а
-/// сам он вне базы (§12.22).
-#[test]
-fn a_cat_in_the_field_cannot_be_taught() {
-    let (mut sim, _) = sim_with_desk();
-    sim.set_gate(2, true);
-    sim.set_relay(2, true);
-    sim.force_tile(6, 1, 2);
-    let m = sim.set_mission(1, 50, &[]);
-    sim.launch(m, vec!["b".to_string()]);
-    sim.tick_n(8);
-
-    assert!(sim.is_away("b"), "отряд ушёл");
-    assert!(!sim.teach("b", "science"), "учить некого");
-}
-
 /// Заявка на учёбу распускает вылазку, как и приказ игрока: состав выбран
 /// поимённо, заменить выбывшего некем (§12.23).
 #[test]
@@ -417,10 +401,11 @@ fn the_teach_gate_names_a_domain_nobody_teaches() {
     assert!(!sim.teach("a", "build"), "и фасад отказывает так же");
 }
 
-/// Кота нет на базе — учить некого: его позиция это шлюз, с которого он ушёл
-/// (§12.22). Ворота обязаны сказать это до того, как пойдут искать парту.
+/// Кота нет на базе (§12.22) — ворота называют это своим тегом, а «Учить»
+/// с §12.343 не отказывает, а **записывает в очередь**: сядет за парту сам,
+/// когда вернётся, и не раньше.
 #[test]
-fn the_teach_gate_names_a_cat_who_is_away() {
+fn a_cat_away_is_enrolled_and_sits_down_on_return() {
     let (mut sim, science) = sim_with_desk();
     sim.set_gate(2, true);
     sim.force_tile(6, 1, 2);
@@ -430,6 +415,41 @@ fn the_teach_gate_names_a_cat_who_is_away() {
     assert!(sim.is_away("b"), "ушёл");
 
     assert_eq!(sim.teach_gate("b", science), "away");
+    assert!(sim.teach("b", "science"), "в поле — запись, а не отказ");
+    assert!(sim.is_enrolled("b"), "приписка стоит");
+    assert!(!sim.is_studying("b"), "за партой его нет — он в поле");
+
+    for _ in 0..400 {
+        sim.tick_n(1);
+        if !sim.is_away("b") {
+            break;
+        }
+        assert!(!sim.is_studying("b"), "в поле за парту не садятся");
+    }
+    assert!(!sim.is_away("b"), "вернулся");
+    assert_eq!(sim.xp_of("b", science), 0, "в поле не учился");
+    sim.tick_n(30);
+    assert_eq!(sim.pos_of("b"), (3, 1), "вернувшись, сел за парту сам");
+    assert!(sim.xp_of("b", science) > 0, "и парта его учит");
+}
+
+/// В поле, а парт на базе нет — это «парт нет», а не очередь (§12.343):
+/// запись ждала бы не возвращения, а стройки.
+#[test]
+fn the_teach_gate_names_missing_desks_before_absence() {
+    // Та же схема, что у `sim_with_desk`, только парты не ставим.
+    let mut sim = sim_from(&["########", "#a....b#", "########"]);
+    let science = sim.set_skill("science", &[20, 100]);
+    sim.set_taught(science, 1);
+    sim.set_gate(2, true);
+    sim.force_tile(6, 1, 2);
+    let m = sim.set_mission(1, 50, &[]);
+    sim.launch(m, vec!["b".to_string()]);
+    sim.tick_n(6);
+    assert!(sim.is_away("b"), "ушёл");
+
+    assert_eq!(sim.teach_gate("b", science), "nodesk");
+    assert!(!sim.teach("b", "science"), "и фасад отказывает");
 }
 
 /// Доученный кот в поле — всё равно доученный (§12.342): потолок парты

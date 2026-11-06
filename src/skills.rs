@@ -160,6 +160,136 @@ pub(crate) fn may_tutor(rules: &SkillRules, skill: usize, teacher_xp: i32, pupil
     rules.level(skill, teacher_xp) >= floor && tutor_cap(rules, skill, teacher_xp) > pupil_xp
 }
 
+/// Почему подходящий учитель не придёт к парте сейчас (§12.344). Порядок
+/// вариантов — от самого долгого к самому короткому: поле дольше сбора, сбор
+/// дольше рации, рация дольше чужого урока. Из занятых называем самого скорого.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Gone {
+    /// В поле (`Away`): вернётся с вылазкой.
+    Field,
+    /// В отряде, который собирается (`Squad` без `Away`).
+    Squad,
+    /// Сидит у рации или за столом брифинга радистом (`OnDuty`).
+    Radio,
+    /// Учит класс за другой партой.
+    Class,
+}
+
+impl Gone {
+    /// Тег для снимка (§12.53): слово подбирает вид.
+    pub(crate) fn tag(self) -> &'static str {
+        match self {
+            Gone::Field => "field",
+            Gone::Squad => "squad",
+            Gone::Radio => "radio",
+            Gone::Class => "class",
+        }
+    }
+
+    /// Чем занят кот — по его компонентам; `None` — свободен для урока.
+    /// `teaching` — кафедра, за которой он сейчас учит (или идёт учить).
+    pub(crate) fn of(
+        away: bool,
+        squad: bool,
+        duty: bool,
+        teaching: Option<(i32, i32)>,
+        lectern: Option<(i32, i32)>,
+    ) -> Option<Gone> {
+        if away {
+            Some(Gone::Field)
+        } else if squad {
+            Some(Gone::Squad)
+        } else if duty {
+            Some(Gone::Radio)
+        } else if teaching.is_some_and(|t| Some(t) != lectern) {
+            Some(Gone::Class)
+        } else {
+            None
+        }
+    }
+}
+
+/// Придёт ли к парте учитель (§12.344).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Tutor {
+    /// Есть кот, который может учить и не занят надолго: садиться.
+    Comes,
+    /// Учить может только занятый надолго; назван лучший из них.
+    Gone(String, Gone),
+    /// На базе нет ни одного кота, который мог бы научить этого ученика.
+    Nobody,
+}
+
+/// **Одно выражение на рассадку, подъём из-за парты, `Sim::teach` и снимок**
+/// (§12.344, инвариант 14): может ли к ученику прийти учитель.
+///
+/// Ученик за партой без учителя (§12.258) сидел сколько угодно — и если
+/// единственный, кто может учить, ходит в поле, он сидел неделями. Теперь
+/// он садится, только когда учитель **может прийти сейчас**: не в поле, не в
+/// отряде (в том числе собирающемся), не у рации и не учит другой класс. Это
+/// долгие обязательства; сон, еда и лечение — короткие, и ради них ученика с
+/// парты не гоняем — учитель после них придёт.
+///
+/// Кандидаты — `(кот, имя, навыки, чем занят)`, сам ученик среди них
+/// отсекается. Учить может и другой ждущий ученик: таких `assign_tutor`
+/// снимает с их парты (§12.258), поэтому ученик здесь — обычный кандидат.
+pub(crate) fn tutor_for<'a>(
+    rules: &SkillRules,
+    skill: usize,
+    pupil: Entity,
+    pupil_xp: i32,
+    cands: impl Iterator<Item = (Entity, &'a str, &'a Skills, Option<Gone>)>,
+) -> Tutor {
+    let mut best: Option<(std::cmp::Reverse<Gone>, i32, &str)> = None;
+    for (e, id, skills, gone) in cands {
+        let xp = skills.xp_of(skill);
+        if e == pupil || !may_tutor(rules, skill, xp, pupil_xp) {
+            continue;
+        }
+        let Some(gone) = gone else {
+            return Tutor::Comes;
+        };
+        // Из занятых — тот, кто освободится раньше, потом сильнейший; ничью
+        // решает имя (инвариант 9).
+        let key = (std::cmp::Reverse(gone), -rules.level(skill, xp), id);
+        if best.is_none_or(|(g, l, i)| key < (g, l, i)) {
+            best = Some(key);
+        }
+    }
+    match best {
+        Some((std::cmp::Reverse(gone), _, id)) => Tutor::Gone(id.to_string(), gone),
+        None => Tutor::Nobody,
+    }
+}
+
+/// Кандидаты в учителя из запроса системы (§12.344) — в той форме, какую ждёт
+/// `tutor_for`. `lectern` — кафедра, к которой зовут: учитель за ней же не
+/// считается занятым чужим уроком.
+#[allow(clippy::type_complexity)]
+pub(crate) fn tutor_cands<'a>(
+    q: &'a Query<(
+        Entity,
+        &UnitId,
+        Option<&Skills>,
+        Has<Away>,
+        Has<Squad>,
+        Has<OnDuty>,
+        Option<&Study>,
+    )>,
+    lectern: Option<(i32, i32)>,
+) -> impl Iterator<Item = (Entity, &'a str, &'a Skills, Option<Gone>)> + 'a {
+    q.iter()
+        .filter_map(move |(e, id, skills, away, squad, duty, study)| {
+            let teaching = study.filter(|s| s.teacher).map(|s| s.spot);
+            Some((
+                e,
+                id.0.as_str(),
+                skills?,
+                Gone::of(away, squad, duty, teaching, lectern),
+            ))
+        })
+}
+
 /// Клетки парт этого домена на карте — в порядке обхода, а не по расстоянию.
 ///
 /// Только **достроенных** (§12.282): у большой парты клетки строятся порознь,
@@ -167,7 +297,7 @@ pub(crate) fn may_tutor(rules: &SkillRules, skill: usize, teacher_xp: i32, pupil
 ///
 /// Отдельным выражением, потому что спрашивают о них двое и о разном: ворота —
 /// «есть ли они вообще», выбор парты — «какая ближе».
-fn desk_cells<'a>(
+pub(crate) fn desk_cells<'a>(
     map: &'a BaseMap,
     tiles: &'a TileRules,
     owners: &'a Owners,
@@ -266,7 +396,10 @@ pub(crate) enum Desk {
     Open((i32, i32)),
     /// Домену за партой не учат вовсе («Стройка»): он растёт только работой.
     Untaught,
-    /// Кота нет на базе — учить некого (§12.22).
+    /// Кота нет на базе (§12.22) — и с §12.343 это **не отказ, а очередь**,
+    /// как `Taken`: приписка (`Enrolled`) переживает вылазку, а сядет кот
+    /// сам, когда вернётся (`assign_study` ушедших не берёт). Свой тег, а не
+    /// `Taken`, потому что ждут здесь другого — возвращения, а не парты.
     Away,
     /// Парта его уже ничему не научит: дальше только практика.
     Topped,
@@ -331,11 +464,15 @@ pub(crate) fn desk_gate(
     if skills.map_or(0, |s| s.xp_of(skill)) >= desk_cap(rules, stats, skill) {
         return Desk::Topped;
     }
-    if away {
-        return Desk::Away;
-    }
     if desk_cells(map, tiles, owners, skill).next().is_none() {
         return Desk::Missing;
+    }
+    // Ушедший встаёт в очередь (§12.343), но **после** «парт нет»: запись к
+    // партам, которых на базе нет, ждала бы не возвращения, а стройки, и
+    // слово про возвращение было бы неправдой. Достижимость у него не
+    // спрашиваем: где он встанет, вернувшись, сейчас не знает никто.
+    if away {
+        return Desk::Away;
     }
     if let Some(spot) = nearest_desk_at(map, tiles, owners, reach, skill, taken, lessons) {
         return Desk::Open(spot);
@@ -384,6 +521,16 @@ pub(crate) fn assign_study(
     students: Query<&Study>,
     mut records: Query<&mut Record>,
     missions: Query<&Mission>,
+    // Кто может прийти учить (§12.344): ученика без учителя не сажаем.
+    tutors: Query<(
+        Entity,
+        &UnitId,
+        Option<&Skills>,
+        Has<Away>,
+        Has<Squad>,
+        Has<OnDuty>,
+        Option<&Study>,
+    )>,
     free_cats: Query<
         (
             Entity,
@@ -457,6 +604,20 @@ pub(crate) fn assign_study(
         let Some(spot) = nearest_desk(&map, &tiles, &owners, skill, at, &taken, &lessons) else {
             continue; // парт нет, все заняты или не дойти — попробуем следующим тиком
         };
+        // Учителю не прийти (§12.344) — за парту не садимся: ученик остаётся в
+        // очереди и работает, а сядет, когда учитель освободится. Парта без
+        // кафедры учит сама и учителя не ждёт.
+        if let Some(lectern) = lectern_of(&map, &tiles, &owners, spot)
+            && tutor_for(
+                &rules,
+                skill,
+                cat_e,
+                xp,
+                tutor_cands(&tutors, Some(lectern)),
+            ) != Tutor::Comes
+        {
+            continue;
+        }
         taken.push(spot);
         let path = find_path(&map, &tiles, at, spot).unwrap_or_default();
         commands.entity(cat_e).insert((
@@ -848,7 +1009,22 @@ pub(crate) fn study(
         Option<&Stats>,
         Option<&mut Record>,
     )>,
+    // Кто может прийти учить (§12.344) — без `Study`: тот уже занят запросом
+    // выше на запись, а кафедры учителей берём из него же.
+    cats: Query<(
+        Entity,
+        &UnitId,
+        Option<&Skills>,
+        Has<Away>,
+        Has<Squad>,
+        Has<OnDuty>,
+    )>,
 ) {
+    let teaching: Vec<(Entity, (i32, i32))> = students
+        .iter()
+        .filter(|(_, _, s, ..)| s.teacher)
+        .map(|(e, _, s, ..)| (e, s.spot))
+        .collect();
     let taken: Vec<(i32, i32)> = students
         .iter()
         .filter(|(_, _, s, ..)| !s.teacher)
@@ -934,6 +1110,30 @@ pub(crate) fn study(
         if lesson_bars(&map, &tiles, &owners, task.spot, task.skill, &lessons) {
             commands.entity(cat_e).remove::<(Study, Path, Stride)>();
             continue;
+        }
+
+        // Учителю не прийти (§12.344): единственный, кто может учить, ушёл в
+        // поле, в отряд, к рации или учит другой класс. Ученик встаёт и идёт
+        // работать, приписка остаётся — `assign_study` посадит его снова, когда
+        // учитель освободится. Правило «в простое» сюда не относится: его
+        // ученик учителя не ждёт и так (§12.314).
+        if !task.auto
+            && let Some(lectern) = lectern_of(&map, &tiles, &owners, task.spot)
+        {
+            let cands = cats.iter().filter_map(|(e, id, sk, away, squad, duty)| {
+                let at = teaching.iter().find(|(t, _)| *t == e).map(|(_, s)| *s);
+                Some((
+                    e,
+                    id.0.as_str(),
+                    sk?,
+                    Gone::of(away, squad, duty, at, Some(lectern)),
+                ))
+            });
+            let xp = skills.map_or(0, |s| s.xp_of(task.skill));
+            if tutor_for(&rules, task.skill, cat_e, xp, cands) != Tutor::Comes {
+                commands.entity(cat_e).remove::<(Study, Path, Stride)>();
+                continue;
+            }
         }
 
         // Парту могли снести, пока кот шёл: ищем другую свободную, а нет её —

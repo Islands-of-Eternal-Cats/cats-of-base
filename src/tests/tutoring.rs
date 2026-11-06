@@ -3,7 +3,9 @@
 //! Учит парта, только пока на месте учителя сидит тот, кто знает больше
 //! ученика, и доводит до уровня учителя минус один. Учитель садится сам —
 //! лучший из тех, кто может научить, — и срывается ради этого с работы; сам он
-//! за это не растёт. Нет учителя — ученик ждёт за партой.
+//! за это не растёт. Учителю не прийти — ученик за парту не садится, а стоит
+//! в очереди и работает (§12.344); короткий перерыв учителя (сон) он ждёт за
+//! партой.
 
 use super::*;
 
@@ -31,16 +33,55 @@ fn classroom(rows: &[&str]) -> (Sim, usize) {
 
 const ROOM: &[&str] = &["#########", "#.......#", "#a.....b#", "#########"];
 
-/// Учить некому — ученик сидит за партой и ждёт, опыт не растёт.
+/// Учить некому — ученик за парту не садится (§12.344): «Учить» ставит
+/// запись, и кот остаётся в очереди, а не сидит впустую.
 #[test]
-fn a_pupil_waits_without_a_teacher() {
+fn a_pupil_without_a_teacher_stays_in_the_queue() {
+    let (mut sim, science) = classroom(ROOM);
+    assert!(sim.teach("a", "science"), "запись, а не отказ");
+    sim.tick_n(40);
+    assert!(sim.is_enrolled("a"), "приписка стоит");
+    assert!(!sim.is_studying("a"), "за парту не сел");
+    assert_eq!(sim.xp_of("a", science), 0);
+    assert!(!sim.is_teaching("b"), "b учить нечему — он сам ноль");
+}
+
+/// Учитель появился — ученик из очереди садится сам, и учитель с ним (§12.344).
+#[test]
+fn a_queued_pupil_sits_down_once_a_teacher_can_come() {
     let (mut sim, science) = classroom(ROOM);
     assert!(sim.teach("a", "science"));
-    sim.tick_n(40);
-    assert_eq!(sim.pos_of("a"), (2, 1), "сидит за партой");
-    assert!(sim.is_studying("a"), "и остаётся приписан к ней");
-    assert_eq!(sim.xp_of("a", science), 0, "но без учителя не учится");
-    assert!(!sim.is_teaching("b"), "b учить нечему — он сам ноль");
+    sim.tick_n(10);
+    assert!(!sim.is_studying("a"), "учителя нет — ждёт в очереди");
+
+    sim.set_xp("b", science, 300);
+    sim.tick_n(3);
+    assert!(sim.is_studying("a"), "сел за парту");
+    assert!(sim.is_teaching("b"), "и учитель пришёл");
+    sim.tick_n(20);
+    assert!(sim.xp_of("a", science) > 0, "урок идёт");
+}
+
+/// Единственный учитель ушёл в отряд посреди урока — ученик встаёт и идёт
+/// работать, приписка остаётся (§12.344). Сидеть ему пришлось бы всю вылазку.
+#[test]
+fn a_pupil_stands_up_when_the_only_teacher_leaves_for_a_raid() {
+    let (mut sim, science) = classroom(ROOM);
+    sim.set_xp("b", science, 300);
+    assert!(sim.teach("a", "science"));
+    sim.tick_n(20);
+    assert!(sim.is_teaching("b"), "урок идёт");
+    assert!(sim.is_studying("a"));
+
+    // Шлюз — под самим учителем, в правом углу прохода.
+    sim.set_gate(6, true);
+    sim.force_tile(7, 2, 6);
+    let m = sim.set_mission(1, 500, &[]);
+    sim.launch(m, vec!["b".to_string()]);
+    sim.tick_n(3);
+    assert!(!sim.is_teaching("b"), "учитель ушёл в отряд");
+    assert!(!sim.is_studying("a"), "ученик встал");
+    assert!(sim.is_enrolled("a"), "но запись не потерял");
 }
 
 /// Учитель садится сам и доводит ученика до своего уровня минус один; сам за
@@ -280,14 +321,15 @@ fn one_desk_teaches_relay_too() {
 }
 
 /// Учитель учит своему домену и только ему: знаток «Науки» ученику «Связи»
-/// не учитель, и тот ждёт.
+/// не учитель, и тот ждёт — в очереди, а не за партой (§12.344).
 #[test]
 fn a_teacher_of_one_domain_does_not_teach_another() {
     let (mut sim, science, relay) = two_domain_classroom();
     sim.set_xp("b", science, 300);
     assert!(sim.teach("a", "relay"));
     sim.tick_n(200);
-    assert!(sim.is_studying("a"), "ученик сидит за партой");
+    assert!(sim.is_enrolled("a"), "ученик в очереди");
+    assert!(!sim.is_studying("a"), "учителя связи нет — за парту не сел");
     assert!(!sim.is_teaching("b"), "учёный связи не учит");
     assert_eq!(sim.xp_of("a", relay), 0, "и опыт не растёт");
 }
@@ -364,11 +406,18 @@ fn a_pupil_does_not_sit_into_another_domains_lesson() {
 /// (§12.326). Иначе он простоял бы весь чужой урок.
 #[test]
 fn a_waiting_pupil_stands_up_when_another_lesson_starts() {
-    let (mut sim, _) = big_class(&[200, 400, 600]);
+    let (mut sim, science) = big_class(&[200, 400, 600]);
     let relay = sim.set_skill("relay", &[200, 400, 600]);
     sim.set_taught(relay, 3);
     sim.add_teaches(DESK, relay);
-    assert!(sim.teach("b", "science"), "учителя «Науки» на базе нет");
+    // Учитель «Науки» есть, но спит: короткий перерыв ученик ждёт за партой
+    // (§12.344), и как раз тогда кафедру может занять чужой урок.
+    sim.set_xp("c", science, 600);
+    sim.set_needs(1000, 300, 1);
+    sim.set_energy("c", 0); // лежанок нет — валится спать на полу
+    sim.tick_n(3);
+    assert!(sim.is_resting("c"), "учитель «Науки» спит");
+    assert!(sim.teach("b", "science"));
     sim.tick_n(10);
     assert!(sim.is_studying("b"), "сел ждать");
 

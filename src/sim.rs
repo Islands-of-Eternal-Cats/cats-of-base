@@ -56,8 +56,8 @@ use crate::schedule::build_schedule;
 use crate::seen::note_seen;
 use crate::sites::{Step, aim_danger, aim_of, next_step, site_is_clear, stage_danger, targets_of};
 use crate::skills::{
-    Desk, SKILL_RAID, SKILL_SCIENCE, class_sizes, desk_cap, desk_gate, lectern_of, lesson_bars,
-    level_cap_of, level_of, tutor_cap, xp_ceiling,
+    Desk, Gone, SKILL_RAID, SKILL_SCIENCE, Tutor, class_sizes, desk_cap, desk_gate, lectern_of,
+    lesson_bars, level_cap_of, level_of, tutor_cap, tutor_for, xp_ceiling,
 };
 use crate::slots::{Owners, seats_at, slot_cells};
 use crate::snapshot::{
@@ -5288,8 +5288,9 @@ impl Sim {
     /// перестанет строить на ближайшие пару сотен тиков.
     ///
     /// Команда снимает с кота текущую задачу и распускает его вылазку — ровно
-    /// как приказ игрока (§12.23). Вернёт false, если кота нет, он в поле,
-    /// домену не учат, коту уже нечему учиться за партой или парты нет.
+    /// как приказ игрока (§12.23). Вернёт false, если кота нет, домену не
+    /// учат, коту уже нечему учиться за партой или парты нет. Кота в поле с
+    /// §12.343 не отклоняет, а **записывает в очередь**: сядет, вернувшись.
     ///
     /// **С §12.84 это ещё и приписка** (`Enrolled`), а не только разовая
     /// посадка: ученик, которого увели голод, сон или рана, возвращается за
@@ -5363,13 +5364,30 @@ impl Sim {
         // словом (инвариант 14).
         let spot = match self.desk_gate_of(unit_id, skill) {
             Desk::Open(spot) => spot,
-            Desk::Taken => return self.enqueue_study(unit_id, skill),
+            // Парты заняты или кот в поле (§12.325, §12.343): ставим запись,
+            // сядет он сам, когда освободится парта или вернётся он.
+            Desk::Taken | Desk::Away => return self.enqueue_study(unit_id, skill),
             _ => return false,
         };
         // Открытые ворота уже сказали, что кот на базе.
         let Some(cat_e) = self.unit_on_base(unit_id) else {
             return false;
         };
+        // Парта свободна, а учителю не прийти (§12.344) — та же очередь:
+        // сядет, когда учитель освободится, а пока работает. Парта без
+        // кафедры учит сама.
+        let lectern = {
+            let owners = self.owners();
+            lectern_of(
+                self.world.resource::<BaseMap>(),
+                self.world.resource::<TileRules>(),
+                &owners,
+                spot,
+            )
+        };
+        if lectern.is_some() && self.tutor_of(cat_e, skill, lectern) != Tutor::Comes {
+            return self.enqueue_study(unit_id, skill);
+        }
         let from = self
             .world
             .get::<Position>(cat_e)
@@ -5413,8 +5431,17 @@ impl Sim {
     /// игрок сказал «учись этому», и `train_skills`, подняв кота по старому
     /// домену, снял бы вместе с ним и новую запись. Учителя не трогаем —
     /// отпустит класс, тогда и сядет.
+    ///
+    /// Записать можно и ушедшего (§12.343): `Study` с него снят на уходе, а
+    /// `assign_study` посадит его, когда вернётся.
     fn enqueue_study(&mut self, unit_id: &str, skill: usize) -> bool {
-        let Some(cat_e) = self.unit_on_base(unit_id) else {
+        let found = {
+            let mut q = self.world.query::<(Entity, &UnitId)>();
+            q.iter(&self.world)
+                .find(|(_, id)| id.0 == unit_id)
+                .map(|(e, _)| e)
+        };
+        let Some(cat_e) = found else {
             return false;
         };
         let other_lesson = self
@@ -5926,6 +5953,44 @@ impl Sim {
     }
 
     /// Кот на базе по `id`: ушедших и пленных не берём — их тут нет (§12.40).
+    /// Придёт ли к этому ученику учитель (§12.344) — `skills::tutor_for` над
+    /// всем миром. `lectern` — кафедра, к которой зовут; `None` — любая, и
+    /// тогда учащий за любой кафедрой считается занятым.
+    pub(crate) fn tutor_of(
+        &mut self,
+        cat_e: Entity,
+        skill: usize,
+        lectern: Option<(i32, i32)>,
+    ) -> Tutor {
+        let teaching: Vec<(Entity, (i32, i32))> = {
+            let mut q = self.world.query::<(Entity, &Study)>();
+            q.iter(&self.world)
+                .filter(|(_, s)| s.teacher)
+                .map(|(e, s)| (e, s.spot))
+                .collect()
+        };
+        let mut q = self.world.query::<(
+            Entity,
+            &UnitId,
+            Option<&Skills>,
+            Has<Away>,
+            Has<Squad>,
+            Has<OnDuty>,
+        )>();
+        let world = &self.world;
+        let xp = world.get::<Skills>(cat_e).map_or(0, |s| s.xp_of(skill));
+        let cands = q.iter(world).filter_map(|(e, id, sk, away, squad, duty)| {
+            let at = teaching.iter().find(|(t, _)| *t == e).map(|(_, s)| *s);
+            Some((
+                e,
+                id.0.as_str(),
+                sk?,
+                Gone::of(away, squad, duty, at, lectern),
+            ))
+        });
+        tutor_for(world.resource::<SkillRules>(), skill, cat_e, xp, cands)
+    }
+
     fn unit_on_base(&mut self, unit_id: &str) -> Option<Entity> {
         let mut q = self.world.query::<(Entity, &UnitId, Option<&Away>)>();
         q.iter(&self.world)
@@ -6472,6 +6537,35 @@ impl Sim {
                     .map(|(id, e)| (id.0.clone(), e.skill))
                     .collect()
             };
+            // Кого ждёт приписанный ученик (§12.344): учителю не прийти — тег
+            // причины и имя. Тем же `tutor_for`, каким решают рассадка и
+            // `teach`. Только для доменов, чьи парты учат с учителем: парта
+            // без кафедры учит сама.
+            let tutor_waits: Vec<(String, Tutor)> = {
+                let owners = self.owners();
+                let list: Vec<(String, Entity, usize, Option<(i32, i32)>)> = {
+                    let mut q = self
+                        .world
+                        .query::<(Entity, &UnitId, &Enrolled, Option<&Study>)>();
+                    let map = self.world.resource::<BaseMap>();
+                    let tiles = self.world.resource::<TileRules>();
+                    q.iter(&self.world)
+                        .filter(|(.., en, _)| {
+                            crate::skills::desk_cells(map, tiles, &owners, en.skill)
+                                .any(|d| lectern_of(map, tiles, &owners, d).is_some())
+                        })
+                        .map(|(e, id, en, st)| {
+                            let lectern = st
+                                .filter(|s| !s.teacher)
+                                .and_then(|s| lectern_of(map, tiles, &owners, s.spot));
+                            (id.0.clone(), e, en.skill, lectern)
+                        })
+                        .collect()
+                };
+                list.into_iter()
+                    .map(|(id, e, skill, lectern)| (id, self.tutor_of(e, skill, lectern)))
+                    .collect()
+            };
             // Галочки «учиться в простое» (§12.314) — тем же боковым запросом.
             let self_studies: Vec<(String, Vec<usize>)> = {
                 let mut q = self.world.query::<(&UnitId, &SelfStudy)>();
@@ -6841,6 +6935,15 @@ impl Sim {
                         .find(|(who, _)| who == &id.0)
                         .map_or(-1, |(_, skill)| *skill as i32),
                     lesson: study.map_or(-1, |s| s.skill as i32),
+                    tutor_wait: match tutor_waits.iter().find(|(who, _)| who == &id.0) {
+                        Some((_, Tutor::Nobody)) => "none",
+                        Some((_, Tutor::Gone(_, gone))) => gone.tag(),
+                        _ => "",
+                    },
+                    tutor_name: match tutor_waits.iter().find(|(who, _)| who == &id.0) {
+                        Some((_, Tutor::Gone(name, _))) => name.clone(),
+                        _ => String::new(),
+                    },
                     // Какой домен растёт и растёт ли сейчас (§12.17): панель
                     // кота показывает один навык, и выбирает его ядро.
                     training: trained.map_or(-1, |t| t.skill as i32),
