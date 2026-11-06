@@ -457,3 +457,61 @@ fn an_unfinished_class_does_not_teach() {
     sim.tick_n(200);
     assert_eq!(sim.xp_of("a", science), 0, "и ничему не учит");
 }
+
+// —— Урок и автовылазка (§12.346) ——————————————————————————————————————————
+
+/// Классная комната со шлюзом-столом в правом углу прохода, где стоит `b`:
+/// `b` — учитель «Науки» третьего уровня и боец отряда этого стола, а заказ
+/// на одного уже заведён.
+fn class_with_squad() -> (Sim, usize, usize) {
+    let (mut sim, science) = classroom(ROOM);
+    sim.set_xp("b", science, 300);
+    sim.set_gate(6, true);
+    sim.force_tile(7, 2, 6);
+    let def = sim.set_mission(1, 30, &[]);
+    assert!(sim.enlist("b", 7, 2), "учитель зачислен в отряд");
+    (sim, science, def)
+}
+
+/// Правило автовылазки ждёт конца урока (§12.346): урок конечен, а
+/// оборванный посередине он отнимает у ученика ходьбу и учителя, не дав
+/// уровня. Кончился урок — отряд уходит сам.
+#[test]
+fn the_auto_raid_waits_for_the_lesson_to_end() {
+    let (mut sim, science, def) = class_with_squad();
+    assert!(sim.teach("a", "science"));
+    sim.tick_n(3);
+    assert!(sim.is_teaching("b"), "урок начался");
+
+    assert!(sim.set_auto_raid(def as i32, 7, 2), "правило поставлено");
+    sim.tick_n(5);
+    assert_eq!(sim.raid_count(), 0, "посреди урока правило не уводит");
+    assert!(sim.is_teaching("b"), "учитель за кафедрой");
+
+    for _ in 0..400 {
+        if !sim.is_teaching("b") {
+            break;
+        }
+        sim.tick_n(1);
+        assert!(!sim.is_away("b"), "пока учит — дома");
+    }
+    assert_eq!(sim.level_of("a", science), 1, "урок дан целиком");
+    sim.tick_n(20);
+    assert!(sim.is_away("b"), "а кончился урок — отряд ушёл сам");
+}
+
+/// Ручная отправка урока не ждёт (§12.346): это прямой приказ игрока, и
+/// учитель встаёт с кафедры, а ученик уходит в очередь (§12.344).
+#[test]
+fn a_manual_launch_pulls_the_teacher_off_the_lesson() {
+    let (mut sim, _, def) = class_with_squad();
+    assert!(sim.teach("a", "science"));
+    sim.tick_n(3);
+    assert!(sim.is_teaching("b"), "урок начался");
+
+    assert!(sim.launch_node(def, 7, 2, -1), "отправил игрок");
+    sim.tick_n(10);
+    assert!(sim.is_away("b"), "учитель ушёл с отрядом");
+    assert!(!sim.is_studying("a"), "ученик встал");
+    assert!(sim.is_enrolled("a"), "и ждёт в очереди");
+}

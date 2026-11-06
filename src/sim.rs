@@ -4497,6 +4497,12 @@ impl Sim {
             if !self.undressed_of(x, y).is_empty() {
                 continue;
             }
+            // Кто-то из отряда ведёт урок — правило ждёт его конца (§12.346):
+            // урок конечен, а оборванный посередине он отнимает у ученика
+            // ходьбу и учителя, не дав уровня.
+            if !self.teaching_of(x, y).is_empty() {
+                continue;
+            }
             // Правило берётся за заказ, **только когда прогноз обещает полную
             // долю** (§12.117). До §12.117 здесь стоял минимум вилки (§12.113),
             // и он мерил не то: справится ли отряд, считает `outcome`, а не
@@ -4588,6 +4594,31 @@ impl Sim {
             .iter(&self.world)
             .filter(|(_, spot, going)| spot.spot == (x, y) && going.is_none())
             .filter(|(id, ..)| !plan.short_of(&id.0).is_empty())
+            .map(|(id, ..)| id.0.clone())
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// Кто из отряда сейчас ведёт урок (§12.346), по `id`: учит класс за
+    /// кафедрой или идёт к ней. Бойцы отряда и его радист — тот уходит со
+    /// сбором за стол брифинга, то есть урок обрывается так же.
+    ///
+    /// Держит только **правило автовылазки**, как `undressed_of`: урок конечен
+    /// («Учить» — один уровень, §12.269), и правило подождёт его конца, а не
+    /// оборвёт посередине. Кнопка игрока не ждёт — это прямой приказ, и
+    /// учителя снимает с кафедры `launch_at`, как с любой работы.
+    pub(crate) fn teaching_of(&mut self, x: i32, y: i32) -> Vec<String> {
+        let mut q = self
+            .world
+            .query::<(&UnitId, Option<&Enlisted>, Option<&Posted>, &Study)>();
+        let mut out: Vec<String> = q
+            .iter(&self.world)
+            .filter(|(_, enlisted, posted, study)| {
+                study.teacher
+                    && (enlisted.is_some_and(|e| e.spot == (x, y))
+                        || posted.is_some_and(|p| p.spot == (x, y)))
+            })
             .map(|(id, ..)| id.0.clone())
             .collect();
         out.sort_unstable();
@@ -7733,6 +7764,7 @@ impl Sim {
                         operator_boost: self.operator_boost_at(x, y),
                         linked_spans: self.node_linked_spans(x, y),
                         undressed: self.undressed_of(x, y),
+                        teaching: self.teaching_of(x, y),
                     }
                 })
                 .collect()

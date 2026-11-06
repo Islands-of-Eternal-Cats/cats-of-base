@@ -17116,11 +17116,17 @@ function ruleRow(node) {
   // ядро спрашивает это тоже до `auto_outcome_full`.
   const undressed = node.undressed || [];
   const naked = holding && !over && !gathering && undressed.length > 0;
+  // Кто-то из отряда ведёт урок (§12.346): правило ждёт конца урока. В ядре
+  // спрашивается тоже после снаряжения и до прогноза (`teaching_of`).
+  const teachers = node.teaching || [];
+  const lesson =
+    holding && !over && !gathering && !naked && teachers.length > 0;
   const weak =
     holding &&
     !over &&
     !gathering &&
     !naked &&
+    !lesson &&
     (node.auto_fail || node.auto_share < 100);
   const state = nogate
     ? "выйти некуда"
@@ -17138,7 +17144,9 @@ function ruleRow(node) {
             ? "ждёт сбора"
             : naked
               ? "нечего надеть"
-              : weak
+              : lesson
+                ? "ждёт конца урока"
+                : weak
                 ? node.auto_fail
                   ? "прогноз: провал"
                   : `прогноз: ${node.auto_share} %`
@@ -17156,7 +17164,11 @@ function ruleRow(node) {
           ? `${undressed.join(", ")}: по приписке нужна вещь, которой нет на ` +
             `базе. Правило ждёт, пока она появится, — или снимите приписку ` +
             `в «Личном деле». Отправить как есть можно вручную, из штаба`
-          : weak
+          : lesson
+            ? `${teachers.join(", ")} ведёт урок. Правило дождётся его конца, ` +
+              `а не оборвёт посередине. Отправить сейчас можно вручную, из ` +
+              `штаба: учитель встанет с кафедры`
+            : weak
             ? `Правило уводит отряд только на полной доле, а сейчас ` +
               `${
                 node.auto_fail
