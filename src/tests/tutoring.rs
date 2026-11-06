@@ -515,3 +515,61 @@ fn a_manual_launch_pulls_the_teacher_off_the_lesson() {
     assert!(!sim.is_studying("a"), "ученик встал");
     assert!(sim.is_enrolled("a"), "и ждёт в очереди");
 }
+
+// —— Ученик на уроке — не свободный учитель (§12.347) —————————————————————
+
+/// Две маленькие парты рядом, обе учат «Науку» и «Связь». `c` — учитель
+/// «Связи», `b` — знает «Науку» на третий уровень, но сама записана учиться
+/// «Связи», `a` — ученик «Науки». Ровно Морзе, Антенна и Йод.
+fn two_desks() -> (Sim, usize, usize) {
+    let mut sim = sim_from(&["#########", "#.......#", "#a..b..c#", "#########"]);
+    let science = sim.set_skill("science", &[20, 100, 300]);
+    let relay = sim.set_skill("relay", &[20, 100, 300]);
+    sim.set_taught(science, 3);
+    sim.set_taught(relay, 3);
+    sim.set_teaches(DESK, science);
+    sim.add_teaches(DESK, relay);
+    sim.set_solid(TABLE, true);
+    sim.tile_rule(LECTERN, |r| r.lectern = true);
+    let def = sim.set_structure(vec![vec![Some(DESK), Some(TABLE), Some(LECTERN)]]);
+    assert!(sim.place_structure(def as i32, 2, 1, 0), "первая парта");
+    assert!(sim.place_structure(def as i32, 5, 1, 0), "вторая парта");
+    sim.tick_n(160);
+    assert_eq!(sim.tile(4, 1), LECTERN, "первая построена");
+    assert_eq!(sim.tile(7, 1), LECTERN, "вторая построена");
+    sim.set_xp("c", relay, 300);
+    sim.set_xp("b", science, 300);
+    (sim, science, relay)
+}
+
+/// Ученица на уроке «Связи» учительницей «Науки» не числится (§12.347):
+/// `assign_tutor` её с урока не снимет, и ученик «Науки», севший её ждать,
+/// просидел бы весь чужой урок. Он ждёт в очереди и работает, а кончился урок —
+/// садится, и она приходит его учить.
+#[test]
+fn a_pupil_in_a_lesson_is_not_a_free_teacher() {
+    let (mut sim, science, relay) = two_desks();
+    assert!(sim.teach("b", "relay"));
+    sim.tick_n(5);
+    assert!(sim.is_teaching("c"), "урок «Связи» идёт");
+    assert!(sim.is_studying("b"));
+
+    assert!(sim.teach("a", "science"), "запись, а не отказ");
+    sim.tick_n(3);
+    assert!(sim.is_enrolled("a"));
+    assert!(!sim.is_studying("a"), "чужого урока за партой не ждёт");
+
+    for _ in 0..400 {
+        if sim.level_of("b", relay) >= 1 && sim.is_studying("a") {
+            break;
+        }
+        sim.tick_n(1);
+        if sim.level_of("b", relay) == 0 {
+            assert!(!sim.is_studying("a"), "пока у неё урок — не садится");
+        }
+    }
+    assert_eq!(sim.level_of("b", relay), 1, "свой урок она дослушала");
+    sim.tick_n(10);
+    assert!(sim.is_teaching("b"), "и пришла учить «Науке»");
+    assert!(sim.xp_of("a", science) > 0, "урок идёт");
+}

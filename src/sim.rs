@@ -5993,13 +5993,24 @@ impl Sim {
         skill: usize,
         lectern: Option<(i32, i32)>,
     ) -> Tutor {
-        let teaching: Vec<(Entity, (i32, i32))> = {
+        let studies: Vec<(Entity, (i32, i32), bool)> = {
             let mut q = self.world.query::<(Entity, &Study)>();
             q.iter(&self.world)
-                .filter(|(_, s)| s.teacher)
-                .map(|(e, s)| (e, s.spot))
+                .map(|(e, s)| (e, s.spot, s.teacher))
                 .collect()
         };
+        let teaching: Vec<(Entity, (i32, i32))> = studies
+            .iter()
+            .filter(|(.., teacher)| *teacher)
+            .map(|&(e, spot, _)| (e, spot))
+            .collect();
+        let owners = self.owners();
+        let learning = crate::skills::in_lesson(
+            self.world.resource::<BaseMap>(),
+            self.world.resource::<TileRules>(),
+            &owners,
+            &studies,
+        );
         let mut q = self
             .world
             .query::<(Entity, &UnitId, Option<&Skills>, crate::skills::TutorFlags)>();
@@ -6007,7 +6018,8 @@ impl Sim {
         let xp = world.get::<Skills>(cat_e).map_or(0, |s| s.xp_of(skill));
         let cands = q.iter(world).filter_map(|(e, id, sk, flags)| {
             let at = teaching.iter().find(|(t, _)| *t == e).map(|(_, s)| *s);
-            Some((e, id.0.as_str(), sk?, Gone::of(flags, at, lectern)))
+            let gone = Gone::of(flags, at, learning.contains(&e), lectern);
+            Some((e, id.0.as_str(), sk?, gone))
         });
         tutor_for(world.resource::<SkillRules>(), skill, cat_e, xp, cands)
     }

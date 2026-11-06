@@ -197,6 +197,9 @@ pub(crate) enum Gone {
     Sleep,
     /// Учит класс за другой партой.
     Class,
+    /// Сам сидит учеником на идущем уроке (§12.347): `assign_tutor` такого с
+    /// урока не снимает — запасным учителем он бывает, только пока сам ждёт.
+    Lesson,
     /// Ест, идёт за снаряжением или лечит раненого — освободится скоро.
     Busy,
 }
@@ -211,6 +214,7 @@ impl Gone {
             Gone::Heal => "heal",
             Gone::Sleep => "sleep",
             Gone::Class => "class",
+            Gone::Lesson => "lesson",
             Gone::Busy => "busy",
         }
     }
@@ -229,6 +233,7 @@ impl Gone {
             bool,
         ),
         teaching: Option<(i32, i32)>,
+        learning: bool,
         lectern: Option<(i32, i32)>,
     ) -> Option<Gone> {
         if away {
@@ -243,6 +248,8 @@ impl Gone {
             Some(Gone::Sleep)
         } else if teaching.is_some_and(|t| Some(t) != lectern) {
             Some(Gone::Class)
+        } else if learning {
+            Some(Gone::Lesson)
         } else if eat || equip || treat {
             Some(Gone::Busy)
         } else {
@@ -307,12 +314,42 @@ pub(crate) fn tutor_for<'a>(
     }
 }
 
+/// Кто сидит учеником на **идущем** уроке (§12.347): за партой без кафедры
+/// (учит сама) или у кафедры, которую держит учитель — дошедший или идущий.
+/// Такого `assign_tutor` в запасные учителя не берёт (`idle` у него — только
+/// ученики у пустой кафедры), значит и `tutor_for` не вправе звать его
+/// свободным: разойдись они — ученик садился бы ждать учителя, которого с
+/// урока никто не снимет. На этом попались Йод и Антенна: она училась «Связи»
+/// у Морзе, а для учеников «Науки» числилась свободной учительницей.
+///
+/// `studies` — `(кот, место, учитель ли)` всех `Study` мира.
+pub(crate) fn in_lesson(
+    map: &BaseMap,
+    tiles: &TileRules,
+    owners: &Owners,
+    studies: &[(Entity, (i32, i32), bool)],
+) -> Vec<Entity> {
+    let manned: Vec<(i32, i32)> = studies
+        .iter()
+        .filter(|(_, _, teacher)| *teacher)
+        .map(|(_, spot, _)| *spot)
+        .collect();
+    studies
+        .iter()
+        .filter(|(_, spot, teacher)| {
+            !teacher && lectern_of(map, tiles, owners, *spot).is_none_or(|at| manned.contains(&at))
+        })
+        .map(|(e, ..)| *e)
+        .collect()
+}
+
 /// Кандидаты в учителя из запроса системы (§12.344) — в той форме, какую ждёт
 /// `tutor_for`. `lectern` — кафедра, к которой зовут: учитель за ней же не
 /// считается занятым чужим уроком.
 #[allow(clippy::type_complexity)]
 pub(crate) fn tutor_cands<'a>(
     q: &'a Query<(Entity, &UnitId, Option<&Skills>, TutorFlags, Option<&Study>)>,
+    learning: &'a [Entity],
     lectern: Option<(i32, i32)>,
 ) -> impl Iterator<Item = (Entity, &'a str, &'a Skills, Option<Gone>)> + 'a {
     q.iter().filter_map(move |(e, id, skills, flags, study)| {
@@ -321,7 +358,7 @@ pub(crate) fn tutor_cands<'a>(
             e,
             id.0.as_str(),
             skills?,
-            Gone::of(flags, teaching, lectern),
+            Gone::of(flags, teaching, learning.contains(&e), lectern),
         ))
     })
 }
@@ -617,6 +654,12 @@ pub(crate) fn assign_study(
         .collect();
     idle.sort_unstable_by_key(|&(id, ..)| id);
 
+    let studies: Vec<(Entity, (i32, i32), bool)> = tutors
+        .iter()
+        .filter_map(|(e, .., st)| st.map(|s| (e, s.spot, s.teacher)))
+        .collect();
+    let learning = in_lesson(&map, &tiles, &owners, &studies);
+
     for (_, cat_e, at, skill, xp, cap) in idle {
         if xp >= cap {
             // Вторая из двух непересекающихся веток исчерпания приписки: этого
@@ -641,7 +684,7 @@ pub(crate) fn assign_study(
                 skill,
                 cat_e,
                 xp,
-                tutor_cands(&tutors, Some(lectern)),
+                tutor_cands(&tutors, &learning, Some(lectern)),
             ) != Tutor::Comes
         {
             continue;
@@ -1073,6 +1116,11 @@ pub(crate) fn study(
         .iter()
         .map(|&(spot, skill, ..)| (spot, skill))
         .collect();
+    let studies: Vec<(Entity, (i32, i32), bool)> = students
+        .iter()
+        .map(|(e, _, s, ..)| (e, s.spot, s.teacher))
+        .collect();
+    let learning = in_lesson(&map, &tiles, &owners, &studies);
     let pupils: Vec<((i32, i32), usize, i32)> = students
         .iter()
         .filter(|(_, _, s, ..)| !s.teacher)
@@ -1143,7 +1191,8 @@ pub(crate) fn study(
         {
             let cands = cats.iter().filter_map(|(e, id, sk, flags)| {
                 let at = teaching.iter().find(|(t, _)| *t == e).map(|(_, s)| *s);
-                Some((e, id.0.as_str(), sk?, Gone::of(flags, at, Some(lectern))))
+                let gone = Gone::of(flags, at, learning.contains(&e), Some(lectern));
+                Some((e, id.0.as_str(), sk?, gone))
             });
             let xp = skills.map_or(0, |s| s.xp_of(task.skill));
             if tutor_for(&rules, task.skill, cat_e, xp, cands) != Tutor::Comes {
