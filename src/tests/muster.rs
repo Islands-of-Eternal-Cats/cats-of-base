@@ -320,6 +320,28 @@ fn nothing_is_built_on_a_slot() {
     );
 }
 
+/// Пол под слотом ластиком не снять (§12.360): яма на месте стула держала бы
+/// сбор вечно. Ластик по столу со слотами сносит стол, а слоты остаются полом.
+#[test]
+fn a_slot_floor_is_not_erased() {
+    let mut sim = hall();
+    assert!(!sim.plan_demolish(3, 1), "слот держит пол");
+    assert!(sim.plan_demolish(3, 2), "стол сносится");
+    sim.force_tile(3, 2, 0);
+    sim.tick_n(1); // `prune_structures` снимает объект
+    assert!(sim.plan_demolish(3, 1), "без стола слот — обычный пол");
+}
+
+/// Яму под слотом, оставшуюся от старой партии, можно заложить полом —
+/// и только им (§12.360).
+#[test]
+fn a_hole_under_a_slot_takes_floor_back() {
+    let mut sim = hall();
+    sim.force_tile(3, 1, -1);
+    assert!(!sim.add_blueprint(3, 1, i32::from(OTHER)), "постройку нельзя");
+    assert!(sim.add_blueprint(3, 1, 0), "пол — можно");
+}
+
 /// Слоту нужен свободный пол: стол, чей слот лёг бы на постройку или в
 /// пустоту, не ставится вовсе — у объекта отказ один на весь штамп.
 #[test]
