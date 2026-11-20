@@ -841,10 +841,8 @@ main#stage.mode-cursor #mode-banner {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Место под шеврон свёртки — в строке имени: строке значков ширина нужнее. */
-.squad-title {
-  padding-right: 18px;
-}
+/* Место под шеврон свёртки и карандаш правки (§12.359) — в строке имени:
+   строке значков ширина нужнее. Отступ — ниже, у `.squad-edit`. */
 .squad-line {
   display: flex;
   align-items: center;
@@ -931,6 +929,78 @@ main#stage.mode-cursor #mode-banner {
 .squad-sel.on {
   border-color: var(--accent);
   color: var(--accent);
+}
+/* Карандаш правки состава (§12.359) — левее стрелки свёртки. В режиме он
+   становится словом «Готово» в акценте, а шапка — двойной рамкой: режим
+   обязан быть виден сразу, иначе он то же скрытое состояние, что и было. */
+.squad-edit {
+  position: absolute;
+  z-index: 1;
+  right: 28px;
+  top: 7px;
+  height: 18px;
+  min-width: 18px;
+  padding: 0 3px;
+  justify-content: center;
+  align-items: center;
+  border-color: transparent;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.squad-edit:not(.off):hover {
+  color: var(--text, #e6e8ee);
+  border-color: var(--line);
+}
+.squad-edit.on {
+  padding: 0 7px;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #1b1f2a;
+}
+.squad-edit.on:hover {
+  color: #1b1f2a;
+  border-color: var(--accent);
+}
+.squad-edit.off {
+  opacity: 0.35;
+  cursor: default;
+}
+.squad-title {
+  padding-right: 40px;
+}
+.squad-head.editing .squad-title {
+  padding-right: 84px;
+}
+.squad-head.editing .squad-sel {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+/* «+» и «−» в строке кота (§12.359): только в режиме правки, справа, по
+   размеру слота снаряжения. */
+.crew-edit {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  justify-content: center;
+  align-items: center;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+}
+.crew-add:not(.off) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.crew-out:not(.off) {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.crew-edit.off {
+  opacity: 0.35;
+  cursor: default;
 }
 /* Отряд в деле выбирают, чтобы посмотреть его вылазку, — без жёлтого:
    акцент выбора звал бы отправлять, а отправлять тут некого. */
@@ -1979,6 +2049,11 @@ body.rail-wide #screenbar .door-label {
 /* «Закрыть» на экране не нужна: дорога назад — вкладка «База» и Escape. */
 .screen .raidwin-close,
 .screen .win-close {
+  display: none;
+}
+/* Верхний ряд штаба держит только «Закрыть» (§12.359): имя отряда живёт в его
+   карточке, а на экране кнопка спрятана — ряд пуст и места не занимает. */
+.screen .raidwin-bare {
   display: none;
 }
 
@@ -3911,30 +3986,49 @@ body.rail-wide #screenbar .door-label {
 }
 
 /* Имя отряда в шапке штаба (§12.300): подпись-дверь в правку, как `.keep-val`. */
-.raidwin-title .squad-name {
+/* Правка имени отряда (§12.300, §12.359): карандаш у имени в карточке
+   отряда (только в правке состава), поле — поверх имени, соседом кнопки-шапки
+   в `.squad-head`. */
+.squad-rename {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px;
+  border-radius: 3px;
+  color: var(--muted);
   cursor: text;
-  border-bottom: 1px dashed transparent;
+  vertical-align: middle;
 }
-.raidwin-title .squad-name:hover {
-  border-bottom-color: var(--accent);
+.squad-rename:hover {
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.06);
 }
-.raidwin-title .squad-input {
+.squad-head.renaming .squad-title {
+  visibility: hidden;
+}
+.squad-head .squad-input {
+  position: absolute;
+  z-index: 2;
   font: inherit;
-  color: inherit;
-  width: 14em;
-  background: transparent;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--accent);
+  background: var(--panel);
   border: 1px solid var(--accent);
   border-radius: 4px;
-  padding: 0 6px;
+  padding: 1px 6px;
 }
-.raidwin-title .squad-input::placeholder {
+.squad-head .squad-input::placeholder {
   color: inherit;
   opacity: 0.4;
 }
-.raidwin-title .squad-why {
+.squad-head .squad-why {
+  position: absolute;
+  z-index: 2;
+  padding: 1px 6px;
+  background: var(--panel);
   color: var(--bad);
-  font-size: 13px;
-  font-weight: 400;
+  font-size: 12px;
 }
 
 /* Отказ приказа с вещью словом (§12.303). */

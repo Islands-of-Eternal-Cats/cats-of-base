@@ -492,25 +492,72 @@ onPanelClick(catEl, ".raid-open", (b) =>
 // заведено, — и без ключа две строки поделили бы один взвод. `data-in` —
 // «числится ли здесь»: одна кнопка на два состояния, потому что и вопрос один —
 // про этого кота и этот узел.
-onPanelClick(raidWinEl, ".squad-name", (b) => {
-  const [x, y] = b.dataset.key.slice(5).split(",").map(Number);
+// Имя переименовывается только в правке состава (§12.359): карандаш стоит
+// рядом с именем в карточке отряда. Он внутри кнопки-шапки (кнопка в кнопке
+// недопустима, поэтому это `span`), и шапка его клик пропускает.
+onPanelClick(raidWinEl, ".squad-rename", (b) => {
+  const x = Number(b.dataset.x);
+  const y = Number(b.dataset.y);
+  if (!crewEditing(x, y)) return;
   startSquadRename(x, y);
 });
 onPanelClick(raidWinEl, ".crew-pick", (b) => {
   // Погашенная классом строка события мыши шлёт — тем и ценна (§12.121), —
   // поэтому отказ проверяем сами; причина написана в подсказке.
-  if (b.classList.contains("off") || b.classList.contains("nearby-pick")) return;
-  // Выбран другой отряд — кот переходит в него, а не выпадает в свободные:
-  // `enlist` сам снимает прежнюю приписку (кот числится в одном отряде, §12.61).
-  const sel = raidHome || nodeAt(raidWinAt?.x, raidWinAt?.y)?.busy ? null : raidWinAt;
+  if (b.classList.contains("nearby-pick")) return;
+  // Строка кота в составе состав не меняет (§12.359): клик — осмотр, он
+  // выбирает отряд этого кота. Менять состав — «+» и «−» в режиме правки:
+  // одна и та же строка зачисляла, исключала или переводила из соседнего
+  // отряда, смотря что было выбрано раньше, и выбор этот на глаза не попадался.
   const x = Number(b.dataset.x);
   const y = Number(b.dataset.y);
-  if (sel && (sel.x !== x || sel.y !== y)) {
-    sendAction({ type: "enlist", id: b.dataset.id, x: sel.x, y: sel.y });
-    return;
+  if (!raidHome && raidWinAt?.x === x && raidWinAt?.y === y) return;
+  // Выбранная База переживает смену отряда (§12.355).
+  mapHome = atHome();
+  raidHome = false;
+  raidWinAt = { x, y };
+  nearbyPick.clear();
+  syncNearbyPick();
+  renderRaidWindow();
+});
+// Правка состава (§12.359): карандаш в шапке отряда включает режим и выбирает
+// отряд, повторный клик («Готово») выключает. Это вид, а не мир — мимо
+// `sendAction`.
+onPanelClick(raidWinEl, ".squad-edit", (b) => {
+  if (b.classList.contains("off")) return;
+  const x = Number(b.dataset.x);
+  const y = Number(b.dataset.y);
+  if (crewEditing(x, y)) {
+    crewEdit = null;
+  } else {
+    crewEdit = `${x},${y}`;
+    mapHome = atHome();
+    raidHome = false;
+    raidWinAt = { x, y };
+    nearbyPick.clear();
+    syncNearbyPick();
+    // Свёрнутый состав правят развёрнутым: «−» стоит на строках.
+    if (squadFolds.delete(`${x},${y}`))
+      localStorage.setItem("sp-squad-fold", JSON.stringify([...squadFolds]));
   }
+  if (slotPick?.slot === "radio") slotPick = null;
+  renderRaidWindow();
+});
+// «+» — зачислить в отряд, который правят (свободного или из соседнего
+// отряда: `enlist` сам снимает прежнюю приписку, §12.61); «−» — исключить.
+onPanelClick(raidWinEl, ".crew-add", (b) => {
+  if (b.classList.contains("off")) return;
   sendAction({
-    type: b.dataset.in ? "dismiss" : "enlist",
+    type: "enlist",
+    id: b.dataset.id,
+    x: Number(b.dataset.x),
+    y: Number(b.dataset.y),
+  });
+});
+onPanelClick(raidWinEl, ".crew-out", (b) => {
+  if (b.classList.contains("off")) return;
+  sendAction({
+    type: "dismiss",
     id: b.dataset.id,
     x: Number(b.dataset.x),
     y: Number(b.dataset.y),
@@ -532,6 +579,10 @@ onPanelClick(raidWinEl, ".radio-pick", (b) => {
 // Слот снаряжения (§12.293): открывает список вещей для слота, повторный клик
 // закрывает. Это осмотр, а не команда — мимо `sendAction`.
 onPanelClick(raidWinEl, ".crew-slot", (b) => {
+  // Радист — часть состава (§12.354), и меняют его тоже только в правке
+  // (§12.359). Слот снаряжения — нет: он про кота, а не про отряд.
+  if (b.dataset.slot === "radio" && !crewEditing(...b.dataset.id.slice(1).split(",").map(Number)))
+    return;
   if (toggleSlot(b, "raid")) renderRaidWindow();
 });
 // Строка списка — приписка, та же команда, что «Носить»/«Снять» в «Личном
@@ -551,10 +602,17 @@ dossierEl.addEventListener("mousedown", (e) => {
 });
 // Шапка отряда в общем списке (§12.349): выбрать его — пойдёт он; отметки
 // свободных снимаются, повторный клик снимает выбор.
-onPanelClick(raidWinEl, ".squad-sel", (b) => {
+onPanelClick(raidWinEl, ".squad-sel", (b, e) => {
+  if (e.target.closest(".squad-rename")) return;
   const x = Number(b.dataset.x);
   const y = Number(b.dataset.y);
-  const again = !raidHome && raidWinAt?.x === x && raidWinAt?.y === y;
+  // Отряд в деле повторным кликом не снимается (§12.362): его колонка — одна
+  // карточка вылазки, и снятый выбор подменял её чужими заказами.
+  const again =
+    !raidHome &&
+    raidWinAt?.x === x &&
+    raidWinAt?.y === y &&
+    !nodeAt(x, y)?.busy;
   // Выбранная База переживает смену отряда (§12.355).
   mapHome = atHome();
   raidHome = again;
@@ -583,25 +641,12 @@ onPanelClick(raidWinEl, ".squad-fold", (b) => {
   localStorage.setItem("sp-squad-fold", JSON.stringify([...squadFolds]));
   renderRaidWindow();
 });
-// Свободный кот (§12.349, §12.353): выбран отряд — зачислить в него,
-// иначе отметить идти без отряда и отправить отмеченных.
+// Свободный кот (§12.349, §12.359): клик всегда отмечает его идти без
+// отряда — зачисляет только «+» в режиме правки.
 onPanelClick(raidWinEl, ".nearby-pick", (b) => {
   if (b.classList.contains("off")) return;
-  if (b.dataset.x != null) {
-    // Зачисленный в свёрнутый отряд — разворачиваем его (§12.353): иначе
-    // кот, по которому щёлкнули, просто исчез бы из списка.
-    if (squadFolds.delete(`${b.dataset.x},${b.dataset.y}`)) {
-      localStorage.setItem("sp-squad-fold", JSON.stringify([...squadFolds]));
-    }
-    sendAction({
-      type: "enlist",
-      id: b.dataset.id,
-      x: Number(b.dataset.x),
-      y: Number(b.dataset.y),
-    });
-    return;
-  }
-  // Отметка свободного снимает выбор отряда: идут либо он, либо они.
+  // Отметка свободного снимает выбор отряда: идут либо он, либо они. Вместе
+  // с выбором уходит и правка состава (`renderRaidWindow`).
   raidHome = true;
   const id = b.dataset.id;
   if (nearbyPick.has(id)) nearbyPick.delete(id);
@@ -4818,7 +4863,7 @@ function crewList(snap, x, y) {
                     ? "ученик останется без учителя"
                     : "заказ мастерской останется без него") +
               (mine
-                ? ". Исключить: клик"
+                ? ""
                 : no
                   ? `. Сейчас числится: ${nodes[no - 1].name} — зачислить сюда значит забрать оттуда`
                   : "")
@@ -4856,12 +4901,12 @@ function crewList(snap, x, y) {
     // браузер не шлёт событий мыши, и подсказка выше не показалась бы никогда.
     // Радист — тоже член отряда (§12.354): клик по его строке, как по
     // строке бойца, выводит из отряда (`dismiss` снимает и роль радиста).
-    const leave = mine || op;
-    const rowTip = tip || (op ? "Исключить из отряда: клик" : "");
+    // «−» и «+» — только в правке состава (§12.359). Строка сама состав не
+    // меняет: клик по ней выбирает отряд кота.
     const pick =
       `<button class="tool crew-pick${mine ? " on" : ""}${idle ? " idle" : ""}${off ? " off" : ""}" data-id="${esc(e.id)}"` +
-      ` data-x="${x}" data-y="${y}"${leave ? ' data-in="1"' : ""}` +
-      `${rowTip ? ` data-tip="${esc(rowTip)}"` : ""}` +
+      ` data-x="${x}" data-y="${y}"` +
+      `${tip ? ` data-tip="${esc(tip)}"` : ""}` +
       ">" +
       portraitHtml(e.sprite, "crew-face", catFacts(e)) +
       // Текст строки — отдельной колонкой рядом с портретом: сама кнопка
@@ -4891,9 +4936,10 @@ function crewList(snap, x, y) {
     // спрашивает о нём слот под составом (`radioSlotHtml`), а не столбик
     // одинаковых кнопок. У самого радиста слот стоит в его строке.
     const kit = gearSlots(e);
+    const edit = crewEditButton(e, x, y, mine || op, off);
     if (op && radioOnBase())
-      return { band, id: e.id, html: pick + radioSlotButton(x, y, e) + kit };
-    return { band, id: e.id, html: pick + kit };
+      return { band, id: e.id, html: pick + radioSlotButton(x, y, e) + kit + edit };
+    return { band, id: e.id, html: pick + kit + edit };
   });
 
   // Четыре группы с подписями. Вопрос «почему сила 0, когда в отряде трое»
@@ -8603,6 +8649,12 @@ window.addEventListener("keydown", (e) => {
     // разошёлся с первым и оставил «Покупку» без Escape.
     // Список слота в штабе — поверх окна, значит закрывается раньше него.
     if (closeSlotPop()) return;
+    // Правка состава (§12.359) — внутри штаба, значит снимается раньше окна.
+    if (crewEdit && topWindow()?.[0] === "raid") {
+      crewEdit = null;
+      renderRaidWindow();
+      return;
+    }
     if (closeAnyWindow()) return;
     if (dragFrom) {
       endDrag(false);
@@ -13434,14 +13486,54 @@ function syncSlotPop(host) {
 // отряд, а не про кота: поэтому вместо кнопки рации у каждого кота — одно
 // место под составом, по клику список кандидатов (идиома слота снаряжения,
 // §12.293). Адрес слота — стол отряда: `data-id="@x,y"`.
+// Кнопка правки состава у строки кота (§12.359): вне режима её нет вовсе.
+// Кот отряда, который правят, получает «−»; кот другого отряда — «+»,
+// перевод (`enlist` снимает прежнюю приписку, §12.61). `x, y` — стол отряда
+// самого кота, `off` — его строка погашена (ранен, на вылазке, отряд в деле).
+function crewEditButton(e, x, y, inSquad, off) {
+  if (!crewEdit) return "";
+  if (crewEditing(x, y)) {
+    if (!inSquad) return "";
+    const n = nodeAt(x, y);
+    const op = e.post_x === x && e.post_y === y;
+    const tip = op
+      ? `Исключить из «${n?.name ?? ""}» — снимет и с рации`
+      : `Исключить из «${n?.name ?? ""}»`;
+    return (
+      `<button class="tool crew-edit crew-out" data-key="out@${esc(e.id)}" data-id="${esc(e.id)}"` +
+      ` data-x="${x}" data-y="${y}" data-tip="${esc(tip)}">−</button>`
+    );
+  }
+  const from = nodeAt(x, y)?.name ?? "";
+  return crewAddButton(e, off ? (wounded.has(e.id) ? "ранен" : e.away ? "на вылазке" : `«${from}» в деле`) : "", from);
+}
+
+// «+» у кота вне отряда, который правят: свободного или из соседнего.
+// `why` — почему нельзя (словом в подсказке, класс `.off`, §12.121).
+function crewAddButton(e, why, from = "") {
+  if (!crewEdit) return "";
+  const [x, y] = crewEdit.split(",").map(Number);
+  const into = nodeAt(x, y)?.name ?? "";
+  const tip = why
+    ? `Не зачислить: ${why}`
+    : from
+      ? `Перевести в «${into}» из «${from}»`
+      : `Зачислить в «${into}»`;
+  return (
+    `<button class="tool crew-edit crew-add${why ? " off" : ""}" data-key="add@${esc(e.id)}" data-id="${esc(e.id)}"` +
+    ` data-x="${x}" data-y="${y}" data-tip="${esc(tip)}">+</button>`
+  );
+}
+
 function radioSlotButton(x, y, op) {
   const open =
     slotPick?.host === "raid" && slotPick.slot === "radio" && slotPick.id === `@${x},${y}`;
+  const edit = crewEditing(x, y);
   const tip = op
-    ? `Радист: ${op.id}. Клик — сменить или снять`
-    : "Радист не назначен: отряд уйдёт без связи. Клик — выбрать";
+    ? `Радист: ${op.id}. ${edit ? "Клик — сменить или снять" : EDIT_HINT}`
+    : `Радист не назначен: отряд уйдёт без связи. ${edit ? "Клик — выбрать" : EDIT_HINT}`;
   return (
-    `<button class="tool crew-slot crew-radio ${op ? "worn" : "empty"}${open ? " open" : ""}"` +
+    `<button class="tool crew-slot crew-radio ${op ? "worn" : "empty"}${open ? " open" : ""}${edit ? "" : " lock"}"` +
     ` data-id="@${x},${y}" data-slot="radio" data-tip="${esc(tip)}">${statGlyph("relay")}</button>`
   );
 }
@@ -13451,10 +13543,12 @@ function radioSlotButton(x, y, op) {
 function radioSlotHtml(n) {
   const open =
     slotPick?.host === "raid" && slotPick.slot === "radio" && slotPick.id === `@${n.x},${n.y}`;
+  const edit = crewEditing(n.x, n.y);
+  const tip = `Радист сидит за рацией на базе и сокращает отряду дорогу. ${edit ? "Клик — выбрать" : EDIT_HINT}`;
   return (
-    `<button class="tool crew-slot crew-radio wide empty${open ? " open" : ""}"` +
+    `<button class="tool crew-slot crew-radio wide empty${open ? " open" : ""}${edit ? "" : " lock"}"` +
     ` data-id="@${n.x},${n.y}" data-slot="radio"` +
-    ' data-tip="Радист сидит за рацией на базе и сокращает отряду дорогу. Клик — выбрать">' +
+    ` data-tip="${esc(tip)}">` +
     `${statGlyph("relay")}<span class="radio-text">Радист · не назначен</span></button>`
   );
 }
@@ -15952,6 +16046,17 @@ function syncNearbyPick() {
 // «Окрестности» и клик свободным котом по шлюзу. Пока столов нет, окно
 // другим и не бывает.
 let raidHome = false;
+// Отряд, чей состав правят (§12.359): ключ стола «x,y» или `null`. Только в
+// этом режиме у строк есть «+» и «−» и открывается слот радиста; вне его клик
+// по коту — осмотр или отметка, мир он не меняет. Режим живёт, пока этот
+// отряд выбран и дома: смена выбора, отметка свободного, уход отряда и
+// закрытие штаба снимают его сами (`renderRaidWindow`).
+let crewEdit = null;
+// Куда идти за правкой — словом в подсказках вне режима.
+const EDIT_HINT = "Изменить состав — карандаш в шапке отряда";
+function crewEditing(x, y) {
+  return crewEdit === `${x},${y}`;
+}
 // На карте выбрана База (§12.355). Отдельно от `raidHome` («отряд не выбран»):
 // раньше одно значило другое, и выбор отряда молча уводил карту с Базы.
 let mapHome = false;
@@ -16002,15 +16107,29 @@ function startSquadRename(x, y, text = null, why = "") {
   // имя — это и есть номер.
   input.value = text ?? (node.named ? node.name : "");
   input.placeholder = node.name;
-  raidUi.title.innerHTML = "";
-  raidUi.title.appendChild(input);
+  // Поле встаёт поверх имени в карточке отряда (§12.359), соседом кнопки-шапки
+  // в `.squad-head`: внутрь кнопки поле класть нельзя. Место меряем у самого
+  // имени, а не переписываем отступы шапки числами.
+  const head = raidUi.crewEls.get(`shead:sq${x},${y}`);
+  const name = head?.querySelector(".squad-title");
+  if (!head || !name) return;
+  const hr = head.getBoundingClientRect();
+  const nr = name.getBoundingClientRect();
+  input.style.left = `${nr.left - hr.left}px`;
+  input.style.top = `${nr.top - hr.top - 2}px`;
+  input.style.width = `${Math.max(120, hr.right - nr.left - 96)}px`;
+  head.classList.add("renaming");
+  const extra = [input];
   if (why) {
     const w = document.createElement("span");
     w.className = "squad-why";
     w.textContent = SQUAD_NAME_WHY[why]?.() ?? why;
-    raidUi.title.appendChild(w);
+    w.style.left = input.style.left;
+    w.style.top = `${nr.bottom - hr.top + 2}px`;
+    extra.push(w);
   }
-  squadEdit = { x, y, input };
+  for (const n of extra) head.appendChild(n);
+  squadEdit = { x, y, input, extra, head };
   // Клавиши игры висят на окне (пробел — пауза, цифры — скорость), и имя
   // «Отряд 5» уводило бы игру в ×5 — гасим их у самого поля.
   input.addEventListener("keydown", (e) => {
@@ -16027,11 +16146,11 @@ function startSquadRename(x, y, text = null, why = "") {
 // вернёт ближайший снимок.
 function endSquadRename(commit) {
   if (!squadEdit) return;
-  const { x, y, input } = squadEdit;
+  const { x, y, input, extra, head } = squadEdit;
   squadEdit = null;
   const name = input.value;
-  input.remove();
-  if (raidUi) raidUi.title.innerHTML = "";
+  for (const n of extra) n.remove();
+  head.classList.remove("renaming");
   if (commit) sendAction({ type: "renameSquad", x, y, name });
 }
 
@@ -16062,6 +16181,7 @@ function closeRaidWindow() {
   readNews("rule", ruleDefsAt("raid"));
   raidWinOpen = false;
   raidWinAt = null;
+  crewEdit = null;
   if (slotPick?.host === "raid") slotPick = null;
   raidUi = null;
   siteMapFit?.disconnect();
@@ -16098,8 +16218,7 @@ function closeRaidWindow() {
 function buildRaidWindow(key) {
   raidWinEl.innerHTML =
     '<div class="raidwin-box">' +
-    '<div class="raidwin-top">' +
-    '<div class="raidwin-title"></div>' +
+    '<div class="raidwin-top raidwin-bare">' +
     '<button class="tool raidwin-close" data-key="close">Закрыть</button>' +
     "</div>" +
     '<div class="raidwin-tabs" hidden></div>' +
@@ -16131,7 +16250,6 @@ function buildRaidWindow(key) {
   raidUi = {
     pop: q(".slot-pop"),
     at: key,
-    title: q(".raidwin-title"),
     tabs: q(".raidwin-tabs"),
     sum: q(".raidwin-sum"),
     crew: q(".crew-groups"),
@@ -16542,6 +16660,15 @@ function renderRaidWindow() {
   // справа заказы. Выбран отряд — идёт он, иначе идут отмеченные свободные.
   const sel = raidHome ? null : node;
   if (sel) raidWinAt = { x: sel.x, y: sel.y };
+  // Режим правки состава — только у выбранного отряда дома (§12.359): всё
+  // прочее его снимает, иначе он пережил бы смену выбора скрытым состоянием —
+  // ровно тем, из-за которого клик по коту зачислял его «не глядя».
+  if (crewEdit && (!sel || sel.busy || !crewEditing(sel.x, sel.y))) {
+    // Набранное имя не теряем: правка кончилась, но имя игрок уже назвал.
+    endSquadRename(true);
+    crewEdit = null;
+    if (slotPick?.slot === "radio") slotPick = null;
+  }
   if (!raidUi) buildRaidWindow("one");
   raidUi.tabs.hidden = true;
   raidUi.nearbyCrew.hidden = true;
@@ -16555,20 +16682,8 @@ function renderRaidWindow() {
     ? missionsOut.find((m) => m.x === sel.x && m.y === sel.y)
     : null;
 
-  // Имя отряда — дверь в его правку (§12.300). Пока игрок печатает, шапку не
-  // трогаем: снимок затёр бы набранное, как подпись порога (§12.92).
-  if (!sel) {
-    setHtml(raidUi.title, '<span class="squad-name">Вылазки</span>');
-  } else if (!squadEdit) {
-    const n = nodes.indexOf(sel);
-    setHtml(
-      raidUi.title,
-      `<span class="squad-name" data-key="name@${sel.x},${sel.y}"` +
-        ` data-tip="Переименовать отряд">${esc(sel.name)}</span>` +
-        (sel.named ? `<span class="cell-at">№ ${n + 1}</span>` : ""),
-    );
-  }
-
+  // Имени отряда над колонками нет (§12.359): оно стоит в карточке отряда,
+  // там же и правится, — заголовок окна повторял его второй раз.
   if (sel) {
     setHtml(raidUi.sum, summaryHtml(raid, sel));
     // Правило узла — строкой **над** списком заказов (§12.175).
@@ -16809,7 +16924,19 @@ function crewGroups(sel) {
         on,
         busy: n.busy,
         folded,
-        html: squadHeadHtml(`${esc(n.name)}${count}`, raid, n),
+        // В правке у имени карандаш переименования (§12.359).
+        html: squadHeadHtml(
+          `${esc(n.name)}${count}` +
+            (crewEditing(n.x, n.y)
+              ? `<span class="squad-rename" data-key="ren@${n.x},${n.y}" data-x="${n.x}" data-y="${n.y}"` +
+                ' data-tip="Переименовать отряд">' +
+                '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">' +
+                '<path d="M2 10l.6-2.4L8.2 2a1 1 0 0 1 1.4 0l.4.4a1 1 0 0 1 0 1.4L4.4 9.4z"' +
+                ' fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>'
+              : ""),
+          raid,
+          n,
+        ),
       },
       rows: [],
     });
@@ -16832,8 +16959,8 @@ function crewGroups(sel) {
       }
     }
   }
-  // Свободные (§12.353): выбран отряд — клик по коту зачисляет в него, как
-  // было до §12.349; отряд не выбран — клик отмечает кота идти без отряда.
+  // Свободные (§12.353, §12.359): клик по коту отмечает его идти без отряда;
+  // в отряд зачисляет «+», который стоит только в правке состава.
   const free = lastSnap?.free ?? [];
   const cats = (lastSnap?.entities ?? [])
     .filter((e) => !(e.crew_x >= 0) && !(e.post_x >= 0 && nodeAt(e.post_x, e.post_y)))
@@ -16857,29 +16984,19 @@ function crewGroups(sel) {
   const freeGroups = [];
   const rowOf = (e) => {
     const note = why(e);
-    // Выбран отряд — строка зачисляет в него, иначе отмечает «без отряда».
-    // Выбран отряд в деле — его смотрят, а не набирают: клик отмечает кота
-    // идти без отряда, как без выбора.
-    const into = !!sel && !sel.busy;
-    const can = into
-      ? !sel.busy && !e.away && !wounded.has(e.id)
-      : free.includes(e.id);
-    const on = !into && can && nearbyPick.has(e.id);
-    const tip = into
-      ? can
-        ? `Зачислить в «${sel.name}»`
-        : sel.busy
-          ? `«${sel.name}» в деле — зачислить нельзя`
-          : `Не зачислить: ${note || "занят"}`
-      : can
-        ? on
-          ? "Не пойдёт без отряда: клик"
-          : "Отметить: пойдёт без отряда"
-        : `Не пойдёт: ${note || "занят"}`;
+    // Клик по строке всегда отмечает кота идти без отряда (§12.359): зачисляет
+    // только «+» в режиме правки. Раньше та же строка при выбранном отряде
+    // зачисляла в него, и осмотр кота становился приказом незаметно.
+    const can = free.includes(e.id);
+    const on = can && nearbyPick.has(e.id);
+    const tip = can
+      ? on
+        ? "Не пойдёт без отряда: клик"
+        : "Отметить: пойдёт без отряда"
+      : `Не пойдёт: ${note || "занят"}`;
     const pick =
       `<button class="tool crew-pick nearby-pick${on ? " on" : ""}${can ? "" : " off"}"` +
       ` data-key="npick@${esc(e.id)}" data-id="${esc(e.id)}"` +
-      (into ? ` data-x="${sel.x}" data-y="${sel.y}"` : "") +
       ` data-tip="${esc(tip)}">` +
       portraitHtml(e.sprite, "crew-face", catFacts(e)) +
       '<span class="crew-text">' +
@@ -16887,7 +17004,10 @@ function crewGroups(sel) {
       fieldLine(e, led, null, guide) +
       `<i class="crew-note${can ? " quiet" : ""}">${note ? esc(note) : "&nbsp;"}</i>` +
       "</span></button>";
-    return { id: `free:${e.id}`, html: pick + gearSlots(e) };
+    const add = e.away
+      ? ""
+      : crewAddButton(e, wounded.has(e.id) ? "ранен" : "");
+    return { id: `free:${e.id}`, html: pick + gearSlots(e) + add };
   };
   const rows = [];
   const raidRows = new Map();
@@ -16976,7 +17096,37 @@ function syncCrewRows(sel) {
         b._html = g.sel.html;
         b.innerHTML = g.sel.html;
       }
-      orderChildren(head, [fold, b]);
+      // Карандаш правки состава (§12.359) — третьим узлом шапки, рядом со
+      // стрелкой. У отряда в деле тусклый с причиной (§12.121): состав ушедших
+      // заморожен (§12.22). В режиме он становится «Готово».
+      const edit = mk(`edit:${g.key}`, "tool squad-edit", "button");
+      edit.dataset.key = `edit@${g.sel.x},${g.sel.y}`;
+      edit.dataset.x = g.sel.x;
+      edit.dataset.y = g.sel.y;
+      const editing = crewEditing(g.sel.x, g.sel.y);
+      edit.classList.toggle("on", editing);
+      edit.classList.toggle("off", !!g.sel.busy);
+      head.classList.toggle("editing", editing);
+      const etip = g.sel.busy
+        ? "Отряд в деле — состав заморожен до возвращения"
+        : editing
+          ? "Закончить правку состава (Escape)"
+          : "Изменить отряд: состав, радист, имя";
+      if (edit.dataset.tip !== etip) edit.dataset.tip = etip;
+      const ehtml = editing
+        ? "Готово"
+        : '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">' +
+          '<path d="M2 10l.6-2.4L8.2 2a1 1 0 0 1 1.4 0l.4.4a1 1 0 0 1 0 1.4L4.4 9.4z' +
+          '" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>';
+      if (edit._html !== ehtml) {
+        edit._html = ehtml;
+        edit.innerHTML = ehtml;
+      }
+      // Поле переименования (§12.359) — соседом в той же шапке; без него в
+      // списке `orderChildren` перекладывал бы узлы каждым кадром.
+      const extra =
+        squadEdit && squadEdit.head === head ? squadEdit.extra : [];
+      orderChildren(head, [fold, edit, b, ...extra]);
       order.push(head);
       continue;
     }
@@ -17069,7 +17219,12 @@ function syncRaidCards(trips, node) {
     open[i] && here(i) ? raidCard(i, node) : "",
     i,
   ]);
-  if (want.every(([, html]) => !html)) {
+  // Отряд в деле (§12.361): колонка — только про его вылазку. Прочие заказы
+  // он взять не может, а стопка карточек с «Нельзя» под ней прятала ответ на
+  // «куда он идёт». Свободных котов без отряда это не касается: у них
+  // вылазок бывает несколько, и отметить новых можно и при ушедших.
+  if (raid && !node.nearby) for (const w of want) w[1] = "";
+  else if (want.every(([, html]) => !html)) {
     // Единственный заказ, который отряд как раз и ведёт, — это не «заказов
     // пока нет»: колонка пуста по другой причине, и называть её надо своей
     // (§12.53). Третья причина — участок: заказы есть, но не здесь, и слово
@@ -17122,7 +17277,7 @@ function syncRaidCards(trips, node) {
   // работа есть, у кого и насколько не хватает. Виданный остаётся карточкой. Про участок строка не знает намеренно: репутация —
   // про сторону, а не про место, и колонка по участку её не режет. Прятать
   // совсем нельзя: репутация падает (§12.43), и заказы исчезали бы молча.
-  want.push(["trust", trustLines(node)]);
+  if (!(raid && !node.nearby)) want.push(["trust", trustLines(node)]);
   // Заказ правила поднимается **над группами**, а не встаёт в «Остальное».
   if (ruled) {
     const at = want.indexOf(ruled);
@@ -17365,15 +17520,24 @@ function raidCard(i, node) {
   const share = hit ? hit.share : g.share;
   const failed = hit ? hit.failed : g.failed;
   const danger = hit ? hit.danger : g.danger;
+  // У свободных котов (§12.349) отряда нет вовсе: «отряд не набран» звал бы
+  // набирать то, чего у «Пошарить рядом» не бывает. Пусто — «группа не
+  // задана», отмечены — кто идёт поимённо, перед вердиктом.
+  const goers = node.nearby
+    ? [...nearbyPick].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    : [];
+  const who = goers.length
+    ? `<span class="cat-sub">идут: ${goers.map(esc).join(", ")}</span> `
+    : "";
   const verdict = g.busy
     ? ""
     : empty
-      ? '<span class="cat-sub">отряд не набран</span>'
-      : failed
+      ? `<span class="cat-sub">${node.nearby ? "группа не задана" : "отряд не набран"}</span>`
+      : who + (failed
         ? '<span class="bad">провал</span>'
         : share >= 100
           ? '<span class="good">вся добыча</span>'
-          : `<span class="warn">добыча ${share} %</span>`;
+          : `<span class="warn">добыча ${share} %</span>`);
   // Проводник режет сложность делением (§12.70), и без «было» урезанное число
   // выглядит взятым с потолка. Но стоять это обязано **в той же строке**, что и
   // само сравнение: «сила 1 против сложности 1» и «сложность 2 → 1» двумя
