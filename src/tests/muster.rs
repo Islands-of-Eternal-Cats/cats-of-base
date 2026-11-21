@@ -338,7 +338,10 @@ fn a_slot_floor_is_not_erased() {
 fn a_hole_under_a_slot_takes_floor_back() {
     let mut sim = hall();
     sim.force_tile(3, 1, -1);
-    assert!(!sim.add_blueprint(3, 1, i32::from(OTHER)), "постройку нельзя");
+    assert!(
+        !sim.add_blueprint(3, 1, i32::from(OTHER)),
+        "постройку нельзя"
+    );
     assert!(sim.add_blueprint(3, 1, 0), "пол — можно");
 }
 

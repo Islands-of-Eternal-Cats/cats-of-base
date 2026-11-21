@@ -105,9 +105,9 @@ fn scavenging_takes_no_raid_slot() {
 }
 
 /// Свободные коты без стола ходят на **любой** заказ (§12.349) — с теми же
-/// воротами, что у отряда; а вот «Пошарить» отряду не назначают.
+/// воротами, что у отряда; а с §12.363 и отряд ходит «Пошарить».
 #[test]
-fn free_cats_take_any_order_but_squads_never_scavenge() {
+fn free_cats_take_any_order_and_squads_scavenge_too() {
     let (mut sim, def) = yard();
     let raid = sim.set_mission(1, 50, &[]);
     assert!(
@@ -123,10 +123,85 @@ fn free_cats_take_any_order_but_squads_never_scavenge() {
     sim.set_muster(table, true);
     sim.force_tile(5, 1, table);
     assert!(sim.enlist("a", 5, 1));
+    assert!(sim.launch_node(def, 5, 1, -1), "отряд идёт шарить");
+}
+
+/// Двор на пятерых с двумя столами: предел заказа — трое.
+fn crowd() -> (Sim, usize) {
+    let mut sim = sim_from(&[
+        "#########",
+        "#.......#",
+        "#.a.b.c.#",
+        "#.d...e.#",
+        "#.......#",
+        "#########",
+    ]);
+    sim.set_exit(EXIT, true);
+    sim.force_tile(1, 4, EXIT);
+    let table: i16 = 4;
+    sim.set_muster(table, true);
+    sim.force_tile(2, 1, table);
+    sim.force_tile(6, 1, table);
+    let def = sim.set_mission(1, 20, &[]);
+    sim.set_squad_range(def, 1, 3);
+    sim.set_nearby(def);
+    sim.set_yields(def, &[&[(0, 3)]], &[&[(0, 1)]]);
+    (sim, def)
+}
+
+/// Несколько отрядов разом (§12.363): предел заказа считается по сумме
+/// записанных котов, а не по одному отряду.
+#[test]
+fn two_squads_scavenge_together_within_the_limit() {
+    let (mut sim, def) = crowd();
+    assert!(sim.enlist("a", 2, 1) && sim.enlist("b", 2, 1));
+    assert!(sim.enlist("c", 6, 1) && sim.enlist("d", 6, 1));
+    assert_eq!(sim.raid_gates(def).room, Some(3), "пока никто не идёт");
     assert!(
-        !sim.launch_node(def, 5, 1, -1),
-        "отряду «Пошарить» не назначают"
+        sim.launch_node(def, 2, 1, -1),
+        "первый отряд — двое из трёх"
     );
+    assert_eq!(sim.raid_gates(def).room, Some(1));
+    assert!(
+        !sim.launch_node(def, 6, 1, -1),
+        "второй отряд из двоих перебрал бы предел"
+    );
+    assert!(sim.dismiss("d"));
+    assert!(sim.launch_node(def, 6, 1, -1), "из одного — влезает");
+    assert_eq!(sim.raid_gates(def).room, Some(0));
+}
+
+/// Отряд и свободные коты делят один предел (§12.363).
+#[test]
+fn a_squad_and_free_cats_share_the_limit() {
+    let (mut sim, def) = crowd();
+    assert!(sim.enlist("a", 2, 1) && sim.enlist("b", 2, 1));
+    assert!(sim.launch_node(def, 2, 1, -1));
+    assert!(
+        !sim.scavenge(def, vec!["c".into(), "d".into()], -1),
+        "двое свободных сверх предела не идут"
+    );
+    assert!(sim.scavenge(def, vec!["c".into()], -1), "один — идёт");
+    assert!(!sim.scavenge(def, vec!["e".into()], -1), "мест больше нет");
+    // Отозвали свободных — место вернулось.
+    assert!(sim.cancel_mission(def));
+    assert_eq!(sim.raid_gates(def).room, Some(1));
+    assert!(sim.in_squad("a"), "отзыв по заказу отряд не трогает");
+}
+
+/// Обе вылазки возвращаются, и каждая приносит свою добычу.
+#[test]
+fn parallel_scavenges_both_come_home() {
+    let (mut sim, def) = crowd();
+    assert!(sim.enlist("a", 2, 1));
+    assert!(sim.launch_node(def, 2, 1, -1));
+    assert!(sim.scavenge(def, vec!["c".into()], -1));
+    let home = (0..800).any(|_| {
+        sim.tick_n(1);
+        sim.raid_gates(def).room == Some(3)
+    });
+    assert!(home, "обе вернулись, все места свободны");
+    assert_eq!(sim.tally_of(def), 2, "обе вылазки выполнены");
 }
 
 /// Ворота заказа у свободных котов те же, что у отряда: закрытый

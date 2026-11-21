@@ -8,6 +8,7 @@
 
 mod bins;
 mod captivity;
+mod combined;
 mod crafting;
 mod crowd;
 mod demolition;
@@ -294,6 +295,7 @@ fn sim_from(rows: &[&str]) -> Sim {
         ruleset: 0,
         nearby_pick: Vec::new(),
         crew_view: None,
+        squad_pick: Vec::new(),
     }
 }
 

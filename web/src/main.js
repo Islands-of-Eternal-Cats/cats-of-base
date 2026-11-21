@@ -606,6 +606,9 @@ onPanelClick(raidWinEl, ".squad-sel", (b, e) => {
   if (e.target.closest(".squad-rename")) return;
   const x = Number(b.dataset.x);
   const y = Number(b.dataset.y);
+  // Shift — взять отряд с собой (§12.364), как кнопкой «+» в шапке.
+  if (e.shiftKey && toggleSquadJoin(x, y)) return;
+  squadJoin.clear();
   // Отряд в деле повторным кликом не снимается (§12.362): его колонка — одна
   // карточка вылазки, и снятый выбор подменял её чужими заказами.
   const again =
@@ -622,6 +625,24 @@ onPanelClick(raidWinEl, ".squad-sel", (b, e) => {
   // Карту выбор отряда не трогает (§12.355): участок выбирает игрок, и
   // прыжок к участку правила отряда уводил его от заказов, которые он смотрел.
   renderRaidWindow();
+});
+// «Взять с собой» (§12.364): отряд дома уходит одной вылазкой с выбранным.
+// Выбранный ведёт — за его столом брифинг, его радист держит связь. Это вид,
+// а не мир: мимо `sendAction`. Вернёт false, если брать некого или не к кому.
+function toggleSquadJoin(x, y) {
+  const lead = !raidHome && raidWinAt ? nodeAt(raidWinAt.x, raidWinAt.y) : null;
+  const n = nodeAt(x, y);
+  if (!lead || lead.busy || !n || n.busy || n === lead) return false;
+  const key = `${x},${y}`;
+  if (squadJoin.has(key)) squadJoin.delete(key);
+  else squadJoin.add(key);
+  crewEdit = null;
+  renderRaidWindow();
+  return true;
+}
+onPanelClick(raidWinEl, ".squad-join", (b) => {
+  if (b.classList.contains("off")) return;
+  toggleSquadJoin(Number(b.dataset.x), Number(b.dataset.y));
 });
 // Свёрнутые отряды штаба (§12.353): ключ — клетка стола «x,y». Это вид, а не
 // мир, поэтому живёт в `localStorage` рядом с прочими настройками вида.
@@ -645,9 +666,14 @@ onPanelClick(raidWinEl, ".squad-fold", (b) => {
 // отряда — зачисляет только «+» в режиме правки.
 onPanelClick(raidWinEl, ".nearby-pick", (b) => {
   if (b.classList.contains("off")) return;
-  // Отметка свободного снимает выбор отряда: идут либо он, либо они. Вместе
-  // с выбором уходит и правка состава (`renderRaidWindow`).
-  raidHome = true;
+  // Выбран отряд дома — свободный идёт **с ним** одной вылазкой (§12.365),
+  // как отряд «+ вместе». Нет — отметка ведёт свободных одних, без отряда.
+  // Правка состава так не делает: в ней у строки свой «+».
+  const lead = !raidHome && raidWinAt ? nodeAt(raidWinAt.x, raidWinAt.y) : null;
+  if (!lead || lead.busy || crewEdit) {
+    raidHome = true;
+    squadJoin.clear();
+  }
   const id = b.dataset.id;
   if (nearbyPick.has(id)) nearbyPick.delete(id);
   else nearbyPick.add(id);
@@ -678,6 +704,27 @@ onPanelClick(raidWinEl, ".raid-go", (b) => {
   // отвечает на неё свой обработчик: без этой проверки один клик отдал бы две
   // команды — отзыв и новую заявку.
   if (b.classList.contains("raid-stop")) return;
+  // Общая вылазка (§12.364): ведущий и взятые с собой — одной командой.
+  // Свободные коты, взятые с отрядом (§12.365), — той же командой.
+  const units = (lastSnap?.free ?? []).filter((id) => nearbyPick.has(id));
+  if ((squadJoin.size || units.length) && raidWinAt) {
+    sendAction({
+      type: "launchNodes",
+      mission: Number(b.dataset.def),
+      cells: [
+        raidWinAt.x,
+        raidWinAt.y,
+        ...[...squadJoin].flatMap((k) => k.split(",").map(Number)),
+      ],
+      units,
+      site: b.dataset.site == null ? -1 : Number(b.dataset.site),
+    });
+    squadJoin.clear();
+    nearbyPick.clear();
+    syncNearbyPick();
+    syncSquadPick();
+    return;
+  }
   sendAction({
     type: "launch",
     mission: Number(b.dataset.def),
@@ -4744,7 +4791,7 @@ function crewList(snap, x, y) {
   // Кто ведёт **ушедший** отряд, знает сама вылазка: `node.guide` считается по
   // готовым идти сейчас, а ушедшие все `away`, то есть у отряда в поле он пуст.
   // Проводник при этом никуда не делся — он замёрз вместе с составом (§12.22).
-  const raid = missionsOut.find((m) => m.x === x && m.y === y);
+  const raid = missionsOut.find((m) => missionHolds(m, x, y));
   const guide = (node?.busy ? raid?.guide : node?.guide) ?? null;
   // Внутри группы — по полезности в поле, а не по алфавиту (§12.71): вопрос,
   // который игрок задаёт этому списку, ровно один — «кого взять», — и отвечать
@@ -5405,7 +5452,7 @@ function renderMissionPanel(list) {
   // тех пор дублировать её здесь тем более незачем.
   const parts = ['<div class="cat-name">Отряды</div>'];
   for (const node of nodes) {
-    const raid = raidsOut.find((m) => m.x === node.x && m.y === node.y);
+    const raid = raidsOut.find((m) => missionHolds(m, node.x, node.y));
     parts.push(squadRow(node, raid));
   }
   for (const m of near) {
@@ -10225,10 +10272,9 @@ function goneRaid(i) {
 // колонка от неё росла. Ответ на «куда делся заказ» — сама карта: участок
 // горит, а в колонке по нему (§12.243) стоит одна карточка зачистки
 // (`cardForSite`) — она же дорога к возвращению.
-function hiddenRaid(i, outskirts = false) {
-  // «Пошарить» отряду не назначают (§12.349): карточкой он стоит только в
-  // «Окрестностях».
-  if (meta?.missions?.[i]?.nearby && !outskirts) return true;
+function hiddenRaid(i) {
+  // «Пошарить рядом» с §12.363 ходят и отряды: карточка стоит у всех, а где
+  // именно — решает колонка (`here` в `syncRaidCards`: только у Базы).
   if (goneRaid(i)) return true;
   return !(raids[i]?.reachable ?? true);
 }
@@ -10404,11 +10450,21 @@ function raidGate(i, node) {
   // запрещено обратное: показать живым то, что фасад отклонит).
   // Правило соседа на зачистку очаг не держит (§12.315): без названной цели
   // ядро уведёт его в очаг, куда ещё никто не идёт.
+  // У «Пошарить рядом» правило соседа заказ тоже не держит (§12.363): мест
+  // у заказа несколько, и делят их по сумме котов (`room` ниже).
   const ruled =
     !def.cleanses &&
+    !def.nearby &&
     nodes.some((o) => o !== node && o.auto === i && o.auto_on);
+  // «Пошарить рядом» занят не идущей вылазкой, а исчерпанным пределом
+  // (§12.363): сколько котов заказ ещё возьмёт, считает ядро
+  // (`RaidSnap::room`) тем же выражением, каким заявка отклонит лишних.
+  const room = def.nearby ? (gates?.room ?? 0) : null;
   // У зачистки занят только выбранный на карте очаг (§12.315).
-  const taken = running.has(raidKey(i, pickedTarget(i))) || ruled;
+  const taken =
+    room != null
+      ? node.crew.length > room
+      : running.has(raidKey(i, pickedTarget(i))) || ruled;
   // Ворота места (§12.198): участок заказа заражён — или у зачистки не осталось
   // ни одного очага. Считает их ядро (`RaidSnap::reachable`), здесь только
   // называем словом: у обычного заказа это «где горит, туда не ходят», у
@@ -10435,7 +10491,7 @@ function raidGate(i, node) {
   // подменялась одной карточкой, и заказов не было видно вовсе — то есть отказ
   // без причины ровно там, где §12.53 требует причину словом. Теперь она такая
   // же причина, как нехватка известности: заказы видны, кнопка погашена.
-  const mine = missionsOut.find((m) => m.x === node.x && m.y === node.y);
+  const mine = missionsOut.find((m) => missionHolds(m, node.x, node.y));
   const busyHere = !!mine;
   // Своя же вылазка — не «занят», а «она и идёт»: карточка с прогнозом и
   // отзывом стоит первой в колонке, и посылать второй раз некуда.
@@ -10477,14 +10533,18 @@ function raidGate(i, node) {
   // заявку; здесь только называем словом — и кто на базе её несёт.
   const lacks = node.lacks?.[i] ?? [];
   const lackWhy = lacks.length ? abilityWhy(lacks) : null;
-  // «Пошарить рядом» — только свободным котам (§12.349): ядро отклонит заявку
-  // отряда, и кнопка гаснет с причиной словом (§12.355).
-  const squadOut =
-    def.nearby && !node.nearby
-      ? "отряды сюда не ходят — только свободные коты: снимите выбор отряда"
-      : null;
+  // Предел «Пошарить рядом» общий на всех, кто туда ходит (§12.363): отряды
+  // и свободные коты делят его по сумме. Причина словом — сколько мест
+  // осталось и чем это чинится (вычеркнуть лишних или дождаться своих).
+  const roomWhy =
+    room == null || !taken
+      ? null
+      : room === 0
+        ? `мест нет: на заказе уже ${most} — дождитесь, пока вернутся`
+        : `мест осталось ${room} из ${most}, а ${node.nearby ? "отмечено" : "в отряде"}` +
+          ` ${enlisted} — ${node.nearby ? "снимите лишних" : "вычеркните лишних"}` +
+          " или дождитесь, пока вернутся";
   const ready =
-    !squadOut &&
     !nogate &&
     !busyHere &&
     !taken &&
@@ -10508,9 +10568,7 @@ function raidGate(i, node) {
   // заказчиком только тогда. То же и у «эту вылазку уже ведёт другой отряд».
   // Сперва то, что чинится решением игрока, потом то, что чинится временем, —
   // тот же порядок, что у строки правила автовылазки (§12.116).
-  const title = squadOut
-    ? squadOut
-    : nogate
+  const title = nogate
     ? `${hint} · ${nogate}`
     : distrust
       ? `${hint} · ${distrust}`
@@ -10527,6 +10585,8 @@ function raidGate(i, node) {
             // это не уточнение, а второй, неверный ответ: состав ушёл, опасность
             // урезана проводником, и оба числа заморожены на уходе (§12.22).
             busyWhy
+          : roomWhy
+          ? roomWhy
           : taken
             ? // Одним словом на обе причины (§12.183): «ведёт» — это ответ на
               // «свободен ли заказ», а кто именно ведёт, названо строкой выше
@@ -10559,9 +10619,7 @@ function raidGate(i, node) {
   // не пропала: она осталась в подсказке кнопки (`title`), где отвечает на «что
   // будет, если нажать», — §12.53 требует названной причины, а не названной
   // причины в каждой карточке.
-  const reason = squadOut
-    ? squadOut
-    : nogate
+  const reason = nogate
     ? nogate
     : distrust
       ? distrust
@@ -10569,6 +10627,8 @@ function raidGate(i, node) {
         ? blightWhy
         : busyWhy
           ? null
+          : roomWhy
+          ? roomWhy
           : taken
             ? // Кто именно её ведёт, названо серой строкой выше — номером отряда
               // (§12.183). Второй раз красным это тот же ответ без своего вопроса;
@@ -10823,25 +10883,24 @@ function syncRaidTrips() {
       g.setAttribute("class", "map-trip");
       g.dataset.key = key;
       g.innerHTML =
-        `<polyline class="map-trip-path"/>` +
-        `<g class="map-trip-mark squad-tag"><rect x="-9" y="-9" width="18" height="18" rx="4"/><text y="4"></text></g>`;
+        `<polyline class="map-trip-path"/>` + `<g class="map-trip-mark"></g>`;
       layer.appendChild(g);
     }
     const path = trail.map((p) => p.map((v) => v.toFixed(1)).join(",")).join(" ");
     const line = g.querySelector(".map-trip-path");
     if (line.getAttribute("points") !== path) line.setAttribute("points", path);
-    const n = nodes.findIndex((o) => o.x === m.x && o.y === m.y) + 1;
-    const label = g.querySelector("text");
-    // У свободных котов без стола номера отряда нет (§12.349) — плашка
-    // с числом ушедших лап.
-    const tag = m.solo ? String((m.squad ?? []).length) : String(n);
-    if (label.textContent !== tag) {
-      label.textContent = tag;
-      g.style.setProperty("--squad", squadTint(m.solo ? 0 : n));
+    // Плашка на каждый отряд вылазки и на свободных котов (§12.366); пунктир
+    // пути — цветом ведущего.
+    const tags = tripTags(m);
+    const mark = g.querySelector(".map-trip-mark");
+    const html = tagsSvg(tags);
+    if (mark._html !== html) {
+      mark._html = html;
+      mark.innerHTML = html;
+      g.style.setProperty("--squad", tags[0]?.tint ?? FREE_TINT);
     }
     const [x, y] = pointAlong(trail, (m.way ?? 0) / 1000);
     const at = `translate(${x.toFixed(1)},${y.toFixed(1)})`;
-    const mark = g.querySelector(".map-trip-mark");
     if (mark.getAttribute("transform") !== at) mark.setAttribute("transform", at);
     // Дошедший до точки отряд значком на пути не рисуется: он стоит в кружке,
     // где уже есть плашка «сюда назначен», и две плашки с одним номером
@@ -10853,7 +10912,7 @@ function syncRaidTrips() {
     const show = there || !(m.way > 0) ? "none" : "";
     if (mark.style.display !== show) mark.style.display = show;
     const what = (meta?.missions ?? [])[m.def]?.label ?? "";
-    const who = m.solo ? (m.squad ?? []).join(", ") : (nodes[n - 1]?.name ?? "");
+    const who = tags.map((t) => t.who).join(" · ");
     liveTitle(mark, `${who} — ${RAID_PHASE[m.phase] ?? "сбор"}: ${what}`);
   });
   for (const g of [...layer.children]) if (!seen.has(g.dataset.key)) g.remove();
@@ -10874,18 +10933,13 @@ function syncRaidMap() {
   // отряд на дороге домой — неправда, которую игрок видит по срокам. А
   // возвращающийся на карте не метится вовсе: участок он уже покинул, и
   // «где отряд» отвечает карточка идущей вылазки, а не кружок.
+  // Плашка на каждый отряд и на свободных (§12.366): на участок идут и
+  // несколько вылазок разом, и общая вылазка нескольких отрядов.
   const going = new Map();
   missionsOut.forEach((m) => {
     if (m.site >= 0 && m.phase !== "back") {
-      const n = nodes.findIndex((o) => o.x === m.x && o.y === m.y);
-      // Свободные коты без стола (§12.349): вместо номера отряда — число
-      // ушедших, вместо имени — их имена.
-      going.set(
-        m.site,
-        m.solo
-          ? { who: (m.squad ?? []).join(", "), n: (m.squad ?? []).length, phase: m.phase }
-          : { who: nodes[n]?.name ?? "", n: n + 1, phase: m.phase },
-      );
+      if (!going.has(m.site)) going.set(m.site, []);
+      going.get(m.site).push(...tripTags(m).map((t) => ({ ...t, phase: m.phase })));
     }
   });
 
@@ -10935,14 +10989,23 @@ function syncRaidMap() {
     // пойдёт (двух вылазок по одному заказу не бывает). Плашка той же формы,
     // что значок отряда на пути, — круг в центре остаётся счётом заказов.
     const claim = g.querySelector(".map-claim");
-    const mark = going.has(i) ? String(going.get(i).n) : "";
-    claim.style.display = mark ? "" : "none";
-    const tag = claim.querySelector("text");
-    if (tag.textContent !== mark) {
-      tag.textContent = mark;
-      if (mark) claim.style.setProperty("--squad", squadTint(going.get(i).n));
+    const tags = going.get(i) ?? [];
+    claim.style.display = tags.length ? "" : "none";
+    // Ряд растёт влево от угла кружка: последняя плашка стоит там, где стояла
+    // единственная, и не наезжает на соседний участок справа.
+    const chtml = tagsSvg(tags);
+    if (claim._html !== chtml) {
+      claim._html = chtml;
+      claim.innerHTML = chtml;
+      claim.setAttribute(
+        "transform",
+        `translate(${SITE_R * 0.95 - ((tags.length - 1) * 20) / 2},${-SITE_R * 0.95})`,
+      );
     }
-    liveTitle(claim, mark ? `${going.get(i).who} уже назначен сюда` : "");
+    liveTitle(
+      claim,
+      tags.length ? `${tags.map((t) => t.who).join(" · ")} — назначены сюда` : "",
+    );
     // Правило автовылазки — полой плашкой в другом углу (§12.294): «назначен»
     // — разовое решение и залито, правило — повторяющееся и контуром. На паузе
     // (§12.77) плашка тусклая: правило помнится, но отряд по нему не уходит.
@@ -11061,10 +11124,12 @@ function syncRaidMap() {
       lines.push(`<div class="good">выжжено: очаг сюда не перекинется ещё ${st.ward}</div>`);
     }
   }
-  const trip = going.get(i);
-  if (trip) {
-    const word = SITE_PHASE[trip.phase] ?? SITE_PHASE.travel;
-    lines.push(`<div class="warn">${word} ${esc(trip.who)}</div>`);
+  // Строкой на стадию (§12.366): все, кто идёт сюда, поимённо.
+  const trip = going.get(i) ?? [];
+  for (const phase of [...new Set(trip.map((t) => t.phase))]) {
+    const word = SITE_PHASE[phase] ?? SITE_PHASE.travel;
+    const who = trip.filter((t) => t.phase === phase).map((t) => t.who);
+    lines.push(`<div class="warn">${word} ${esc(who.join(", "))}</div>`);
   }
   setHtml(raidUi.note, lines.join(""));
 }
@@ -16037,6 +16102,29 @@ function openRaidWindow(x, y, pick = null) {
 const NEARBY_X = -1000;
 const NEARBY_Y = -1000;
 let nearbyPick = new Set();
+// Отряды, взятые с собой выбранным (§12.364): ключи столов «x,y». Выбранный
+// отряд — ведущий (`raidWinAt`), эти уйдут с ним **одной** вылазкой. Прогноз
+// общего состава считает ядро (`Snapshot::combo`) по `setSquadPick`.
+let squadJoin = new Set();
+let squadPickSent = "";
+function syncSquadPick() {
+  const cells =
+    (squadJoin.size || nearbyPick.size) && raidWinAt && !raidHome
+      ? [[raidWinAt.x, raidWinAt.y], ...[...squadJoin].map((k) => k.split(",").map(Number))]
+      : [];
+  const key = cells.join(";");
+  if (key === squadPickSent) return;
+  squadPickSent = key;
+  worker.postMessage({ type: "setSquadPick", cells: cells.flat() });
+}
+// Держит ли вылазка этот стол (§12.364): ведущий или присоединённый — то же
+// выражение, что `Mission::holds` в ядре.
+function missionHolds(m, x, y) {
+  return (
+    (m.x === x && m.y === y) ||
+    (m.joined ?? []).some(([jx, jy]) => jx === x && jy === y)
+  );
+}
 // Отмеченных ядро должно знать: прогноз карточки «Пошарить» оно считает тем
 // же `NodeSnap`, что у отряда, — по этим котам. Мир это не меняет.
 function syncNearbyPick() {
@@ -16164,6 +16252,9 @@ function onSquadRenamed(m) {
 
 function closeRaidWindow() {
   endSquadRename(true);
+  // Взятые с собой (§12.364) — выбор этого визита, как отметки свободных.
+  squadJoin.clear();
+  syncSquadPick();
   // Гасим на закрытии: колонка заказов в штабе видна **всегда**, даже когда
   // отряд в поле, — значит визит и есть «посмотрел» (§12.120). Но с §12.243
   // колонка режется участком, и прочитанным идёт лишь то, что показывалось.
@@ -16295,6 +16386,41 @@ const SITE_TINT = {
 };
 const SQUAD_TINT = ["#5fd8e6", "#e6cf5a", "#7fcf6e", "#e58ac0"];
 const squadTint = (n) => SQUAD_TINT[(Math.max(1, n) - 1) % SQUAD_TINT.length];
+// Свободные коты на карте (§12.366) — свой нейтральный цвет: в цвете первого
+// отряда их плашка читалась «Отрядом 1».
+const FREE_TINT = "#b8c0cc";
+
+// Плашки вылазки на карте (§12.366): по одной на каждый отряд — ведущий, за
+// ним взятые с собой (§12.364), — и одна на свободных котов числом (§12.349,
+// §12.365). Свободные — те из состава, кто не приписан ни к одному из её столов.
+function tripTags(m) {
+  const squad = m.squad ?? [];
+  if (m.solo) return [{ tag: String(squad.length), tint: FREE_TINT, who: squad.join(", ") }];
+  const tags = [];
+  const enlisted = new Set();
+  for (const [x, y] of [[m.x, m.y], ...(m.joined ?? [])]) {
+    const k = nodes.findIndex((o) => o.x === x && o.y === y);
+    if (k < 0) continue;
+    for (const id of nodes[k].crew ?? []) enlisted.add(id);
+    tags.push({ tag: String(k + 1), tint: squadTint(k + 1), who: nodes[k].name });
+  }
+  const extra = squad.filter((id) => !enlisted.has(id));
+  if (extra.length)
+    tags.push({ tag: String(extra.length), tint: FREE_TINT, who: extra.join(", ") });
+  return tags;
+}
+
+// Ряд плашек (§12.366), по центру точки и вплотную: шаг 20 при ширине 18.
+function tagsSvg(tags) {
+  return tags
+    .map(
+      (t, i) =>
+        `<g class="squad-tag" transform="translate(${(i - (tags.length - 1) / 2) * 20},0)"` +
+        ` style="--squad:${t.tint}"><rect x="-9" y="-9" width="18" height="18" rx="4"/>` +
+        `<text y="4">${esc(t.tag)}</text></g>`,
+    )
+    .join("");
+}
 
 // Плавная кривая по ломаной (Чайкин) с сохранёнными концами. Результат — та же
 // ломаная, только густая: `pointAlong` и пунктир едут по ней без второй арифметики.
@@ -16443,8 +16569,7 @@ function buildSiteGraph(holder) {
           siteName(s.label || s.id, SITE_R + 22) +
           // Неразведанный участок (§12.320) — знак вопроса вместо глифа и имени.
           `<text class="map-fog-mark" y="6">?</text>` +
-          `<g class="map-claim squad-tag" transform="translate(${SITE_R * 0.95},${-SITE_R * 0.95})" style="display:none">` +
-          `<rect x="-9" y="-9" width="18" height="18" rx="4"/><text y="4"></text></g>` +
+          `<g class="map-claim" transform="translate(${SITE_R * 0.95},${-SITE_R * 0.95})" style="display:none"></g>` +
           `<g class="map-rule rule-tag" transform="translate(${-SITE_R * 0.95},${-SITE_R * 0.95})" style="display:none">` +
           `<rect y="-9" height="18" rx="4"/><text y="4"></text></g>` +
           "</g>",
@@ -16669,6 +16794,35 @@ function renderRaidWindow() {
     crewEdit = null;
     if (slotPick?.slot === "radio") slotPick = null;
   }
+  // Взятые с собой (§12.364) живут, пока ведущий выбран и дома: ушли, снесли
+  // стол, сменили выбор — список чистится, иначе пережил бы выбор скрытым
+  // состоянием, как правка состава до §12.359.
+  if (!sel || sel.busy || crewEdit) squadJoin.clear();
+  for (const k of [...squadJoin]) {
+    const [jx, jy] = k.split(",").map(Number);
+    const n = nodeAt(jx, jy);
+    if (!n || n.busy || n === sel) squadJoin.delete(k);
+  }
+  syncSquadPick();
+  // Прогноз общей вылазки — из ядра (`combo`), тот же `NodeSnap`; пока ответ
+  // по новому выбору не пришёл, честнее прогноз ведущего, чем чужой.
+  const freeNow = new Set(lastSnap.free ?? []);
+  const joinFree = sel ? [...nearbyPick].filter((id) => freeNow.has(id)) : [];
+  const want = [
+    ...new Set([
+      ...(sel?.crew ?? []),
+      ...joinFree,
+      ...[...squadJoin].flatMap((k) => nodeAt(...k.split(",").map(Number))?.crew ?? []),
+    ]),
+  ]
+    .sort()
+    .join(",");
+  const combo =
+    (squadJoin.size || joinFree.length) &&
+    lastSnap.combo &&
+    lastSnap.combo.crew.join(",") === want
+      ? lastSnap.combo
+      : null;
   if (!raidUi) buildRaidWindow("one");
   raidUi.tabs.hidden = true;
   raidUi.nearbyCrew.hidden = true;
@@ -16679,7 +16833,7 @@ function renderRaidWindow() {
   raidUi.sum.hidden = true;
   raidUi.rule.hidden = !sel;
   const raid = sel
-    ? missionsOut.find((m) => m.x === sel.x && m.y === sel.y)
+    ? missionsOut.find((m) => missionHolds(m, sel.x, sel.y))
     : null;
 
   // Имени отряда над колонками нет (§12.359): оно стоит в карточке отряда,
@@ -16698,7 +16852,7 @@ function renderRaidWindow() {
   // его заказом.
   syncRaidCards(
     sel && raid ? [raid] : [],
-    sel ?? outskirtsNode(),
+    combo ?? sel ?? outskirtsNode(),
   );
   // Список вещей слота (§12.293) — один на всю колонку.
   syncSlotPop("raid");
@@ -16900,7 +17054,7 @@ function crewGroups(sel) {
   for (const n of nodes) {
     const groups = [];
     const on = sel === n;
-    const raid = missionsOut.find((m) => m.x === n.x && m.y === n.y);
+    const raid = missionsOut.find((m) => missionHolds(m, n.x, n.y));
     if (n.busy && raid) busy.push({ eta: eta(raid), groups });
     else idle.push(groups);
     // У отряда в деле заказ, стадия и срок — подписью над шапкой, как у
@@ -16923,6 +17077,10 @@ function crewGroups(sel) {
         y: n.y,
         on,
         busy: n.busy,
+        // Взять с собой (§12.364): кнопка у отрядов дома, пока выбран ведущий
+        // дома. `joined` — уже взят.
+        joinable: !on && !n.busy && !!sel && !sel.busy && !crewEdit,
+        joined: squadJoin.has(`${n.x},${n.y}`),
         folded,
         // В правке у имени карандаш переименования (§12.359).
         html: squadHeadHtml(
@@ -16976,11 +17134,10 @@ function crewGroups(sel) {
     return jobLabel(e) || "";
   };
   // Ушедшие «Пошарить рядом» (§12.349) отряда не имеют, но заняты так же:
-  // своя группа на вылазку, внизу вместе с отрядами в деле.
-  const outOf = (e) =>
-    missionsOut.find(
-      (m) => !nodes.some((n) => n.x === m.x && n.y === m.y) && m.squad.includes(e.id),
-    );
+  // своя группа на вылазку, внизу вместе с отрядами в деле. Туда же —
+  // свободные, взятые с отрядом (§12.365): к столу они не приписаны, и в
+  // составе отряда их нет.
+  const outOf = (e) => missionsOut.find((m) => m.squad.includes(e.id));
   const freeGroups = [];
   const rowOf = (e) => {
     const note = why(e);
@@ -16989,10 +17146,16 @@ function crewGroups(sel) {
     // зачисляла в него, и осмотр кота становился приказом незаметно.
     const can = free.includes(e.id);
     const on = can && nearbyPick.has(e.id);
+    // При выбранном отряде дома свободный идёт с ним (§12.365).
+    const withSquad = !!sel && !sel.busy && !crewEdit;
     const tip = can
       ? on
-        ? "Не пойдёт без отряда: клик"
-        : "Отметить: пойдёт без отряда"
+        ? withSquad
+          ? "Не брать с отрядом: клик"
+          : "Не пойдёт без отряда: клик"
+        : withSquad
+          ? "Взять с собой: пойдёт одной вылазкой с выбранным отрядом"
+          : "Отметить: пойдёт без отряда"
       : `Не пойдёт: ${note || "занят"}`;
     const pick =
       `<button class="tool crew-pick nearby-pick${on ? " on" : ""}${can ? "" : " off"}"` +
@@ -17025,7 +17188,8 @@ function crewGroups(sel) {
       eta: eta(m),
       groups: [
         {
-          key: `out${m.def}`,
+          // На «Пошарить рядом» вылазок по заказу бывает несколько (§12.363).
+          key: `out${m.def}@${m.x},${m.y}`,
           head: `${backIn(m)}${missionLabel(m.def)} · ${squadMark(m)}`,
           rows: r,
         },
@@ -17124,9 +17288,27 @@ function syncCrewRows(sel) {
       }
       // Поле переименования (§12.359) — соседом в той же шапке; без него в
       // списке `orderChildren` перекладывал бы узлы каждым кадром.
+      // «Вместе» (§12.364) — отряд уходит одной вылазкой с выбранным. Узел
+      // постоянный, прячется, когда брать не к кому: шапка не перестраивается.
+      const join = mk(`join:${g.key}`, "tool squad-join", "button");
+      join.dataset.key = `join@${g.sel.x},${g.sel.y}`;
+      join.dataset.x = g.sel.x;
+      join.dataset.y = g.sel.y;
+      join.hidden = !g.sel.joinable;
+      join.classList.toggle("on", g.sel.joined);
+      b.classList.toggle("joined", g.sel.joined);
+      const jtip = g.sel.joined
+        ? "Не брать с собой — отряд останется дома"
+        : "Взять с собой: уйдёт одной вылазкой с выбранным отрядом (Shift+клик по шапке)";
+      if (join.dataset.tip !== jtip) join.dataset.tip = jtip;
+      const jhtml = g.sel.joined ? "✓ вместе" : "+ вместе";
+      if (join._html !== jhtml) {
+        join._html = jhtml;
+        join.innerHTML = jhtml;
+      }
       const extra =
         squadEdit && squadEdit.head === head ? squadEdit.extra : [];
-      orderChildren(head, [fold, edit, b, ...extra]);
+      orderChildren(head, [fold, edit, join, b, ...extra]);
       order.push(head);
       continue;
     }
@@ -17167,7 +17349,10 @@ function syncRaidCards(trips, node) {
   // Идущие вылазки этой вкладки: у отряда — одна, у свободных котов без
   // стола (§12.349) — сколько ушло.
   const raid = trips[0] ?? null;
-  const going = (i) => trips.some((t) => t.def === i);
+  // «Пошарить рядом» идущая вылазка не прячет (§12.363): пока у заказа есть
+  // места, свободные коты могут добавить к ушедшим ещё группу.
+  const going = (i) =>
+    !meta.missions[i]?.nearby && trips.some((t) => t.def === i);
   const nothing =
     // Пустая колонка читается как поломка окна, а не как «пока нечего»
     // (§12.79): с сокрытием по известности список впервые в принципе умеет
@@ -17208,9 +17393,8 @@ function syncRaidCards(trips, node) {
   // карточки.
   const open = (meta.missions ?? []).map(
     (_, i) =>
-      // У Базы карточка «Пошарить рядом» стоит и отряду (§12.355): с
-      // погашенной кнопкой и причиной словом, а не пустой колонкой.
-      !hiddenRaid(i, !!node.nearby || base) &&
+      // У Базы карточка «Пошарить рядом» стоит и отряду (§12.363).
+      !hiddenRaid(i) &&
       !going(i) &&
       (!untrustedRaid(i) || node.auto === i),
   );
@@ -17472,7 +17656,7 @@ function raidCard(i, node) {
   // Кто ведёт и когда вернутся, называет строка «эту вылазку уже ведёт».
   const g = missionsOut.some(
     (m) =>
-      !(m.x === node.x && m.y === node.y) &&
+      !missionHolds(m, node.x, node.y) &&
       raidKey(m.def, m.site) === raidKey(i, pickedTarget(i)),
   )
     ? { ...g0, busy: true }
@@ -17717,8 +17901,7 @@ function raidCard(i, node) {
       ((o.auto === i && !meta.missions[i]?.cleanses) ||
         missionsOut.some(
           (m) =>
-            m.x === o.x &&
-            m.y === o.y &&
+            missionHolds(m, o.x, o.y) &&
             raidKey(m.def, m.site) === raidKey(i, pickedTarget(i)),
         ))
         ? k + 1
@@ -17783,8 +17966,9 @@ function raidCard(i, node) {
   // Ворота автоматики (§12.93, §12.94): без технологии правило не поставить, и причина
   // называется словом — по `.off` браузер события мыши шлёт, в отличие от
   // `disabled` (§12.71).
-  // Правила автовылазки у «Пошарить» нет (§12.349): оно живёт на столе.
-  const autoGate = autoGateHint("raids") || node.nearby || !!meta.missions[i]?.nearby;
+  // Правило автовылазки живёт на столе (§12.349): у свободных котов его нет.
+  // На «Пошарить рядом» отряд с §12.363 ставит его, как на любой заказ.
+  const autoGate = autoGateHint("raids") || node.nearby;
   // Тумблер доступен и у закрытого заказа: правило ждёт ворот, как порог
   // производства ждёт материала, и поставить его заранее — это план (§12.67).
   // А вот до самой технологии тумблера нет вовсе: автоматики в игре ещё не

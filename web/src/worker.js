@@ -32,6 +32,7 @@ const READ_ONLY = new Set([
   "setBuildTile",
   "setHandAim",
   "setNearbyPick",
+  "setSquadPick",
 ]);
 
 let sim = null;
@@ -184,6 +185,9 @@ onmessage = (e) => {
   } else if (m.type === "setNearbyPick") {
     // Кого отметили в «Пошарить рядом» (§12.349): только для прогноза.
     sim?.set_nearby_pick(m.units);
+  } else if (m.type === "setSquadPick") {
+    // Какие отряды взяты с собой (§12.364): только для прогноза общей вылазки.
+    sim?.set_squad_pick(new Int32Array(m.cells));
   } else if (m.type === "setHandAim") {
     handAim = m.aim;
   } else if (m.type === "setBuildTile") {
@@ -226,6 +230,10 @@ onmessage = (e) => {
     // «Пошарить рядом» (§12.349): свободные коты без стола и слота. Ворота и
     // прогноз считает ядро.
     sim.scavenge(m.mission, m.units, m.site ?? -1);
+  } else if (m.type === "launchNodes" && sim) {
+    // Общая вылазка нескольких отрядов (§12.364): клетки столов плоским
+    // списком, первый — ведущий.
+    sim.launch_nodes(m.mission, new Int32Array(m.cells), m.units ?? [], m.site);
   } else if (m.type === "launch" && sim) {
     // **Узел заменяет выбор отряда** (§12.61): состав живёт на клетке рации, и
     // кнопка адресуется узлом, а не списком котов. С двумя узлами иначе не
