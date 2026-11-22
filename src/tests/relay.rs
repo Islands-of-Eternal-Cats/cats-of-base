@@ -624,7 +624,7 @@ fn the_shipped_ruleset_puts_someone_on_the_radio() {
         opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.add_squad(); // стартовый отряд до §12.349
     sim.without_timeline();
-    let relay = 11; // индекс `relay` в палитре тайлов
+    let relay = sim.tile_index("relay").expect("рация в палитре");
     assert!(sim.comms_of_tile(relay) > 0, "у рации есть сила связи");
     assert_eq!(sim.relay_count(), 0, "на старте её нет");
 

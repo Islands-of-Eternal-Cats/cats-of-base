@@ -16,7 +16,12 @@
 
 use bevy_ecs::prelude::*;
 
-use crate::components::{Carrying, Gear, ItemRules, Mastery, Seen, SkillRules, Skills, Stack};
+use crate::components::{
+    Away, Carrying, Gear, ItemRules, Mastery, Position, Reached, Seen, SkillRules, Skills, Stack,
+    TileRules, UnitId,
+};
+use crate::map::BaseMap;
+use crate::path::find_path;
 use crate::skills::level_of;
 
 /// Отметить всё, что сейчас есть в мире базы.
@@ -66,6 +71,47 @@ pub(crate) fn note_seen(
     for gear in &worn {
         for item in gear.items().filter(|&i| !items.personal(i)) {
             seen.mark(item);
+        }
+    }
+}
+
+/// До клеток каких тайлов кот базы смог дойти (§12.376): наблюдатель шкалы
+/// `Reached`, сосед `note_seen` и по тому же доводу — «дошли» это состояние
+/// мира, а не команда: путь открывает разбор завала, стройка и снос, и крючок
+/// в каждом из них был бы тремя местами вместо одного.
+///
+/// Меряются только тайлы, на которые ссылается чьё-то `reached`, и только пока
+/// не отмечены: после отметки наблюдатель не стоит ничего. «Дошли» — путь
+/// существует (`find_path`), а не «кот стоял на клетке»: прокоп кончается у
+/// руины, и ждать, пока кот случайно на неё наступит, значило бы прятать
+/// постройку от игрока, который уже сделал всё, что от него хотели.
+pub(crate) fn note_reached(
+    mut reached: ResMut<Reached>,
+    map: Res<BaseMap>,
+    rules: Res<TileRules>,
+    cats: Query<&Position, (With<UnitId>, Without<Away>)>,
+) {
+    let mut wanted: Vec<i16> = (0..rules.0.len() as i16)
+        .filter_map(|t| rules.reached_of(t))
+        .filter(|&t| !reached.has(t))
+        .collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    if wanted.is_empty() {
+        return;
+    }
+    let at: Vec<(i32, i32)> = cats.iter().map(|p| (p.x, p.y)).collect();
+    for target in wanted {
+        let hit = (0..map.height).any(|y| {
+            (0..map.width).any(|x| {
+                map.tile_at(x, y) == target
+                    && at
+                        .iter()
+                        .any(|&from| find_path(&map, &rules, from, (x, y)).is_some())
+            })
+        });
+        if hit {
+            reached.mark(target);
         }
     }
 }

@@ -44,6 +44,7 @@ const MATERIAL = {
   bench: "tile",
   ward: "tile",
   garage: "plate",
+  broken_gate: "plate",
   muster_table: "plate",
   shop: "rubber",
   post: "rubber",
@@ -614,6 +615,25 @@ function prop(g, id, x, y, tint, n, d) {
       if (!l) g.rect(px, py - h, 3, T + h).fill(frame);
       if (!r) g.rect(px + T - 3, py - h, 3, T + h).fill(frame);
       if (l) g.rect(px, py - h, 1, T).fill({ color: 0, alpha: 0.18 });
+      break;
+    }
+    case "broken_gate": {
+      // Сломанный шлюз (§12.376): плита с провалом и обломками кромки.
+      g.moveTo(px + T * 0.36, py + T * 0.34)
+        .lineTo(px + T * 0.6, py + T * 0.4)
+        .lineTo(px + T * 0.66, py + T * 0.62)
+        .lineTo(px + T * 0.44, py + T * 0.7)
+        .lineTo(px + T * 0.3, py + T * 0.54)
+        .closePath()
+        .fill(0x0e0d0b);
+      for (const i of [0, 2]) {
+        g.moveTo(px + i * T * 0.25, py + T)
+          .lineTo(px + i * T * 0.25 + T * 0.12, py + T - T * 0.14)
+          .lineTo(px + i * T * 0.25 + T * 0.22, py + T - T * 0.14)
+          .lineTo(px + i * T * 0.25 + T * 0.1, py + T)
+          .closePath()
+          .fill(0x8a7434);
+      }
       break;
     }
     case "garage": {

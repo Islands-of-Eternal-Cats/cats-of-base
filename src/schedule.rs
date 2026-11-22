@@ -18,7 +18,7 @@ use crate::movement::{escape_voids, move_units, note_clutter, retry_orders, spre
 use crate::needs::{assign_nap, assign_rest, collapse_exhausted, doze, sleep, tire};
 use crate::relay::assign_relay;
 use crate::research::{assign_research, work_research};
-use crate::seen::note_seen;
+use crate::seen::{note_reached, note_seen};
 use crate::sites::grow_blights;
 use crate::skills::{assign_self_study, assign_study, assign_tutor, study, train_skills};
 use crate::things::reconcile_things;
@@ -235,6 +235,7 @@ pub(crate) fn build_schedule() -> Schedule {
         hunger,
         train_skills,
         note_seen,
+        note_reached,
         check_goals,
     )
         .chain();

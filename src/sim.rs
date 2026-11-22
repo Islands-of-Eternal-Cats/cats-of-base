@@ -161,6 +161,8 @@ impl Sim {
                 .to_string());
         }
         restore(&mut sim.world, &file);
+        // Снимок старше §12.376 шкалы «дошли» не везёт — добираем по миру.
+        let _ = sim.world.run_system_once(crate::seen::note_reached);
         // Завал в снимок не идёт (`BaseMap::drag`) — считаем его из
         // восстановленных куч, как конструктор из стартовых.
         let _ = sim.world.run_system_once(note_clutter);
@@ -1209,6 +1211,12 @@ impl Sim {
             return false;
         }
         let rules = self.world.resource::<TileRules>();
+        // Дошёл ли кот хоть раз до названного тайла (§12.376) — шкала `Reached`.
+        if let Some(target) = rules.reached_of(tile)
+            && !self.world.resource::<Reached>().has(target)
+        {
+            return false;
+        }
         match rules.after_of(tile) {
             // «Стоял ли такой тайл хоть раз» — журнал застройки, а не текущая
             // карта (§12.220): открывшаяся ступень палитры не закрывается, как
@@ -1230,6 +1238,10 @@ impl Sim {
     /// и до §12.372.
     pub(crate) fn may_dismantle(&mut self, x: i32, y: i32) -> bool {
         let tile = self.world.resource::<BaseMap>().tile_at(x, y);
+        // Руина (§12.376) не сносится никогда: сломанный шлюз — основа выхода.
+        if self.world.resource::<TileRules>().is_fixed(tile) {
+            return false;
+        }
         if tile < 0 || self.world.resource::<TileRules>().is_internal(tile) {
             return true;
         }
@@ -1866,6 +1878,8 @@ impl Sim {
                     on: tile_index_of(&t.on)
                         .filter(|&prev| prev < def)
                         .map(|prev| prev as i16),
+                    reached: tile_index_of(&t.reached).map(|t| t as i16),
+                    fixed: t.fixed,
                     internal: t.internal,
                     quiet: t.quiet,
                     noisy: t.noisy,
@@ -2396,6 +2410,7 @@ impl Sim {
         world.insert_resource(SitesMet(vec![false; rs.sites.len()]));
         world.insert_resource(RecruitsMet(vec![false; rs.recruits.len()]));
         world.insert_resource(Mastery::default());
+        world.insert_resource(Reached::default());
         // Лента новостей (§12.120). Базовой линии у неё пока нет: снимет её
         // первый же `note_news`, и стартовая доступность новостью не станет.
         world.insert_resource(News::default());
@@ -2498,6 +2513,9 @@ impl Sim {
         // может не быть ещё долго. Тот же наблюдатель, что в цепочке, — второй
         // экземпляр этого обхода разошёлся бы с первым на первой же правке.
         let _ = world.run_system_once(note_seen);
+        // И до чего уже дошли (§12.376) — по тому же доводу: ворота палитры
+        // спрашивают на паузе.
+        let _ = world.run_system_once(crate::seen::note_reached);
         // И завал по клеткам — по тому же доводу (§12.249): первый приказ
         // игрока на паузе ищет путь по карте, и без этого прогона он шёл бы
         // сквозь стартовые кучи, как будто их нет.

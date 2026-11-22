@@ -232,7 +232,7 @@ fn a_saved_game_continues_identically() {
     let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.add_squad(); // стартовый отряд до §12.349
     let sample = 2; // индекс `sample` в палитре предметов
-    let bed = 4; // индекс `bed` в палитре тайлов: технологией не закрыт
+    let bed = i32::from(live.tile_index("bed").expect("лежанка в палитре")); // технологией не закрыта
 
     // Мир должен успеть обрасти всем, что бывает в партии: снимок, снятый с
     // пустой базы, проверяет только карту и трёх котов.
@@ -352,7 +352,7 @@ fn claims_survive_a_save() {
     let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.add_squad(); // стартовый отряд до §12.349
     let sample = 2;
-    let bed = 4;
+    let bed = i32::from(live.tile_index("bed").expect("лежанка в палитре"));
 
     live.add_classroom(); // класс со §12.208 строит игрок
     live.add_storage(); // и склад со §12.215 — тоже
@@ -543,7 +543,7 @@ fn a_save_from_another_format_is_refused() {
 #[test]
 fn the_trace_remembers_what_the_player_did() {
     let mut live = opened(Sim::new(CORE).expect("рулсет"));
-    let bed = 4;
+    let bed = i32::from(live.tile_index("bed").expect("лежанка в палитре"));
     live.tick_n(10);
     live.add_blueprint_rect(9, 6, 2, 2, bed);
     live.set_auto_tidy(false);
@@ -551,11 +551,11 @@ fn the_trace_remembers_what_the_player_did() {
 
     let trace = live.trace();
     for mark in [
-        "build_rect 9 6 2 2 4",
-        "auto_tidy false",
-        "teach excellent science",
+        format!("build_rect 9 6 2 2 {bed}"),
+        "auto_tidy false".to_string(),
+        "teach excellent science".to_string(),
     ] {
-        assert!(trace.contains(mark), "в журнале нет «{mark}»:\n{trace}");
+        assert!(trace.contains(&mark), "в журнале нет «{mark}»:\n{trace}");
     }
 
     let json = live.save().expect("снимок");
@@ -626,7 +626,8 @@ fn a_stocking_rule_survives_a_save() {
     live.without_timeline(); // мир по расписанию тут только шум
     live.set_tech("workshops"); // тема «Мастерская» открывает и станок, и рецепт (§12.146)
     live.set_tech("planning"); // а «Автопроизводство» — само правило-порог (§12.93)
-    assert!(live.add_blueprint(8, 7, 8), "мастерская размечена");
+    let shop = i32::from(live.tile_index("shop").expect("мастерская в палитре"));
+    assert!(live.add_blueprint(8, 7, shop), "мастерская размечена");
     live.tick_n(600); // коты подвезли лом и построили её
     // Правило заказывает только то, чем база может заплатить (§12.239), а
     // платит склад: без него стартовый запас лежит на полу неучтённым (§12.215).
@@ -659,9 +660,10 @@ fn a_bin_setting_survives_a_save() {
     let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.without_timeline();
     live.set_tech("bins"); // ворота у самой постройки (§12.195)
-    assert!(live.add_blueprint(8, 7, 13), "ящик размечен");
+    let bin = i32::from(live.tile_index("bin").expect("ящик в палитре"));
+    assert!(live.add_blueprint(8, 7, bin), "ящик размечен");
     live.tick_n(600); // коты подвезли материал и построили
-    assert_eq!(i32::from(live.tile(8, 7)), 13, "ящик готов");
+    assert_eq!(i32::from(live.tile(8, 7)), bin, "ящик готов");
     assert!(live.set_bin(8, 7, 2, true), "и настроен под образцы");
 
     let json = live.save().expect("снимок");

@@ -94,8 +94,16 @@ pub(crate) fn run_timeline(
         // довольно: мир кладёт груз у любой двери, а не выбирает ближайшую к
         // кому-то. До §12.152 тут звался `pick_gate` с пустым списком котов, то
         // есть ровно то же самое, только через выражение про отряд.
-        let Some(&gate) = exit_cells(&map, &tiles).first() else {
-            continue; // шлюза нет — миру не через что дотянуться до базы
+        // Шлюза нет — груз ложится на руину выхода (§12.376): караван идёт к
+        // сломанному шлюзу так же, как к целому, а пропавший молча подарок
+        // наказывал бы игрока, ещё не успевшего его починить.
+        let ruin = || {
+            (0..map.height)
+                .flat_map(|y| (0..map.width).map(move |x| (x, y)))
+                .find(|&(x, y)| tiles.is_surface(map.tile_at(x, y)))
+        };
+        let Some(gate) = exit_cells(&map, &tiles).first().copied().or_else(ruin) else {
+            continue; // выхода нет вовсе — миру не через что дотянуться до базы
         };
         for &(item, count) in &rule.gift {
             if count > 0 {

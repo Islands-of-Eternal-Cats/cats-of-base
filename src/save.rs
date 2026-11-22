@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 53;
+pub(crate) const FORMAT: u32 = 54;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -182,6 +182,9 @@ pub(crate) const SAVED: &[&str] = &[
     // До какого уровня дорастали коты базы (§12.257): без этого загруженная
     // партия закрыла бы парту, если учёный сейчас в плену.
     "Mastery",
+    // До каких тайлов кот хоть раз мог дойти (§12.376): без этого загруженная
+    // партия убрала бы шлюз из палитры, если путь к руине с тех пор перекрыт.
+    "Reached",
     "Chronicle",
     "Goals",
     "Raids",
@@ -380,6 +383,10 @@ pub(crate) struct StateDto {
     /// Позиционно по `skills:`.
     #[serde(default)]
     pub(crate) mastery: Vec<i32>,
+    /// До клеток каких тайлов кот хоть раз мог дойти (§12.376). Позиционно по
+    /// `tiles:`. `FORMAT` 54.
+    #[serde(default)]
+    pub(crate) reached: Vec<bool>,
     /// Журнал сработавших событий: `(индекс события, была ли база готова)`.
     pub(crate) chronicle: Vec<(usize, bool)>,
     /// Взятые цели: `(индекс цели, тик взятия)` (§12.58).
@@ -1008,6 +1015,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
             sites_met: world.resource::<SitesMet>().0.clone(),
             recruits_met: world.resource::<RecruitsMet>().0.clone(),
             mastery: world.resource::<Mastery>().0.clone(),
+            reached: world.resource::<Reached>().0.clone(),
             chronicle: chronicle.0.iter().map(|h| (h.def, h.ready)).collect(),
             goals: world
                 .resource::<Goals>()
@@ -1194,6 +1202,14 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
         let mut mastery = world.resource_mut::<Mastery>();
         for (skill, &level) in s.mastery.iter().enumerate() {
             mastery.raise(skill, level);
+        }
+    }
+    {
+        let mut reached = world.resource_mut::<Reached>();
+        for (tile, &r) in s.reached.iter().enumerate() {
+            if r {
+                reached.mark(tile as i16);
+            }
         }
     }
     {

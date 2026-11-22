@@ -174,6 +174,7 @@ fn sim_from(rows: &[&str]) -> Sim {
     world.insert_resource(SitesMet::default());
     world.insert_resource(RecruitsMet::default());
     world.insert_resource(Mastery::default());
+    world.insert_resource(Reached::default());
     world.insert_resource(PerkRules::default());
     world.insert_resource(AbilityRules::default());
     // Лента новостей (§12.120) заводится всегда, как три журнала целей: она не
@@ -267,6 +268,9 @@ fn sim_from(rows: &[&str]) -> Sim {
             // Внутренних тайлов у схемы нет (§12.163): штампов в ней тоже нет,
             // и прятать из палитры нечего.
             internal: false,
+            // Руин и ворот «дошли» у схемы нет (§12.376).
+            reached: String::new(),
+            fixed: false,
         }],
         // Штампов у схемы нет (§12.160): объекты ставит только `set_structure`,
         // как рынок включает `set_market`, а вылазки — `set_gate`.
@@ -1856,6 +1860,13 @@ impl Sim {
                     rule.raided = None;
                 }
             }
+        }
+        // Шлюз на прежней застройке — без руины под ним (§12.376): ставится в
+        // скалу верхнего ряда и сносится в неё, как до сломанного шлюза.
+        if let Some(garage) = self.tile_index("garage") {
+            let rule = &mut self.world.resource_mut::<TileRules>().0[garage as usize];
+            rule.reached = None;
+            rule.on = None;
         }
     }
 

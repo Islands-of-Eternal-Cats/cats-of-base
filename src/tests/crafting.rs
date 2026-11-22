@@ -1062,7 +1062,7 @@ fn the_shipped_ruleset_makes_a_part_from_scrap() {
     sim.without_timeline(); // караван приносит своё — здесь считаем сделанное
     sim.add_storage(); // станок кормит **склад** (§12.130), а его со §12.215 строит игрок
     let part = 1; // индекс `part` в палитре предметов
-    let shop = 8; // индекс `shop` в палитре тайлов
+    let shop = i32::from(sim.tile_index("shop").expect("мастерская в палитре"));
 
     assert!(!sim.start_craft(0, 1), "без «Материаловедения» рецепта нет");
     assert!(
@@ -1330,7 +1330,7 @@ fn the_shipped_ruleset_opens_the_cloth_branch_in_order() {
     };
     let salvage = recipe("salvage_suit");
     let tailoring = recipe("tailoring");
-    let shop = 8; // индекс `shop` в палитре тайлов
+    let shop = i32::from(sim.tile_index("shop").expect("мастерская в палитре"));
 
     assert!(!sim.start_craft(salvage, 1), "без мастерской рецепта нет");
     sim.set_tech("materials"); // веха: за ней и станок, и вскрытие (§12.146)

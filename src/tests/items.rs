@@ -147,10 +147,14 @@ fn the_shipped_ruleset_builds_from_two_item_kinds() {
     let before = sim.scrap_total();
 
     // Лежанка в коридоре — на полу, как и положено постройке (§12.237).
-    assert!(sim.add_blueprint(8, 7, 4), "чертёж лежанки поставлен");
+    let bed = sim.tile_index("bed").expect("лежанка в палитре");
+    assert!(
+        sim.add_blueprint(8, 7, i32::from(bed)),
+        "чертёж лежанки поставлен"
+    );
     sim.tick_n(2000);
 
-    assert_eq!(sim.tile(8, 7), 4, "лежанка построена");
+    assert_eq!(sim.tile(8, 7), bed, "лежанка построена");
     assert_eq!(
         sim.scrap_total(),
         before - 2,

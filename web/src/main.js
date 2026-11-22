@@ -113,11 +113,13 @@ function placementHint(def, known = []) {
   // У улучшения (§12.238) основа своя — её и называем.
   if ((meta.palette ?? []).some((t) => t.base)) {
     const on = def.on && (meta.palette ?? []).find((t) => t.id === def.on);
+    // Основа названа первой: шлюз — выход наверх, но ставится на руину
+    // (§12.376), а не на пустоту.
     hints.push(
-      def.base || def.surface
-        ? "Кладётся на пустоту"
-        : on
-          ? `Ставится поверх: ${on.label || on.id}`
+      on
+        ? `Ставится поверх: ${on.label || on.id}`
+        : def.base || def.surface
+          ? "Кладётся на пустоту"
           : "Ставится только на пол",
     );
   }
@@ -916,6 +918,13 @@ overlay.addChild(gridGfx);
 // ответ про конкретный жест и читается поверх.
 const placeGfx = new Graphics();
 overlay.addChild(placeGfx);
+// Руины, которые можно починить (§12.376): пульсирующая рамка на клетке
+// сломанного шлюза, пока шлюз открыт в палитре, — «вот где», ещё до того, как
+// игрок взял инструмент. Узел постоянный: рамка перерисовывается только на
+// смене карты или ворот, а пульс — это `alpha` в тикере.
+const ruinGfx = new Graphics();
+overlay.addChild(ruinGfx);
+let ruinKey = "";
 overlay.addChild(hoverRect);
 overlay.addChild(orderMarker);
 overlay.addChild(cellMarker);
@@ -1740,6 +1749,35 @@ function drawFurniture(g, id, x, y, tint, n) {
       }
       g.rect(px + 1, py + 1, 2, T - 2).fill(0x6a707e);
       g.rect(px + T - 3, py + 1, 2, T - 2).fill(0x6a707e);
+      g.rect(px, py, T, T).stroke({ color: dark, width: 1 });
+      break;
+    }
+    case "broken_gate": {
+      // Сломанный шлюз (§12.376): та же плита, но сорванная — перекошенные
+      // полосы, провал посередине и обломки кромки. Читается «был выход».
+      g.rect(px, py, T, T).fill(0x2c2a25);
+      g.rect(px, py, T, T * 0.14).fill(0x1e1c18);
+      g.rect(px + 2, py + T * 0.22, T * 0.42, 1.5).fill(0x4a463f);
+      g.rect(px + T * 0.56, py + T * 0.3, T * 0.4, 1.5).fill(0x4a463f);
+      g.rect(px + 2, py + T * 0.48, T * 0.3, 1.5).fill(0x4a463f);
+      // Провал: тёмная рваная дыра.
+      g.moveTo(px + T * 0.36, py + T * 0.34)
+        .lineTo(px + T * 0.6, py + T * 0.4)
+        .lineTo(px + T * 0.66, py + T * 0.62)
+        .lineTo(px + T * 0.44, py + T * 0.7)
+        .lineTo(px + T * 0.3, py + T * 0.54)
+        .closePath()
+        .fill(0x0e0d0b);
+      // Две уцелевшие полосы кромки и обломок — кромки больше нет целиком.
+      for (const i of [0, 2]) {
+        g.moveTo(px + i * T * 0.25, py + T)
+          .lineTo(px + i * T * 0.25 + T * 0.12, py + T - T * 0.14)
+          .lineTo(px + i * T * 0.25 + T * 0.22, py + T - T * 0.14)
+          .lineTo(px + i * T * 0.25 + T * 0.1, py + T)
+          .closePath()
+          .fill(0x8a7434);
+      }
+      g.rect(px + T * 0.78, py + T * 0.8, T * 0.12, T * 0.08).fill(0x5a5040);
       g.rect(px, py, T, T).stroke({ color: dark, width: 1 });
       break;
     }
@@ -3298,6 +3336,7 @@ function renderSnapshot(snap) {
   syncNewsMarks();
   syncStockWindow();
   syncTileButtons(snap.techs, snap.tiles_open, snap.structures_open);
+  syncRuins(snap.tiles_open);
   renderNotePanel(snap.notes, snap.tick);
   renderGoalsPanel(snap.goals, snap.goals_required, snap);
   noteSkillUps(snap);
@@ -8262,6 +8301,36 @@ function placeableArea() {
     }
   }
   return area;
+}
+
+// Клетки руин, у которых открыт тайл-починка (§12.376): руина — `fixed` в
+// палитре, починка — тайл с `on` на неё. Где ставить, решает ядро (маска в
+// руке игрока); здесь только приглашение — «эту руину уже можно починить».
+function syncRuins(open) {
+  const pal = meta?.palette ?? [];
+  const fixable = new Set();
+  pal.forEach((t, i) => {
+    if (!t.on || !(open ?? [])[i]) return;
+    const below = pal.findIndex((b) => b.id === t.on);
+    if (below >= 0 && pal[below].fixed) fixable.add(below);
+  });
+  const cells = [];
+  if (mapCells && fixable.size) {
+    for (let i = 0; i < mapCells.length; i++) {
+      if (fixable.has(mapCells[i])) cells.push(i);
+    }
+  }
+  const key = cells.join(",");
+  if (key === ruinKey) return;
+  ruinKey = key;
+  ruinGfx.clear();
+  const W = meta.width;
+  for (const i of cells) {
+    const x = i % W;
+    const y = (i - x) / W;
+    ruinGfx.rect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2);
+  }
+  if (cells.length) ruinGfx.stroke({ color: COLORS.placeable, width: 2.5 });
 }
 
 function drawPlaceable() {
@@ -18679,6 +18748,11 @@ setSpeed(1);
 // строки модуль ещё раскладывает состояние, которое `stepUnits` читает
 // (`speed`), а первый кадр тикера придёт уже после.
 app.ticker.add(stepUnits);
+// Пульс рамки над руиной (§12.376): по настенным часам — это приглашение, а не
+// мир, и на паузе ему стоять незачем.
+app.ticker.add(() => {
+  if (ruinKey) ruinGfx.alpha = 0.45 + 0.45 * Math.sin(performance.now() / 260);
+});
 // Свет — после шага котов: пятно у кота едет за уже сдвинутым узлом.
 app.ticker.add((t) => lighting.frame(units, t.deltaMS, speed));
 
