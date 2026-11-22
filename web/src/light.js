@@ -91,7 +91,32 @@ const DEFAULTS = {
   cycle: true,
   // Объём котов (только HDR): размытый силуэт — купол высоты, 0 — выключен.
   round: 60,
+  // Нормализация (только HDR): насколько экспозиция сама подстраивается под
+  // свет кадра, 0 — постоянная, 100 — полностью.
+  norm: 70,
 };
+/// **Нормализация HDR — автоэкспозиция.** Ползунки «Тень» и «Лампы», сутки и
+/// сама застройка двигают яркость кадра в разы, а экспозиция была одна: тёмная
+/// база выходила в черноту, а комната, где лампы перекрываются, — в белое.
+/// Теперь свет карты **замеряется** (по пикселю на клетку, на пересборке, см.
+/// `measure`), и из него, ползунков и часов считается, во что выйдет каждая
+/// построенная клетка: краска тайла × (фон + лампы). Экспозиция берётся
+/// меньшей из двух: та, что ведёт среднее (логарифмическое) к `KEY`, и та,
+/// что держит яркий хвост (`HI_PCT`) не выше `WHITE` — дальше ACES жжёт в белое.
+/// Сила — степень: на 70 из 100 ночь всё ещё темнее дня, но не чёрная.
+/// Скала (пустота) в замер не идёт: маленькая база среди камня иначе
+/// пересвечивалась бы.
+const KEY = 0.2;
+const WHITE = 2.4;
+const HI_PCT = 0.95;
+const AUTO_MIN = 0.3;
+const AUTO_MAX = 3.5;
+/// Замер идёт в 8-битную текстуру (её можно прочесть), поэтому свет в ней
+/// поделён на `METER_RANGE`: ярче этого лампы не замеряются.
+const METER_RANGE = 4;
+/// Привыкание глаза, секунды реального времени: пересборка карты и шаг суток
+/// меняют экспозицию плавно, а не скачком.
+const ADAPT_TAU = 0.6;
 /// Сила рельефа на максимуме ползунка и доля зерна в высоте.
 const BUMP_MAX = 9;
 const GRAIN = 0.045;
@@ -116,6 +141,10 @@ const CELL = { radius: 1.1, alpha: 0.6 };
 /// гаснет (`CEIL_FADE`), иначе он складывается с цветом в белое; свет клеток
 /// растёт и шире (`CELL_BOOST`); высветление сильнее (`GLOW_BOOST`) — `multiply`
 /// цветом по синеватому полу даёт серое, и цвет виден только сложением.
+/// Яркость цвета (те же веса, что `lum` в шейдере).
+function lum3(c) {
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
 function over(sat) {
   return Math.max(0, (sat - SAT_BASE) / (100 - SAT_BASE));
 }
@@ -403,6 +432,20 @@ export function createLighting(app, tile) {
   bodySrc.filters = [
     new BlurFilter({ strength: tile * ROUND_BLUR, quality: 3 }),
   ];
+  // Замер света для нормализации: дневной и ночной запечённый свет, сжатый до
+  // пикселя на клетку, — читается обратно на CPU раз на пересборку.
+  const meter = new Container();
+  const meterSprite = new Sprite();
+  meter.addChild(meterSprite);
+  let meterTarget = null;
+  /// По построенной клетке: свет ламп днём и ночью и яркость краски тайла.
+  let meterDay = null;
+  let meterNight = null;
+  let meterAlb = null;
+  let meterLit = null; // рабочий массив под перцентиль
+  let autoGoal = 1; // куда тянется автоэкспозиция
+  let autoNow = 1; // где она сейчас (плавно, `ADAPT_TAU`)
+  let autoFresh = true; // первый замер ставит сразу, без привыкания
   const scene = new Container(); // рисуется только в текстуру, на сцене его нет
   const ambient = new Sprite(Texture.WHITE);
   const bakedSprite = new Sprite();
@@ -503,19 +546,120 @@ export function createLighting(app, tile) {
   function applyHdr() {
     if (!hdr) return;
     const t = ambient.tint;
+    const amb = [
+      ((t >> 16) & 255) / 255,
+      ((t >> 8) & 255) / 255,
+      (t & 255) / 255,
+    ];
+    autoGoal = autoExposure(lum3(amb), prefs.glow / 16);
+    if (autoFresh && meterDay) {
+      autoFresh = false;
+      autoNow = autoGoal;
+    }
     hdr.params({
-      ambient: [
-        ((t >> 16) & 255) / 255,
-        ((t >> 8) & 255) / 255,
-        (t & 255) / 255,
-      ],
+      ambient: amb,
       gain: prefs.glow / 16,
-      exposure: prefs.exposure / 100,
+      exposure: (prefs.exposure / 100) * autoNow,
       sat: 1 + 0.8 * over(prefs.sat),
       bloom: prefs.bloom / 100,
     });
     hdr.bump((prefs.bump / 100) * BUMP_MAX, GRAIN);
     hdr.round((prefs.round / 100) * ROUND_MAX, (prefs.round / 100) * SHAPE_MAX);
+  }
+
+  /// Во что нормализация ставит экспозицию при фоне яркостью `ambL` и силе
+  /// ламп `gain`: по замеру (`measure`) и доле дня. Без замера — единица.
+  function autoExposure(ambL, gain) {
+    const n = meterDay ? meterDay.length : 0;
+    if (!n || prefs.norm <= 0) return 1;
+    const d = bakedSprite.visible ? bakedSprite.alpha : 0;
+    let logSum = 0;
+    for (let i = 0; i < n; i++) {
+      const L =
+        meterAlb[i] *
+        (ambL + gain * (d * meterDay[i] + (1 - d) * meterNight[i]));
+      meterLit[i] = L;
+      logSum += Math.log(L + 1e-4);
+    }
+    const avg = Math.exp(logSum / n);
+    meterLit.sort();
+    const hi = meterLit[Math.min(n - 1, Math.floor(n * HI_PCT))];
+    let e = Math.min(KEY / avg, WHITE / Math.max(hi, 1e-4));
+    e = Math.min(AUTO_MAX, Math.max(AUTO_MIN, e));
+    return Math.pow(e, prefs.norm / 100);
+  }
+
+  /// Замер света карты для нормализации: запечённый дневной и ночной свет
+  /// рисуется в 8-битную текстуру по пикселю на клетку (+ поле `PAD`) и
+  /// читается обратно. Зовётся с размытием запечённого — то есть только на
+  /// пересборке и на смене мягкости, а не кадром: чтение стоит синхронизации
+  /// с GPU. Всё прочее (фон, сила ламп, часы) нормализация досчитывает сама.
+  function measure() {
+    if (!hdrOn() || !lastMap || !bakedSoft) return;
+    const { meta, cells } = lastMap;
+    const W = meta.width;
+    const H = meta.height;
+    const mw = W + 2;
+    const mh = H + 2;
+    if (!meterTarget || meterTarget.width !== mw || meterTarget.height !== mh) {
+      meterTarget?.destroy(true);
+      meterTarget = RenderTexture.create({
+        width: mw,
+        height: mh,
+        resolution: 1,
+        format: "rgba8unorm",
+      });
+    }
+    const read = (tex) => {
+      meterSprite.texture = tex;
+      meterSprite.width = mw;
+      meterSprite.height = mh;
+      meterSprite.alpha = 1 / METER_RANGE;
+      app.renderer.render({
+        container: meter,
+        target: meterTarget,
+        clear: true,
+      });
+      return app.renderer.extract.pixels(meterTarget).pixels;
+    };
+    const day = read(bakedSoft);
+    const night = read(nightSoft);
+    const alb = new Map();
+    const dayL = [];
+    const nightL = [];
+    const albL = [];
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const t = cells[y * W + x];
+        if (t < 0) continue;
+        let a = alb.get(t);
+        if (a === undefined) {
+          const c = parseInt(
+            String(meta.palette[t]?.color || "#808080").slice(1),
+            16,
+          );
+          a = Math.max(
+            0.04,
+            lum3([
+              ((c >> 16) & 255) / 255,
+              ((c >> 8) & 255) / 255,
+              (c & 255) / 255,
+            ]),
+          );
+          alb.set(t, a);
+        }
+        const o = ((y + 1) * mw + x + 1) * 4;
+        const k = METER_RANGE / 255;
+        dayL.push(lum3([day[o] * k, day[o + 1] * k, day[o + 2] * k]));
+        nightL.push(lum3([night[o] * k, night[o + 1] * k, night[o + 2] * k]));
+        albL.push(a);
+      }
+    }
+    meterDay = new Float32Array(dayL);
+    meterNight = new Float32Array(nightL);
+    meterAlb = new Float32Array(albL);
+    meterLit = new Float32Array(dayL.length);
+    applyHdr();
   }
 
   /// Локальный трансформ узла — сам, без `worldTransform`: тот считается
@@ -725,7 +869,15 @@ export function createLighting(app, tile) {
       const key = `${color}|${alpha}`;
       let g = groups.get(key);
       if (!g) groups.set(key, (g = { color, alpha, pos: [], uv: [], idx: [] }));
-      const pts = visibility(map.cells, map.W, map.H, cx, cy, spec.radius, tile);
+      const pts = visibility(
+        map.cells,
+        map.W,
+        map.H,
+        cx,
+        cy,
+        spec.radius,
+        tile,
+      );
       const x0 = cx * tile;
       const y0 = cy * tile;
       const span = 2 * spec.radius * tile;
@@ -980,6 +1132,15 @@ export function createLighting(app, tile) {
     for (let i = n; i < cats.children.length; i++)
       cats.children[i].visible = false;
     if (hdrOn()) {
+      // Привыкание: экспозиция тянется к цели в логарифме, по настенным часам.
+      if (autoNow !== autoGoal) {
+        const k = 1 - Math.exp(-deltaMS / 1000 / ADAPT_TAU);
+        autoNow = Math.exp(
+          Math.log(autoNow) + (Math.log(autoGoal) - Math.log(autoNow)) * k,
+        );
+        if (Math.abs(autoNow / autoGoal - 1) < 1e-3) autoNow = autoGoal;
+        hdr.exposure((prefs.exposure / 100) * autoNow);
+      }
       // В HDR фон — uniform шейдера, а в текстуре только лампы и коты:
       // их сумма свободно выходит за единицу.
       ambient.visible = false;
@@ -1029,6 +1190,7 @@ export function createLighting(app, tile) {
       app.renderer.render({ container: soften, target: to, clear: true });
     }
     rebloom();
+    measure();
   }
 
   /// Свечение по свету текущего часа: дневной и дежурный в долях суток.
@@ -1060,6 +1222,12 @@ export function createLighting(app, tile) {
 
   function setExposure(v) {
     prefs.exposure = v;
+    applyHdr();
+    save();
+  }
+
+  function setNorm(v) {
+    prefs.norm = v;
     applyHdr();
     save();
   }
@@ -1157,6 +1325,9 @@ export function createLighting(app, tile) {
     setHdr,
     setExposure,
     setBloom,
+    setNorm,
+    /// Множитель, который нормализация сейчас кладёт поверх экспозиции.
+    autoExposure: () => (hdrOn() ? autoNow : 1),
     setBump,
     setRound,
     /// Высота северной стены вида 3/4; действует со следующей `rebuild`.
