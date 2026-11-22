@@ -885,7 +885,7 @@ fn a_load_within_reach_of_two_tiers_goes_to_the_higher_one() {
 /// предлагают построить.
 #[test]
 fn the_shipped_ruleset_gives_every_solid_tile_a_reason() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let solids = sim.solid_tiles();
 
     assert!(!solids.is_empty(), "хоть один заставленный тайл в палитре");
@@ -902,7 +902,7 @@ fn the_shipped_ruleset_gives_every_solid_tile_a_reason() {
 /// сам построить не может.
 #[test]
 fn the_shipped_ruleset_starts_with_every_shelf_reachable() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
 
     assert!(
         sim.solid_without_aisle().is_empty(),
@@ -915,7 +915,7 @@ fn the_shipped_ruleset_starts_with_every_shelf_reachable() {
 /// которую сам построить не может, — а починить её пришлось бы сносом.
 #[test]
 fn the_shipped_ruleset_starts_without_zoning_clashes() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
 
     let clashes = sim.zoning_clashes();
     assert!(
@@ -930,7 +930,7 @@ fn the_shipped_ruleset_starts_without_zoning_clashes() {
 /// непустого контейнера у поста (§12.90).
 #[test]
 fn the_shipped_ruleset_uses_both_sides_of_every_zoning_pair() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let any = |f: fn(&TileRules, i16) -> bool| {
         let rules = sim.world.resource::<TileRules>();
         (0..rules.0.len()).any(|i| f(rules, i as i16))
@@ -951,7 +951,8 @@ fn the_shipped_ruleset_uses_both_sides_of_every_zoning_pair() {
 /// если к ней есть подход, — ровно как её видит носильщик.
 #[test]
 fn the_shipped_ruleset_starts_with_every_room_reachable() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
 
     let lost = sim.unreachable_cells(|rules, t| {
         t >= 0
@@ -1179,7 +1180,7 @@ fn a_surface_tile_lies_on_the_void_like_a_floor() {
 /// довод, что у сторожей доступа и зонирования.
 #[test]
 fn the_shipped_ruleset_keeps_its_gates_on_the_surface() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let garage = sim.tile_index("garage").expect("шлюз в палитре");
     let rules = sim.world.resource::<TileRules>();
     assert!(rules.is_surface(garage), "шлюз ставится только наверху");

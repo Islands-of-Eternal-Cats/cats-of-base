@@ -104,26 +104,81 @@ fn scavenging_takes_no_raid_slot() {
     );
 }
 
-/// Свободные коты без стола ходят на **любой** заказ (§12.349) — с теми же
-/// воротами, что у отряда; а с §12.363 и отряд ходит «Пошарить».
+/// Без стола — только рядом с базой (§12.367): свободный кот на обычный
+/// заказ не идёт, а отряд «Пошарить» ходит (§12.363).
 #[test]
-fn free_cats_take_any_order_and_squads_scavenge_too() {
+fn free_cats_stay_near_and_squads_scavenge_too() {
     let (mut sim, def) = yard();
     let raid = sim.set_mission(1, 50, &[]);
     assert!(
-        sim.scavenge(raid, vec!["b".into()], -1),
-        "обычный заказ — и без стола"
+        !sim.scavenge(raid, vec!["b".into()], -1),
+        "обычный заказ без стола не уходит"
     );
-    let left = (0..100).any(|_| {
-        sim.tick_n(1);
-        sim.is_away("b")
-    });
-    assert!(left, "кот ушёл через шлюз");
     let table: i16 = 4;
     sim.set_muster(table, true);
     sim.force_tile(5, 1, table);
     assert!(sim.enlist("a", 5, 1));
     assert!(sim.launch_node(def, 5, 1, -1), "отряд идёт шарить");
+}
+
+/// Сюжетный «приходи один» (§12.367): только названный кот, один и без стола.
+#[test]
+fn an_alone_order_takes_only_the_named_cat() {
+    let (mut sim, _) = yard();
+    let raid = sim.set_mission(1, 50, &[]);
+    sim.set_alone(raid, "a");
+    assert!(!sim.scavenge(raid, vec!["b".into()], -1), "не тот кот");
+    assert!(
+        !sim.scavenge(raid, vec!["a".into(), "b".into()], -1),
+        "не один"
+    );
+    let table: i16 = 4;
+    sim.set_muster(table, true);
+    sim.force_tile(5, 1, table);
+    assert!(sim.enlist("b", 5, 1));
+    assert!(!sim.launch_node(raid, 5, 1, -1), "отряд на «один» не идёт");
+    assert!(sim.scavenge(raid, vec!["a".into()], -1), "сам — идёт");
+}
+
+/// Заказ, открываемый выполненным заказом (§12.367): до первого выполнения
+/// предшественника его нет, после — есть навсегда.
+#[test]
+fn an_order_opens_after_its_predecessor() {
+    let (mut sim, first) = yard();
+    let next = sim.set_mission(1, 20, &[]);
+    sim.set_nearby(next);
+    sim.set_raided(next, first);
+    assert!(!sim.raid_gates(next).unlocked, "предшественник не выполнен");
+    assert!(!sim.scavenge(next, vec!["b".into()], -1));
+    assert!(sim.scavenge(first, vec!["a".into()], -1));
+    assert!(finishes(&mut sim, first, 300));
+    assert!(sim.raid_gates(next).unlocked, "выполнен — открыт");
+    assert!(sim.scavenge(next, vec!["b".into()], -1));
+}
+
+/// Кот-находка (§12.367): приходит к шлюзу, когда вылазка, на которой он
+/// ждёт, выполнена и вернулась, — и ровно один раз.
+#[test]
+fn a_found_cat_comes_home_with_the_raid() {
+    let (mut sim, def) = yard();
+    sim.set_found("z", def);
+    let before = sim.unit_count();
+    assert!(sim.scavenge(def, vec!["a".into()], -1));
+    let home = (0..400).any(|_| {
+        sim.tick_n(1);
+        sim.has_unit("z")
+    });
+    assert!(home, "кот пришёл");
+    assert_eq!(
+        sim.mission_left(),
+        None,
+        "и пришёл, когда вылазка вернулась"
+    );
+    assert_eq!(sim.pos_of("z"), GATE, "у шлюза");
+    assert_eq!(sim.unit_count(), before + 1);
+    assert!(sim.scavenge(def, vec!["a".into()], -1));
+    assert!(finishes(&mut sim, def, 300));
+    assert_eq!(sim.unit_count(), before + 1, "второй раз не приходит");
 }
 
 /// Двор на пятерых с двумя столами: предел заказа — трое.
@@ -210,6 +265,7 @@ fn parallel_scavenges_both_come_home() {
 fn free_cats_meet_the_same_gates() {
     let (mut sim, _) = yard();
     let raid = sim.set_mission(1, 50, &[]);
+    sim.set_nearby(raid);
     sim.set_mission_fame(raid, 0, 10);
     assert!(!sim.scavenge(raid, vec!["a".into()], -1), "известности нет");
     sim.set_fame(10);
@@ -235,25 +291,12 @@ fn a_free_cat_on_the_gate_opens_the_outskirts() {
     assert_eq!(sim.hand_tag("a", GATE.0, GATE.1), "nearby");
 }
 
-/// **Боевой рулсет: стол брифинга открывает первое «Пошарить»** (§12.349).
-#[test]
-fn the_shipped_ruleset_opens_the_table_by_scavenging() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
-    sim.without_timeline();
-    let muster = sim.structure_index("muster").expect("место брифинга");
-    let scavenge = sim.mission_index("scavenge").expect("«Пошарить рядом»");
-    assert!(!sim.structure_is_open(muster), "на старте стола нет");
-    assert!(sim.scavenge(scavenge, vec!["excellent".into()], -1));
-    assert!(finishes(&mut sim, scavenge, 1500), "окрестности обшарены");
-    assert!(sim.structure_is_open(muster), "и стол открылся");
-}
-
 /// **Боевой рулсет: один кот может вернуть пленного** (§12.349,
 /// §12.40). Вылазка за своим идёт одним котом, значит плен обратим и до
 /// первого стола: необратимых исходов в игре нет.
 #[test]
 fn the_shipped_ruleset_lets_one_cat_come_for_its_own() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let rules = sim.world.resource::<MissionRules>();
     assert!(
         rules.0.iter().any(|r| r.rescue && r.squad <= 1),
@@ -267,7 +310,7 @@ fn the_shipped_ruleset_lets_one_cat_come_for_its_own() {
 /// одного кота: дорога на лапы не делится. Считается из самого рулсета.
 #[test]
 fn the_shipped_ruleset_never_farms_parts_upstairs() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let part = sim.item_index("part").expect("деталь в палитре");
     let scavenge = sim.mission_index("scavenge").expect("«Пошарить рядом»");
     let missions = sim.world.resource::<MissionRules>();
@@ -324,7 +367,7 @@ fn the_shipped_ruleset_never_farms_parts_upstairs() {
 #[test]
 fn the_tally_and_a_scavenge_survive_a_save() {
     let core = include_str!("../../assets/rulesets/core.yaml");
-    let mut live = Sim::new(core).expect("рулсет");
+    let mut live = opened(Sim::new(core).expect("рулсет"));
     live.without_timeline();
     let def = live.mission_index("scavenge").expect("«Пошарить рядом»");
     assert!(live.scavenge(def, vec!["excellent".into()], -1));

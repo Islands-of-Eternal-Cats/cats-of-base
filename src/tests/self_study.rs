@@ -241,7 +241,7 @@ fn the_rule_is_gated_by_its_topic() {
 /// Галочки переживают загрузку партии.
 #[test]
 fn the_rule_survives_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.set_tech("curriculum");
     assert!(live.set_self_study("excellent", "science", true));
     assert!(live.set_self_study("excellent", "relay", true));
@@ -257,7 +257,7 @@ fn the_rule_survives_a_save() {
 /// пока учитель один, каждый его час — решение, и принимают его руками.
 #[test]
 fn the_shipped_ruleset_opens_self_study_after_the_big_desk() {
-    let sim = Sim::new(CORE).expect("рулсет");
+    let sim = opened(Sim::new(CORE).expect("рулсет"));
     assert!(
         sim.auto_gates().contains(&"curriculum".to_string()),
         "у учёбы в простое свои ворота"

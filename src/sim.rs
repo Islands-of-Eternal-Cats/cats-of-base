@@ -349,6 +349,7 @@ impl Sim {
                 self.world.resource::<Fame>().0,
                 self.world.resource::<Techs>(),
                 self.world.resource::<BaseMap>(),
+                self.world.resource::<Raids>(),
             ),
             welcome: self.world.resource::<Standing>().covers(&rule.needs),
             met: self.world.resource::<RaidsMet>().met(def),
@@ -1616,7 +1617,7 @@ impl Sim {
 ///
 /// Перк превращается в числа здесь, один раз: расти ему всё равно некуда
 /// (§12.17). Опыт — стартовый багаж кандидата, у стартовой тройки он пуст.
-fn spawn_cat(
+pub(crate) fn spawn_cat(
     world: &mut World,
     id: &str,
     sprite: &str,
@@ -2226,6 +2227,10 @@ impl Sim {
                     cleanses: blight_index(&m.cleanses),
                     tech: (!m.tech.is_empty()).then(|| m.tech.clone()),
                     once: m.once,
+                    raided: (!m.raided.is_empty())
+                        .then(|| rs.missions.iter().position(|o| o.id == m.raided))
+                        .flatten(),
+                    alone: (!m.alone.is_empty()).then(|| m.alone.clone()),
                     nearby: m.nearby,
                     after: (!m.after.is_empty())
                         .then(|| rs.tiles.iter().position(|t| t.id == m.after))
@@ -2427,6 +2432,7 @@ impl Sim {
             ));
         }
 
+        let mut found = FoundRules::default();
         for u in &rs.units {
             let stats: Vec<(usize, i32)> = u
                 .stats
@@ -2434,6 +2440,21 @@ impl Sim {
                 .filter_map(|(id, &v)| stat_index(id).map(|i| (i, v)))
                 .collect();
             let gear: Vec<usize> = u.gear.iter().filter_map(|id| item_index(id)).collect();
+            // Кот-находка (§12.367) на старте не стоит: он придёт с вылазки.
+            if !u.found.is_empty() {
+                if let Some(mission) = rs.missions.iter().position(|m| m.id == u.found) {
+                    found.0.push(FoundCat {
+                        id: u.id.clone(),
+                        sprite: u.sprite.clone(),
+                        perks: u.perks.clone(),
+                        stats,
+                        gear,
+                        mission,
+                        pos: (u.pos[0], u.pos[1]),
+                    });
+                }
+                continue;
+            }
             let cat = spawn_cat(
                 &mut world,
                 &u.id,
@@ -2452,6 +2473,8 @@ impl Sim {
                 world.entity_mut(cat).insert(Enlisted { spot: (x, y) });
             }
         }
+
+        world.insert_resource(found);
 
         // Стартовый склад база видела заведомо (§12.131). Прогоняем наблюдателя
         // сразу, а не ждём первого тика: партия открывается на паузе, и тика
@@ -4052,6 +4075,7 @@ impl Sim {
                 self.world.resource::<Fame>().0,
                 self.world.resource::<Techs>(),
                 self.world.resource::<BaseMap>(),
+                self.world.resource::<Raids>(),
             ) {
                 continue;
             }
@@ -4220,6 +4244,16 @@ impl Sim {
         let Some(rule) = self.world.resource::<MissionRules>().0.get(def).cloned() else {
             return false;
         };
+        // **Без стола — только рядом с базой** (§12.367): свободные коты идут на
+        // заказы рядом с базой, сюжетный «один» — названный кот; дальние —
+        // только отрядом из-за стола брифинга. И наоборот: на «приходи один»
+        // отряд не ведут.
+        if solo && !rule.free_may_go(&units) {
+            return false;
+        }
+        if !solo && rule.alone.is_some() {
+            return false;
+        }
         // Куда идём (§12.198). Одно выражение на заявку игрока, на правило
         // автовылазки и на прогноз в панели: «куда пойдёт этот отряд» обязано
         // отвечаться одинаково всем троим (инвариант 14).
@@ -4285,6 +4319,7 @@ impl Sim {
             self.world.resource::<Fame>().0,
             self.world.resource::<Techs>(),
             self.world.resource::<BaseMap>(),
+            self.world.resource::<Raids>(),
         ) {
             return false;
         }
@@ -7110,9 +7145,78 @@ impl Sim {
             let off = crate::things::mismatches(&mut self.world);
             assert!(off.is_empty(), "вещи разошлись со счётом: {off:?}");
         }
+        // Коты-находки (§12.367) — после цепочки и до ленты: кот собирается
+        // одним `spawn_cat` (инвариант 21), а тому нужен весь мир, не система.
+        self.spawn_found();
         // Лента новостей — **после** цепочки (§12.120): новость читает
         // сложившийся тик и мир не меняет, дословно `check_goals`.
         self.note_news();
+    }
+
+    /// Выход открыт (§12.367): хоть один кот на базе может дойти до шлюза —
+    /// тем же `nearest_exit`, каким заявка без стола выбирает дверь.
+    pub(crate) fn exit_open(&mut self) -> bool {
+        let cats: Vec<(i32, i32)> = {
+            let mut q = self
+                .world
+                .query_filtered::<&Position, (With<UnitId>, Without<Away>)>();
+            q.iter(&self.world).map(|p| (p.x, p.y)).collect()
+        };
+        let map = self.world.resource::<BaseMap>();
+        let tiles = self.world.resource::<TileRules>();
+        cats.into_iter()
+            .any(|at| nearest_exit(map, tiles, at).is_some())
+    }
+
+    /// Привести котов-находок (§12.367): заказ, на котором кот ждёт, выполнен
+    /// (журнал `Raids`) и отряд по нему вернулся — кот встаёт у первого шлюза,
+    /// как новичок из найма. «Уже пришёл» спрашивается у самого кота в мире
+    /// (инвариант 21), поэтому своего журнала и поля в снимке нет.
+    fn spawn_found(&mut self) {
+        // Схемы тестов (`sim_from`) правил находок не заводят — значит, их нет.
+        let found = self
+            .world
+            .get_resource::<FoundRules>()
+            .map(|f| f.0.clone())
+            .unwrap_or_default();
+        if found.is_empty() {
+            return;
+        }
+        let mut came = false;
+        for cat in found {
+            if !self.world.resource::<Raids>().0.contains(&cat.mission) {
+                continue;
+            }
+            let (here, out) = {
+                let mut units = self.world.query::<&UnitId>();
+                let here = units.iter(&self.world).any(|u| u.0 == cat.id);
+                let mut missions = self.world.query::<&Mission>();
+                let out = missions.iter(&self.world).any(|m| m.def == cat.mission);
+                (here, out)
+            };
+            if here || out {
+                continue;
+            }
+            let Some(gate) = self.exit_cells_of().into_iter().next() else {
+                continue;
+            };
+            spawn_cat(
+                &mut self.world,
+                &cat.id,
+                &cat.sprite,
+                gate,
+                &cat.perks,
+                &[],
+                &cat.stats,
+                &cat.gear,
+            );
+            came = true;
+        }
+        if came {
+            // Тем же путём, что найм: память базы и вещи — сразу.
+            let _ = self.world.run_system_once(note_seen);
+            crate::things::reconcile_world(&mut self.world);
+        }
     }
 
     /// Снять с дела радистов, приписанных к собирающемуся отряду (§12.286).
@@ -8314,6 +8418,7 @@ impl Sim {
             ) as i32
         };
         let exits = self.exit_cells_of().len() as i32;
+        let exit_open = self.exit_open();
         // Отряды поимённо: с §12.152 у каждого гаража свой состав, и панель
         // обязана называть его словом — иначе кнопка вылазки берёт отряд ниоткуда.
         let nodes: Vec<NodeSnap> = {
@@ -8706,6 +8811,7 @@ impl Sim {
             relays,
             musters,
             exits,
+            exit_open,
             nodes,
             nearby,
             free: free_ids,

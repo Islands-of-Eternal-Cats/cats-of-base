@@ -2501,6 +2501,10 @@ pub(crate) struct MissionRule {
     /// Однократный заказ (§12.260): после первого успеха (журнал `Raids`) его
     /// больше не существует — прячется, как вылазка за своим без пленных.
     pub(crate) once: bool,
+    /// Открывается выполненным заказом (§12.367) — индекс `missions:`.
+    pub(crate) raided: Option<usize>,
+    /// Сюжетный «приходи один» (§12.367): кто именно.
+    pub(crate) alone: Option<String>,
     /// Заказ без отряда (§12.349): ходят только свободные коты, без стола и
     /// слота; отряду и правилу автовылазки он не назначается.
     pub(crate) nearby: bool,
@@ -2552,11 +2556,49 @@ impl MissionRule {
 
     /// Открыт ли заказ по шкалам-воротам: известность и технология (§12.24,
     /// §12.260). Одно выражение на снимок, ленту и заявку.
-    pub(crate) fn unlocked(&self, fame: i32, techs: &Techs, map: &crate::map::BaseMap) -> bool {
+    pub(crate) fn unlocked(
+        &self,
+        fame: i32,
+        techs: &Techs,
+        map: &crate::map::BaseMap,
+        raids: &Raids,
+    ) -> bool {
         fame >= self.requires
             && self.tech.as_deref().is_none_or(|t| techs.knows(t))
             && self.after.is_none_or(|t| map.was_erected(t))
+            && self.raided.is_none_or(|d| raids.0.contains(&d))
     }
+
+    /// Кто может пойти без стола (§12.349, §12.367): заказ рядом с базой —
+    /// любые свободные коты, сюжетный «один» — только названный кот. Прочие
+    /// заказы — только отрядом из-за стола брифинга.
+    pub(crate) fn free_may_go(&self, units: &[String]) -> bool {
+        match &self.alone {
+            Some(who) => units.len() == 1 && units[0] == *who,
+            None => self.nearby,
+        }
+    }
+}
+
+/// Коты-находки (§12.367): кто ждёт на каком заказе. Правила — собираются
+/// из `units:` с полем `found` и в снимок не идут: «уже пришёл» спрашивается у
+/// самого кота в мире, как «уже нанят» у кандидата (инвариант 21).
+#[derive(Resource, Default)]
+pub(crate) struct FoundRules(pub(crate) Vec<FoundCat>);
+
+/// Кот-находка: кто он и на каком заказе ждёт (индекс `missions:`).
+#[derive(Clone)]
+pub(crate) struct FoundCat {
+    pub(crate) id: String,
+    pub(crate) sprite: String,
+    pub(crate) perks: Vec<String>,
+    pub(crate) stats: Vec<(usize, i32)>,
+    pub(crate) gear: Vec<usize>,
+    pub(crate) mission: usize,
+    /// `pos` записи — место из прежнего начала партии (до §12.367). Мир его не
+    /// читает: находка встаёт у шлюза. Им собирают старую базу тесты.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) pos: (i32, i32),
 }
 
 /// Участки внешнего мира по индексу записи `sites:` (§12.198).

@@ -368,7 +368,8 @@ fn demolition_needs_no_tech() {
 /// у пролога отобрали ворота или цепочку замкнули на саму себя.
 #[test]
 fn the_shipped_ruleset_researches_its_first_topic() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let sample = sim.item_index("sample").expect("образец есть");
     let lore = sim.topic_index("sample_lore").expect("пролог есть");
     let materials = sim.topic_index("materials").expect("тема есть");
@@ -453,7 +454,7 @@ fn the_shipped_ruleset_researches_its_first_topic() {
 /// стройкой, а не подарком.
 #[test]
 fn the_shipped_ruleset_counts_its_lab_cells() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let cells = sim.lab_cells();
     assert!(
         cells <= 4,
@@ -471,7 +472,8 @@ fn the_shipped_ruleset_counts_its_lab_cells() {
 /// учёный тему не закрывает. Сама парта технологией и открывается.
 #[test]
 fn the_shipped_ruleset_opens_its_classroom_by_the_first_find() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let lab = i32::from(sim.tile_index("lab").expect("лаборатория в палитре"));
     let desk = sim.tile_index("desk").expect("парта в палитре") as usize;
     let science = sim.skill_index("science").expect("наука");
@@ -534,7 +536,8 @@ fn the_shipped_ruleset_opens_its_classroom_by_the_first_find() {
 /// Парта», — а инструмент пропадает из-под руки посреди разметки.
 #[test]
 fn a_demolished_predecessor_keeps_its_successor_open() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let lab = i32::from(sim.tile_index("lab").expect("лаборатория в палитре"));
     let desk = sim.tile_index("desk").expect("парта в палитре");
     // В боевом контенте `after` с §12.235 не носит никто, а механизм жив —
@@ -570,7 +573,8 @@ fn a_demolished_predecessor_keeps_its_successor_open() {
 /// (§12.5, §12.37, §12.40).
 #[test]
 fn the_shipped_ruleset_never_locks_its_way_back() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     for id in ["floor", "garage"] {
         let tile = sim.tile_index(id).expect("тайл в палитре");
         assert!(
@@ -598,14 +602,33 @@ fn the_shipped_ruleset_never_locks_its_way_back() {
         rule.squad <= 1,
         "«Пошарить» требует больше одного кота — одиночка без стола не пойдёт",
     );
+    // «Пошарить» открывается выполненным заказом (§12.367) — значит, сам
+    // предшественник обязан быть открыт с начала и не проваливаться: иначе
+    // дорога назад стоит за дверью, которую можно потерять.
+    let raids = Raids(rule.raided.into_iter().collect());
     assert!(
         rule.unlocked(
             0,
             sim.world.resource::<Techs>(),
             sim.world.resource::<crate::map::BaseMap>(),
+            &raids,
         ),
         "«Пошарить» закрыто воротами",
     );
+    if let Some(first) = rule.raided {
+        let first = sim.world.resource::<MissionRules>().0[first].clone();
+        assert!(
+            first.unlocked(
+                0,
+                sim.world.resource::<Techs>(),
+                sim.world.resource::<crate::map::BaseMap>(),
+                &Raids::default(),
+            ) && first.raided.is_none()
+                && first.danger == 0
+                && first.squad <= 1,
+            "предшественник «Пошарить» закрыт или проваливается — дорогу назад можно потерять",
+        );
+    }
     assert!(
         rule.needs.is_empty() && rule.patron.is_none(),
         "и фракциями тоже"
@@ -636,7 +659,8 @@ fn the_shipped_ruleset_never_locks_its_way_back() {
 /// по другому доводу — не «иначе партия заперта», а «иначе урок теряет половину».
 #[test]
 fn the_shipped_ruleset_opens_storage_from_the_start() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let storage = sim.tile_index("storage").expect("склад в палитре");
     assert!(
         sim.tile_is_open(storage as usize),
@@ -655,7 +679,8 @@ fn the_shipped_ruleset_opens_storage_from_the_start() {
 /// новом о том, что игрок уже видел» (§12.120, §12.221).
 #[test]
 fn the_shipped_ruleset_opens_the_bed_it_already_built() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let bed = sim.tile_index("bed").expect("лежанка в палитре");
     assert!(
         sim.tile_is_open(bed as usize),
@@ -680,7 +705,8 @@ fn the_shipped_ruleset_opens_the_bed_it_already_built() {
 /// не шелохнётся, — а начало партии снова расползается в список.
 #[test]
 fn the_shipped_ruleset_opens_one_building_by_the_first_find() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let before: Vec<bool> = (0..sim.palette.len())
         .map(|def| sim.tile_is_open(def))
         .collect();
@@ -714,7 +740,8 @@ fn the_shipped_ruleset_opens_one_building_by_the_first_find() {
 /// нейтральный и раньше учёного.
 #[test]
 fn the_shipped_ruleset_opens_the_radio_by_its_operator() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let relay = sim.skill_index("relay").expect("навык «Связь»");
     let radio = sim.tile_index("relay").expect("рация в палитре") as usize;
     assert!(!sim.tile_is_open(radio), "на старте рации нет");
@@ -774,7 +801,7 @@ fn the_shipped_ruleset_opens_the_radio_by_its_operator() {
 /// развалится молча (§12.210).
 #[test]
 fn the_shipped_ruleset_chains_its_palette_forward() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     for (def, prev) in sim.tile_order().iter().enumerate() {
         let Some(prev) = *prev else { continue };
         assert!(
@@ -790,7 +817,7 @@ fn the_shipped_ruleset_chains_its_palette_forward() {
 /// запертая навсегда (§12.93).
 #[test]
 fn the_shipped_ruleset_can_reach_its_automation() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let cap = sim.taught_cap("science");
     let gates = sim.auto_gates();
     assert_eq!(gates.len(), 4, "ворота названы у всех четырёх правил");

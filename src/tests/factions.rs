@@ -330,7 +330,7 @@ fn a_failed_order_closes_nothing() {
 // развилку, у которой на самом деле нет двух сторон.
 
 fn shipped() -> Sim {
-    Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет")
+    opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"))
 }
 
 /// **Дорога назад есть у каждой фракции.**
@@ -660,7 +660,7 @@ fn an_order_once_open_stays_met_after_the_standing_drops() {
 /// игрок уже видел.
 #[test]
 fn the_met_orders_survive_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.tick_n(1);
     let defs = live.world.resource::<MissionRules>().0.len();
     let met: Vec<bool> = (0..defs).map(|d| live.raid_gates(d).met).collect();

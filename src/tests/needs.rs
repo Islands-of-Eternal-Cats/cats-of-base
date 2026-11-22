@@ -5,6 +5,7 @@
 //! скорость восстановления (`set_rest`), и нужная клетка переводится в него
 //! через `force_tile`.
 
+use super::opened;
 use super::sim_from;
 use crate::sim::Sim;
 
@@ -880,7 +881,7 @@ fn a_starving_cat_burns_the_rate_of_its_state() {
 #[test]
 fn the_shipped_ruleset_makes_work_the_costliest_state() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let sim = opened(Sim::new(yaml).expect("рулсет должен разбираться"));
     let (work, walk, idle) = sim.toil_rates();
 
     assert!(idle > 0, "простой даром — кот, который не устаёт, не уснёт");
@@ -900,7 +901,7 @@ fn the_shipped_ruleset_makes_work_the_costliest_state() {
 #[test]
 fn the_shipped_ruleset_makes_beds_the_only_full_sleep() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let sim = opened(Sim::new(yaml).expect("рулсет должен разбираться"));
     let (tired, _) = sim.thresholds();
     let (floor_wake, max) = sim.ceilings();
 
@@ -934,7 +935,7 @@ fn the_shipped_ruleset_makes_beds_the_only_full_sleep() {
 #[test]
 fn the_shipped_ruleset_sends_the_crew_to_bed() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let mut sim = opened(Sim::new(yaml).expect("рулсет должен разбираться"));
     let crew = ["excellent", "sp2", "sp3"];
 
     // Пороги идут в правильном порядке: критический выше нуля (иначе второго

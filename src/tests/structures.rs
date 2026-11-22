@@ -384,7 +384,8 @@ fn erasing_a_built_object_condemns_all_of_its_cells() {
 /// цены, а ломается снос именно на них.
 #[test]
 fn the_shipped_ruleset_erases_a_big_lab_in_one_go() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.set_tech("big_labs");
     let def = sim
         .structure_index("big_lab")

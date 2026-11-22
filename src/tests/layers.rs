@@ -5,6 +5,7 @@
 //! `set_base(0)` — пол схемы и есть тайл `0`. Тайл `1` здесь постройка, тайл
 //! `2` — склад: оба переводятся через `force_tile`, как в `tidying`.
 
+use super::opened;
 use super::sim_from;
 use crate::sim::Sim;
 
@@ -191,7 +192,8 @@ fn the_eraser_takes_the_highest_level() {
 /// встаёт, а стёртый возвращается складом.
 #[test]
 fn the_shipped_ruleset_upgrades_storage_to_a_rack() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.without_timeline();
     sim.add_storage();
     sim.set_tech("racks");
@@ -218,7 +220,8 @@ fn the_shipped_ruleset_upgrades_storage_to_a_rack() {
 /// оставляет пол, а не яму.
 #[test]
 fn the_shipped_ruleset_erases_a_bed_to_its_floor() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.without_timeline();
     let floor = sim.tile_index("floor").expect("пол");
     let bed = sim.tile_index("bed").expect("лежанка");

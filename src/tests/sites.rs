@@ -893,7 +893,8 @@ fn every_target_gets_its_own_forecast() {
 /// это и есть решение, которое §12.198 просит принять.
 #[test]
 fn the_shipped_ruleset_lets_the_first_squad_answer_a_fresh_blight() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.add_squad(); // стартовый отряд до §12.349
     // Связь глушим по тому же доводу, что и в лестнице вылазок: дежурный у
     // рации прибавляет силы, а тут меряется сам заказ (§12.60).
@@ -997,7 +998,7 @@ fn the_shipped_ruleset_draws_roads_to_scale() {
 /// штабе, не совпадающий с тем, что отряд проходит.
 #[test]
 fn the_shipped_ruleset_takes_mission_roads_from_sites() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let rules = sim.world.resource::<MissionRules>();
     for (i, m) in sim.missions.iter().enumerate() {
         if let Some(site) = sim.sites.iter().find(|s| s.id == m.site) {
@@ -1067,7 +1068,8 @@ fn an_unnamed_cleanup_skips_a_blight_already_taken() {
 fn the_shipped_ruleset_starts_with_unexplored_sites() {
     let rs = shipped();
     let at = |id: &str| rs.sites.iter().position(|s| s.id == id).expect(id);
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.without_timeline();
     for id in ["junkyard", "mines", "sump", "greenhouse"] {
         assert!(!sim.site_met(at(id)), "«{id}» на старте в тумане");
@@ -1087,7 +1089,7 @@ fn explored_sites_survive_a_save() {
     let rs = shipped();
     let mines = rs.sites.iter().position(|s| s.id == "mines").unwrap();
     let dump = rs.sites.iter().position(|s| s.id == "junkyard").unwrap();
-    let mut live = Sim::new(core).expect("рулсет");
+    let mut live = opened(Sim::new(core).expect("рулсет"));
     // Свалку открывает стол брифинга (§12.349).
     live.add_squad();
     live.world.resource_mut::<SitesMet>().mark(mines);
@@ -1201,7 +1203,7 @@ fn a_partial_cleanup_scorches_nothing() {
 #[test]
 fn scorched_ground_survives_a_save() {
     let core = include_str!("../../assets/rulesets/core.yaml");
-    let mut live = Sim::new(core).expect("рулсет");
+    let mut live = opened(Sim::new(core).expect("рулсет"));
     live.world.resource_mut::<Blights>().scorch(2, 321);
 
     let json = live.save().expect("снимок");

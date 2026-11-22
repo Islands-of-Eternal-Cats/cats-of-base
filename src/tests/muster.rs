@@ -262,7 +262,8 @@ fn seats_fill_the_sides_before_the_corners() {
 /// стартовая комната для того и удлинена на ряд.
 #[test]
 fn the_shipped_ruleset_keeps_beds_away_from_the_muster_table() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.add_squad(); // стол там, где он стоял на старте до §12.349
     let bed = i32::from(sim.tile_index("bed").expect("лежанка"));
     // Стол брифинга — якорем в (3, 10): слоты x 3–5, нижний ряд на y = 12.
@@ -381,7 +382,7 @@ fn tearing_down_the_table_frees_its_slots() {
 #[test]
 fn a_new_table_takes_the_next_number_wherever_it_stands() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let mut sim = Sim::new(yaml).expect("рулсет");
+    let mut sim = opened(Sim::new(yaml).expect("рулсет"));
     sim.add_squad(); // стартовый стол до §12.349
     let start = *sim.node_cells_of().first().expect("стартовый стол");
     let def = sim.structure_index("muster").expect("место брифинга");
@@ -487,7 +488,7 @@ fn a_sleeping_operator_holds_the_briefing() {
 /// Боевой рулсет и второй стол в северной комнате: два отряда.
 fn two_squads() -> (Sim, (i32, i32), (i32, i32)) {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let mut sim = Sim::new(yaml).expect("рулсет");
+    let mut sim = opened(Sim::new(yaml).expect("рулсет"));
     sim.add_squad(); // стартовый стол до §12.349
     let def = sim.structure_index("muster").expect("место брифинга");
     sim.force_structure(def, 4, 2);

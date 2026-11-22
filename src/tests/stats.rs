@@ -212,7 +212,7 @@ fn a_recruit_keeps_the_experience_he_was_promised() {
 #[test]
 fn the_shipped_ruleset_gives_every_cat_a_real_ceiling() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let mut sim = opened(Sim::new(yaml).expect("рулсет должен разбираться"));
 
     let capped: Vec<usize> = {
         let rules = sim.world.resource::<SkillRules>();
@@ -237,7 +237,7 @@ fn the_shipped_ruleset_gives_every_cat_a_real_ceiling() {
 #[test]
 fn the_shipped_ruleset_demands_nothing_past_the_ceiling() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let sim = opened(Sim::new(yaml).expect("рулсет должен разбираться"));
 
     let rules = sim.world.resource::<SkillRules>();
     for rule in &rules.0 {
@@ -261,7 +261,7 @@ fn the_shipped_ruleset_demands_nothing_past_the_ceiling() {
 #[test]
 fn the_shipped_ruleset_hires_no_one_above_his_own_ceiling() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let sim = opened(Sim::new(yaml).expect("рулсет должен разбираться"));
 
     let rules = sim.world.resource::<SkillRules>();
     for recruit in &sim.world.resource::<RecruitRules>().0 {
@@ -284,7 +284,7 @@ fn the_shipped_ruleset_hires_no_one_above_his_own_ceiling() {
 #[test]
 fn the_shipped_ruleset_keeps_the_desk_within_reach() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let mut sim = opened(Sim::new(yaml).expect("рулсет должен разбираться"));
 
     let taught: Vec<(usize, i32)> = {
         let rules = sim.world.resource::<SkillRules>();
@@ -318,7 +318,8 @@ fn the_shipped_ruleset_keeps_the_desk_within_reach() {
 /// лучшим проводником игры. Расхождение даже на единицу — это уже ранг.
 #[test]
 fn the_shipped_ruleset_gives_every_cat_the_same_budget() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
 
     let mut budgets: Vec<(String, i32)> = {
         let mut q = sim.world.query::<(&UnitId, &Stats)>();

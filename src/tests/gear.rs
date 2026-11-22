@@ -603,7 +603,8 @@ fn worn_out_gear_vanishes_and_the_cat_fetches_a_new_one() {
 /// или у него нулевая `force`, — синтетическая схема этого не увидит.
 #[test]
 fn the_shipped_ruleset_equips_its_cats_from_loot() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.add_squad(); // стартовый отряд до §12.349
     sim.without_timeline(); // караван приносит своё: здесь считаем добычу вылазки
     let suit = 3; // индекс `suit` в палитре предметов
@@ -676,7 +677,8 @@ fn understanding_opens_the_trophy() {
 /// личная вещь: неличного снаряжения в записи кандидата нет ни у кого.
 #[test]
 fn the_shipped_ruleset_starts_its_cats_bare() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     for id in ["excellent", "sp2", "sp3"] {
         assert!(sim.gear_of(id).is_empty(), "{id} одет с порога");
         assert!(sim.outfit_of(id).is_empty(), "{id} с припиской с порога");
@@ -697,7 +699,8 @@ fn the_shipped_ruleset_starts_its_cats_bare() {
 /// отклонена тегом.
 #[test]
 fn the_shipped_antenna_keeps_her_analyzer() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.without_timeline();
     sim.add_storage();
     let scrap = sim.item_index("scrap").expect("лом");
@@ -727,7 +730,7 @@ fn the_shipped_antenna_keeps_her_analyzer() {
 /// ни с чем не спорит, и кот надел бы два комбинезона разом.
 #[test]
 fn the_shipped_ruleset_puts_every_wearable_in_a_slot() {
-    let sim = Sim::new(CORE).expect("рулсет");
+    let sim = opened(Sim::new(CORE).expect("рулсет"));
     let items = sim.world.resource::<ItemRules>();
     let mut hand = None;
     for (i, r) in items.0.iter().enumerate() {

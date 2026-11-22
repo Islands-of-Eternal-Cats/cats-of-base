@@ -308,7 +308,8 @@ fn a_cat_away_on_a_mission_does_not_starve() {
 /// синтетическая схема ничего этого не увидит.
 #[test]
 fn the_shipped_ruleset_feeds_a_hungry_cat() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.without_timeline(); // мир по расписанию — шум для чужой механики
 
     let full = sim.fed_of("excellent");

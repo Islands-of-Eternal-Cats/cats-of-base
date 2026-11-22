@@ -186,7 +186,8 @@ fn readiness_is_a_detail_too() {
 /// проверяет `the_shipped_ruleset_can_answer_its_own_blight`.
 #[test]
 fn the_shipped_ruleset_has_a_readable_note() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     const CARAVAN: usize = 0;
     const CAVEIN: usize = 2;
 
@@ -222,7 +223,7 @@ fn the_shipped_ruleset_has_a_readable_note() {
 /// сутки**, а не дважды и не через день; даты записки идут по возрастанию.
 #[test]
 fn the_shipped_ruleset_day_is_the_cats_cycle() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
 
     let day = sim.day;
     assert!(day > 0, "суток нет — вид покажет сырой тик вместо дня");

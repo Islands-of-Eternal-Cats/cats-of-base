@@ -1,6 +1,7 @@
 //! Сохранение партии (§12.45): сторож полноты, переигровка после загрузки и
 //! ремап ссылок на сущности.
 
+use super::opened;
 use std::collections::BTreeSet;
 
 use bevy_ecs::prelude::{Entity, EntityRef, Without};
@@ -160,7 +161,7 @@ fn state_of(sim: &Sim) -> String {
 /// удалённый из `components.rs`, но забытый в списке.
 #[test]
 fn every_component_is_either_saved_or_skipped() {
-    let mut sim = Sim::new(CORE).expect("рулсет");
+    let mut sim = opened(Sim::new(CORE).expect("рулсет"));
     sim.tick_n(2);
     // Состав отряда на узле не запрашивает ни одна система: это конфигурация,
     // которую читает только фасад (§12.61). Реестр наполняют системы при
@@ -228,7 +229,7 @@ fn the_two_lists_do_not_overlap() {
 /// обратно. Тот же приём, что в `demolish_job_is_done_from_a_neighbour`.
 #[test]
 fn a_saved_game_continues_identically() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.add_squad(); // стартовый отряд до §12.349
     let sample = 2; // индекс `sample` в палитре предметов
     let bed = 4; // индекс `bed` в палитре тайлов: технологией не закрыт
@@ -294,7 +295,7 @@ fn a_saved_game_continues_identically() {
 /// кнопки.
 #[test]
 fn a_crew_survives_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.add_squad(); // стартовый отряд до §12.349
     let node = *live
         .node_cells_of()
@@ -323,7 +324,7 @@ fn a_crew_survives_a_save() {
 /// переменная в виде начинается заново, и после загрузки зеркало врёт.
 #[test]
 fn bookmarks_survive_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     let (faction, item) = live.first_traded_pair().expect("рулсет с рынком");
     assert!(live.set_ticker(item, faction, true));
     assert!(live.set_favorite(item, true));
@@ -348,7 +349,7 @@ fn bookmarks_survive_a_save() {
 /// котом, а тема за несуществующим.
 #[test]
 fn claims_survive_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.add_squad(); // стартовый отряд до §12.349
     let sample = 2;
     let bed = 4;
@@ -499,7 +500,7 @@ fn links_of(sim: &Sim) -> Vec<String> {
 /// навыком, цена из чужого тайла. Отказ здесь честнее молчания.
 #[test]
 fn a_save_from_another_ruleset_is_refused() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.tick_n(50);
     let json = live.save().expect("снимок");
 
@@ -521,7 +522,7 @@ fn a_save_from_another_ruleset_is_refused() {
 /// самой константы). Проверяем, что отказ вообще работает.
 #[test]
 fn a_save_from_another_format_is_refused() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.tick_n(20);
     let json = live.save().expect("снимок");
 
@@ -541,7 +542,7 @@ fn a_save_from_another_format_is_refused() {
 /// ровно его назначение: команды на месте и после загрузки никуда не делись.
 #[test]
 fn the_trace_remembers_what_the_player_did() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     let bed = 4;
     live.tick_n(10);
     live.add_blueprint_rect(9, 6, 2, 2, bed);
@@ -579,7 +580,7 @@ fn every_skip_has_a_reason() {
 /// ждала бы второй аптечки, хотя галочка на месте.
 #[test]
 fn goals_and_their_logs_survive_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     // Ставим то, что цели читают: взятую цель, успешную вылазку, сделанный
     // рецепт и заработок. Через мир их сюда не догнать за разумное время —
     // а проверяем мы перенос снимка, а не путь к состоянию.
@@ -621,7 +622,7 @@ fn goals_and_their_logs_survive_a_save() {
 /// заведённый заказ, и «Отменить» появилась бы там, где её быть не должно.
 #[test]
 fn a_stocking_rule_survives_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.without_timeline(); // мир по расписанию тут только шум
     live.set_tech("workshops"); // тема «Мастерская» открывает и станок, и рецепт (§12.146)
     live.set_tech("planning"); // а «Автопроизводство» — само правило-порог (§12.93)
@@ -655,7 +656,7 @@ fn a_stocking_rule_survives_a_save() {
 /// то есть разложенная игроком база молча перемешивается за десяток тиков.
 #[test]
 fn a_bin_setting_survives_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.without_timeline();
     live.set_tech("bins"); // ворота у самой постройки (§12.195)
     assert!(live.add_blueprint(8, 7, 13), "ящик размечен");
@@ -674,7 +675,7 @@ fn a_bin_setting_survives_a_save() {
 /// узнал бы об этом, не дождавшись отряда у двери.
 #[test]
 fn an_auto_raid_rule_survives_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.add_squad(); // стартовый отряд до §12.349
     live.without_timeline();
     let node = live
@@ -715,7 +716,7 @@ fn an_auto_raid_rule_survives_a_save() {
 /// ровно ничего — заметить это можно только по не растущим деньгам.
 #[test]
 fn a_selling_rule_survives_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.without_timeline();
     // Пара берётся из самого рулсета: правило висит на предмете, но фракция
     // обязана этим предметом торговать (§12.87, §12.88).
@@ -742,13 +743,14 @@ fn a_selling_rule_survives_a_save() {
 /// кандидатов и темы, которые у базы открыты давно.
 #[test]
 fn a_loaded_game_announces_nothing_new() {
-    let mut live = Sim::new(CORE).expect("мир");
+    let mut live = opened(Sim::new(CORE).expect("мир"));
     live.without_timeline();
     live.tick_n(50);
     let before = live.news().len();
 
     let json = live.save().expect("снимок");
     let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
+    loaded.open_rules();
     loaded.without_timeline();
     loaded.tick_n(10);
     assert_eq!(
@@ -767,7 +769,7 @@ fn a_loaded_game_announces_nothing_new() {
 /// запасу — тест был бы зелёным и ничего не проверял.
 #[test]
 fn a_saved_world_remembers_what_it_saw() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.without_timeline();
     let cloth = live.item_index("cloth").expect("предмет `cloth`");
 
@@ -800,7 +802,7 @@ fn a_saved_world_remembers_what_it_saw() {
 /// базы, которая ходит в комбинезонах и держит паёк в шапке.
 #[test]
 fn an_old_snapshot_does_not_hide_the_shelves() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.without_timeline();
     live.tick();
     let scrap = live.item_index("scrap").expect("предмет `scrap`");
@@ -830,7 +832,7 @@ fn an_old_snapshot_does_not_hide_the_shelves() {
 /// новобранцами без прошлого.
 #[test]
 fn a_personal_record_survives_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.add_squad(); // стартовый отряд до §12.349
     live.without_timeline();
     assert!(
@@ -857,7 +859,7 @@ fn a_personal_record_survives_a_save() {
 /// долго.
 #[test]
 fn the_trained_mark_survives_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.without_timeline();
     let build = live.skill_index("build").expect("домен «Стройка»");
     assert!(
@@ -881,7 +883,7 @@ fn the_trained_mark_survives_a_save() {
 /// обнулённый опыт; в игре — плен), не закрывает её и в загруженной партии.
 #[test]
 fn a_loaded_game_remembers_its_best_scientist() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     let topic = live.topic_index("tutoring").expect("тема «Наставничество»");
     let science = live.skill_index("science").expect("наука");
     live.set_xp("sp3", science, 1400);

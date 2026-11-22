@@ -1242,6 +1242,7 @@ worker.onmessage = (e) => {
     // ...и цели тоже: у нового мира своя история взятого, и старая сделала бы
     // всё уже закрытое «только что закрытым» (см. `goalsDoneSeen`).
     goalsDoneSeen = null;
+    exitSeen = null;
     skillLevelsSeen = null;
     wikiOpenSeen = null;
     wikiQueue = [];
@@ -1652,6 +1653,34 @@ function drawFurniture(g, id, x, y, tint, n) {
       alpha: 0.35,
     });
   switch (id) {
+    case "rubble": {
+      // Завал (§12.367): груда камней на всю клетку — непроходимо, но видно,
+      // что это не стена, а то, что можно разобрать. Раскладка камней своя у
+      // каждой клетки (`n`), иначе коридор читался бы обоями.
+      g.rect(px, py, T, T).fill(0x2b2620);
+      let seed = Math.floor(n * 9973) + 1;
+      const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+      for (let i = 0; i < 6; i++) {
+        const r = T * (0.12 + rnd() * 0.12);
+        const cx = px + T * (0.18 + rnd() * 0.64);
+        const cy = py + T * (0.2 + rnd() * 0.62);
+        const c = [0x6b6052, 0x7d7262, 0x5a5145, 0x8a7f6c][i % 4];
+        g.circle(cx + 1.2, cy + 1.6, r).fill({ color: COLORS.shadow, alpha: 0.45 });
+        g.circle(cx, cy, r).fill(c);
+        g.circle(cx - r * 0.3, cy - r * 0.3, r * 0.35).fill({ color: 0xffffff, alpha: 0.12 });
+      }
+      break;
+    }
+    case "portal": {
+      // Портал (§12.367): светящиеся кольца на полу — место, откуда пришли.
+      const cx = px + T / 2;
+      const cy = py + T / 2;
+      g.circle(cx, cy, T * 0.46).fill({ color: 0x8a6cff, alpha: 0.18 });
+      g.circle(cx, cy, T * 0.4).stroke({ color: 0xb59cff, width: 2, alpha: 0.85 });
+      g.circle(cx, cy, T * 0.26).stroke({ color: 0x8a6cff, width: 1.5, alpha: 0.7 });
+      g.circle(cx, cy, T * 0.1).fill({ color: 0xd9ccff, alpha: 0.6 });
+      break;
+    }
     case "bed": {
       // Матрас, подушка у изголовья, одеяло с подворотом.
       const m = T * 0.14;
@@ -6870,6 +6899,12 @@ let goalsOpen = localStorage.getItem(GOALS_OPEN_KEY) === "1";
 // выглядело только что сделанным. Поэтому сброс висит на `ready`: мир сменился —
 // прошлого кадра нет.
 let goalsDoneSeen = null;
+// Выход наружу (§12.367): `null` — мир ещё не показал ни одного снимка,
+// `false` — шлюз отрезан завалом, `true` — до него хоть раз дошли. Дверь
+// «Вылазки» прячется, пока шлюза не видно, а на переходе `false → true`
+// штаб открывается сам: прокоп и был дорогой к нему. Монотонно — ушедший
+// всем составом отряд дверь не прячет.
+let exitSeen = null;
 
 goalsToggleEl.addEventListener("click", () => {
   goalsOpen = !goalsOpen;
@@ -10544,7 +10579,23 @@ function raidGate(i, node) {
         : `мест осталось ${room} из ${most}, а ${node.nearby ? "отмечено" : "в отряде"}` +
           ` ${enlisted} — ${node.nearby ? "снимите лишних" : "вычеркните лишних"}` +
           " или дождитесь, пока вернутся";
+  // Кто может пойти без стола (§12.367) — признак заказа, тот же, что у ядра
+  // (`MissionRule::free_may_go`): рядом с базой — свободные коты, сюжетный
+  // «один» — названный кот, дальние — только отрядом. Вид его не считает, а
+  // называет: поля едут из рулсета.
+  const crewWhy = def.alone
+    ? node.nearby
+      ? node.crew.length === 1 && node.crew[0] === def.alone
+        ? null
+        : `приходи один: пойти может только ${esc(def.alone)}, и один`
+      : `только ${esc(def.alone)}, один и без отряда — снимите выбор отряда`
+    : node.nearby && !def.nearby
+      ? gates?.unlocked && !nodes.length
+        ? "дальние вылазки — только отрядом: нужен стол брифинга"
+        : "дальние вылазки — только отрядом: выберите отряд слева"
+      : null;
   const ready =
+    !crewWhy &&
     !nogate &&
     !busyHere &&
     !taken &&
@@ -10568,7 +10619,9 @@ function raidGate(i, node) {
   // заказчиком только тогда. То же и у «эту вылазку уже ведёт другой отряд».
   // Сперва то, что чинится решением игрока, потом то, что чинится временем, —
   // тот же порядок, что у строки правила автовылазки (§12.116).
-  const title = nogate
+  const title = crewWhy
+    ? crewWhy
+    : nogate
     ? `${hint} · ${nogate}`
     : distrust
       ? `${hint} · ${distrust}`
@@ -10619,7 +10672,9 @@ function raidGate(i, node) {
   // не пропала: она осталась в подсказке кнопки (`title`), где отвечает на «что
   // будет, если нажать», — §12.53 требует названной причины, а не названной
   // причины в каждой карточке.
-  const reason = nogate
+  const reason = crewWhy
+    ? crewWhy
+    : nogate
     ? nogate
     : distrust
       ? distrust
@@ -11080,7 +11135,12 @@ function syncRaidMap() {
   // Окрестности: подпись про базу (§12.349). Сколько заметных выходов
   // осталось, говорит ядро (`NearbySnap::left`); ореол базы бледнеет вместе
   // с ним — картинка того, что окрестности пустеют.
-  const near = (lastSnap?.nearby ?? [])[0];
+  // Подпись про окрестности — по заказу с убывающей добычей («Пошарить»,
+  // §12.349): разовые вылазки рядом с базой (§12.367) не пустеют, и первая из
+  // них назвала бы окрестности обшаренными ещё до первого выхода.
+  const nearAll = lastSnap?.nearby ?? [];
+  const near =
+    nearAll.find((n) => (meta.missions?.[n.def]?.yields ?? []).length > 0) ?? nearAll[0];
   if (raidUi.home && near) {
     const full = (meta.missions?.[near.def]?.yields ?? []).length;
     raidUi.home.style.setProperty(
@@ -12071,6 +12131,17 @@ function syncDoors(snap) {
   // причина — та же строка `gateHint`, что и внутри окна, второй её экземпляр
   // разошёлся бы с первым.
   if (raidDoor) {
+    // Пятый случай пропажи двери (§12.367): до шлюза ещё не докопались — за
+    // дверью нет ни одной вылазки, на которую можно уйти, а причина словом
+    // («нет выхода») звала бы туда, куда игрок и так копает.
+    const exitNow =
+      !!lastSnap?.exit_open || (lastSnap?.missions ?? []).length > 0;
+    if (exitSeen === null) exitSeen = exitNow;
+    else if (exitNow && !exitSeen) {
+      exitSeen = true;
+      openRaidWindow();
+    }
+    raidDoor.hidden = !exitSeen;
     const nogate = gateHint();
     // «Пошарить рядом» ходит без стола (§12.349): есть шлюз — дверь живая и
     // без отряда, а причина про отряд остаётся в подсказке.

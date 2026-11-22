@@ -368,7 +368,8 @@ fn teaching_a_squad_member_disbands_the_raid() {
 /// Ловит контент, в котором домена нет, `taught` забыт или класс замурован.
 #[test]
 fn the_shipped_ruleset_teaches_science() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let science = sim.skill_index("science").expect("домен «Наука» в рулсете");
     sim.add_classroom(); // парту со §12.208 строит игрок
 

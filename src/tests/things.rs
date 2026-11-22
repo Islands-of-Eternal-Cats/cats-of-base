@@ -221,7 +221,7 @@ fn the_most_spent_medkit_is_used_first_and_vanishes_when_empty() {
 /// Прочность и заряды переживают снимок: вещи едут своими сущностями.
 #[test]
 fn wear_and_charges_survive_a_save() {
-    let mut live = Sim::new(CORE).expect("рулсет");
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
     live.add_storage();
     let suit = live.item_index("suit").expect("комбинезон");
     let kit = live.item_index("medkit").expect("аптечка");

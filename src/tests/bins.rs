@@ -8,6 +8,7 @@
 //! Тайл `1` здесь склад (ярус 0), тайл `2` — ящик (ярус 1): оба переводятся
 //! через `force_tile`, как в `tidying`.
 
+use super::opened;
 use super::sim_from;
 use crate::sim::Sim;
 
@@ -285,7 +286,7 @@ fn moving_between_tiers_conserves_goods() {
 /// исчезла бы вместе с ним.
 #[test]
 fn the_shipped_ruleset_stacks_storage_tiers() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let mut tiers: Vec<(i32, i32)> = sim.storage_tiers();
     assert!(!tiers.is_empty(), "хранилища в рулсете есть");
     tiers.sort_unstable();

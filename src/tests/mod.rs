@@ -28,6 +28,7 @@ mod muster;
 mod nearby;
 mod needs;
 mod news;
+mod opening;
 mod orders;
 mod panel;
 mod paths;
@@ -88,6 +89,13 @@ fn rows_from(text: &'static str) -> Vec<&'static str> {
 /// Навыков в мире тоже нет (`SkillRules` пуст), и лапы у котов без предела:
 /// работа идёт с базовой скоростью, а тесты навыков включают их сами
 /// (`set_skill`, `set_carry`) — §12.17.
+/// Боевая партия с прежним началом (§12.367): `open_base` поверх
+/// `Sim::new`. Тесты механик, писанные под старое начало, собирают мир так.
+fn opened(mut sim: Sim) -> Sim {
+    sim.open_base();
+    sim
+}
+
 fn sim_from(rows: &[&str]) -> Sim {
     let height = rows.len() as i32;
     let width = rows[0].len() as i32;
@@ -1824,6 +1832,90 @@ impl Sim {
         self.world.resource_mut::<Seen>().mark(item);
     }
 
+    /// **Прежнее начало партии** (до §12.367): коридор разобран, лежанка в
+    /// жилой комнате, стартовый запас на полу северной комнаты и все трое котов
+    /// на своих местах. С §12.367 боевая партия начинается одним котом у
+    /// портала за завалом, а тесты механик, писанные под старое начало, о нём
+    /// знать не обязаны — им мир собирается ровно прежним одним вызовом
+    /// (`core_sim`). Новое начало стерегут свои тесты (`tests/opening.rs`).
+    /// Правила прежнего начала (§12.367): «Пошарить рядом» был открыт с
+    /// первого тика, а теперь его открывает «Осмотреть вход». Ворота снимаем с
+    /// самого заказа, а не пишем журнал — журнал вылазок и цели остаются
+    /// прежними. Правила в снимок не идут, поэтому загруженной партии их
+    /// снимают ещё раз.
+    fn open_rules(&mut self) {
+        if let Some(scavenge) = self.mission_index("scavenge") {
+            self.world.resource_mut::<MissionRules>().0[scavenge].raided = None;
+        }
+    }
+
+    fn open_base(&mut self) {
+        let rubble = self.tile_index("rubble");
+        let portal = self.tile_index("portal");
+        let floor = self.tile_index("floor").expect("пол в палитре");
+        let (w, h) = {
+            let map = self.world.resource::<BaseMap>();
+            (map.width, map.height)
+        };
+        for y in 0..h {
+            for x in 0..w {
+                let t = self.tile(x, y);
+                if Some(t) == rubble || Some(t) == portal {
+                    self.force_tile(x, y, floor);
+                }
+            }
+        }
+        if let Some(bed) = self.tile_index("bed") {
+            for x in 3..6 {
+                self.force_tile(x, 14, bed);
+            }
+        }
+        let item = |sim: &Sim, id: &str| sim.item_index(id).expect("предмет в палитре");
+        let (scrap, part, ration) = (
+            item(self, "scrap"),
+            item(self, "part"),
+            item(self, "ration"),
+        );
+        self.put_item(4, 3, scrap, 20);
+        self.put_item(6, 3, scrap, 20);
+        self.put_item(4, 5, scrap, 20);
+        self.put_item(6, 5, part, 4);
+        self.put_item(5, 4, ration, 6);
+        {
+            let mut q = self.world.query::<(&UnitId, &mut Position)>();
+            for (u, mut p) in q.iter_mut(&mut self.world) {
+                if u.0 == "excellent" {
+                    *p = Position { x: 3, y: 11 };
+                }
+            }
+        }
+        let found = self
+            .world
+            .get_resource::<FoundRules>()
+            .map(|f| f.0.clone())
+            .unwrap_or_default();
+        for cat in found {
+            if !self.has_unit(&cat.id) {
+                crate::sim::spawn_cat(
+                    &mut self.world,
+                    &cat.id,
+                    &cat.sprite,
+                    cat.pos,
+                    &cat.perks,
+                    &[],
+                    &cat.stats,
+                    &cat.gear,
+                );
+            }
+        }
+        self.open_rules();
+        let _ = bevy_ecs::system::RunSystemOnce::run_system_once(
+            &mut self.world,
+            crate::seen::note_seen,
+        );
+        crate::things::reconcile_world(&mut self.world);
+    }
+
     /// Склад на месте северной комнаты боевого рулсета.
     ///
     /// Со §12.215 стартовая застройка склада не содержит — игрок строит его
@@ -2719,6 +2811,32 @@ impl Sim {
     /// Заказ без отряда (§12.349): пометить заказ `nearby`.
     fn set_nearby(&mut self, mission: usize) {
         self.world.resource_mut::<MissionRules>().0[mission].nearby = true;
+    }
+
+    /// Сюжетный «приходи один» (§12.367): пойти может только этот кот.
+    fn set_alone(&mut self, mission: usize, unit: &str) {
+        self.world.resource_mut::<MissionRules>().0[mission].alone = Some(unit.to_string());
+    }
+
+    /// Заказ открывается выполненным заказом `after` (§12.367).
+    fn set_raided(&mut self, mission: usize, after: usize) {
+        self.world.resource_mut::<MissionRules>().0[mission].raided = Some(after);
+    }
+
+    /// Кот-находка (§12.367): ждёт на заказе `mission` и придёт к шлюзу.
+    fn set_found(&mut self, id: &str, mission: usize) {
+        if self.world.get_resource::<FoundRules>().is_none() {
+            self.world.insert_resource(FoundRules::default());
+        }
+        self.world.resource_mut::<FoundRules>().0.push(FoundCat {
+            id: id.to_string(),
+            sprite: String::new(),
+            perks: Vec::new(),
+            stats: Vec::new(),
+            gear: Vec::new(),
+            mission,
+            pos: (0, 0),
+        });
     }
 
     /// Кто в снимке «Пошарить рядом» свободен идти (§12.349), по порядку.

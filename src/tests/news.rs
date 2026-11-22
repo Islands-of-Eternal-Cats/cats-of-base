@@ -309,7 +309,7 @@ fn the_feed_never_grows_past_its_cap() {
 
 #[test]
 fn the_shipped_ruleset_announces_the_next_rung() {
-    let mut sim = Sim::new(CORE).expect("мир");
+    let mut sim = opened(Sim::new(CORE).expect("мир"));
     sim.without_timeline();
     sim.tick_n(5);
     assert!(sim.news().is_empty(), "старт молчит: {:?}", sim.news());
@@ -415,7 +415,8 @@ fn a_known_item_never_repeats_itself() {
 /// идёт: ровно то, что игрок и должен заметить.
 #[test]
 fn the_shipped_ruleset_announces_only_what_is_new() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.without_timeline();
     sim.tick_n(1);
 
@@ -528,7 +529,7 @@ fn a_rule_never_closes() {
 /// технологиями целиком (§12.93), то есть базой сперва управляют руками.
 #[test]
 fn the_shipped_ruleset_announces_its_automation() {
-    let mut sim = Sim::new(CORE).expect("мир");
+    let mut sim = opened(Sim::new(CORE).expect("мир"));
     sim.without_timeline();
     sim.tick_n(5);
     assert!(

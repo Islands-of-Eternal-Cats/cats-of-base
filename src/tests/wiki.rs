@@ -397,7 +397,16 @@ fn open_at_start(rs: &Ruleset, key: &str) -> bool {
         // то, что надето на стартовых котах. Непонятый — только короткой версией,
         // поэтому `requires` закрывает его тоже.
         "item" => {
-            let found = rs.stock.iter().any(|s| s.item == id)
+            // С §12.367 запаса на старте нет, а лом даёт снос завала: снос
+            // возвращает цену тайла, значит цена стартовой застройки — тоже
+            // находка с нулевого тика.
+            let dug = rs.build.iter().any(|b| {
+                rs.tiles
+                    .iter()
+                    .any(|t| t.id == b.tile && t.cost.contains_key(id))
+            });
+            let found = dug
+                || rs.stock.iter().any(|s| s.item == id)
                 || rs.units.iter().any(|u| u.gear.iter().any(|g| g == id));
             found && rs.items.iter().any(|x| x.id == id && x.requires.is_empty())
         }

@@ -235,7 +235,7 @@ fn a_collector_does_not_take_a_second_one() {
 // --- боевой рулсет ---------------------------------------------------------
 
 fn shipped() -> Sim {
-    Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет")
+    opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"))
 }
 
 /// Образец на боевом рулсете собирают, а не подбирают, и **вход в него один**:

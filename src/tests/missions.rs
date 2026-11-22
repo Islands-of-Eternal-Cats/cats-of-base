@@ -959,7 +959,8 @@ fn a_node_never_becomes_a_workplace() {
 /// в которой первая же вылазка невыполнима.
 #[test]
 fn the_shipped_ruleset_sends_a_squad_out_and_back() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.add_squad(); // стартовый отряд до §12.349
     let parts = 1; // индекс `part` в палитре предметов
     let before = sim.item_total(parts);
@@ -989,7 +990,8 @@ fn the_shipped_ruleset_sends_a_squad_out_and_back() {
 /// это дорога назад.
 #[test]
 fn the_shipped_ruleset_starts_with_one_door_and_no_table() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let relay = sim.tile_index("relay").expect("рация в палитре");
     let garage = sim.tile_index("garage").expect("шлюз в палитре");
 
@@ -1009,7 +1011,8 @@ fn the_shipped_ruleset_starts_with_one_door_and_no_table() {
 /// могут пошарить рядом с нулевого тика.
 #[test]
 fn the_shipped_ruleset_starts_with_free_cats() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     for id in ["excellent", "sp2", "sp3"] {
         assert_eq!(sim.enlisted_at(id), None, "{id} ни в каком отряде");
     }
@@ -1017,7 +1020,8 @@ fn the_shipped_ruleset_starts_with_free_cats() {
 
 #[test]
 fn the_shipped_ruleset_has_a_mission_that_is_out_of_reach() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.add_squad(); // стартовый отряд до §12.349
     // Связь глушим: тест про лестницу сложности, а дежурный у рации прибавляет
     // отряду силы и делает «заведомо провальную» вылазку спорной (§12.60).

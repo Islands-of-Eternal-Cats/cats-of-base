@@ -510,6 +510,30 @@ function prop(g, id, x, y, tint, n, d) {
     return { x: x0, y: y0 - hh, w, d: dd };
   };
   switch (id) {
+    case "rubble": {
+      // Завал (§12.367): груда камней коробками разной высоты — ниже стены,
+      // выше мебели; раскладка своя у каждой клетки (`n`).
+      let seed = Math.floor(n * 9973) + 1;
+      const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+      const stones = [0x6b6052, 0x7d7262, 0x5a5145, 0x8a7f6c];
+      for (let i = 0; i < 5; i++) {
+        const w = 0.28 + rnd() * 0.22;
+        const rx = rnd() * (1 - w);
+        const ry = 0.1 + rnd() * (0.8 - w);
+        box(rx, ry, w, w, 0.12 + rnd() * 0.28, stones[i % 4]);
+      }
+      break;
+    }
+    case "portal": {
+      // Портал (§12.367): светящиеся кольца на полу.
+      const cx = px + T / 2;
+      const cy = py + T / 2;
+      g.ellipse(cx, cy, T * 0.46, T * 0.4).fill({ color: 0x8a6cff, alpha: 0.18 });
+      g.ellipse(cx, cy, T * 0.4, T * 0.34).stroke({ color: 0xb59cff, width: 2, alpha: 0.85 });
+      g.ellipse(cx, cy, T * 0.24, T * 0.2).stroke({ color: 0x8a6cff, width: 1.5, alpha: 0.7 });
+      g.ellipse(cx, cy, T * 0.1, T * 0.08).fill({ color: 0xd9ccff, alpha: 0.6 });
+      break;
+    }
     case "bed":
     case "ward": {
       const white = id === "ward";

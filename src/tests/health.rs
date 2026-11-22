@@ -306,7 +306,7 @@ fn a_wounded_cat_does_not_treat_others() {
 /// ниже потолка. Синтетические схемы этого не увидят — там всё задаётся руками.
 #[test]
 fn the_shipped_ruleset_can_treat_its_wounded() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
 
     let (max, hurt, mend) = {
         let rules = sim.world.resource::<crate::components::HealthRules>();
@@ -418,7 +418,7 @@ fn healing_works_without_any_medkit() {
 /// раненые появляются раньше второй ступени науки.
 #[test]
 fn the_shipped_ruleset_can_bandage_the_wounded() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
 
     // Технологии берём **как они есть на старте** — пустыми. С §12.131 это и
     // есть проверка «аптечка не спрятана за технологией, до которой ещё дожить

@@ -4,6 +4,7 @@
 //! (`set_capacity`), и нужные клетки переводятся в него через `force_tile`.
 //! Тайл `0` (обычный пол) ёмкости не имеет, как и в рулсете.
 
+use super::opened;
 use super::{BUILD_TICKS, sim_from};
 use crate::sim::Sim;
 
@@ -233,7 +234,7 @@ fn marking_empty_floor_does_nothing() {
 #[test]
 fn the_shipped_ruleset_tidies_demolition_scrap() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let mut sim = opened(Sim::new(yaml).expect("рулсет должен разбираться"));
     sim.without_timeline(); // тест про материал, а не про мир по расписанию
     sim.add_storage(); // увозить некуда, пока склада нет (§12.215)
     let before = sim.scrap_total();
@@ -508,7 +509,8 @@ fn among_ordinary_piles_the_nearest_still_wins() {
 /// урок, не уронив ни одного теста.
 #[test]
 fn the_shipped_ruleset_starts_without_storage_it_can_afford() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let storage = sim.tile_index("storage").expect("склад в палитре");
 
     for (item, _) in sim.cost_of(storage) {
@@ -538,7 +540,8 @@ fn the_shipped_ruleset_starts_without_storage_it_can_afford() {
 /// останется в тексте, а в игре его не будет.
 #[test]
 fn the_shipped_ruleset_fills_a_freshly_built_storage() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.without_timeline(); // мир по расписанию тут только шум
     let scrap = sim.item_index("scrap").expect("лом в палитре");
     let storage = sim.tile_index("storage").expect("склад в палитре");

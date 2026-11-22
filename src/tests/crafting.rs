@@ -1057,7 +1057,8 @@ fn a_threshold_counts_pieces_not_items() {
 /// пометить `shop` или закрыли технологией, до которой рецепту не дожить.
 #[test]
 fn the_shipped_ruleset_makes_a_part_from_scrap() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.without_timeline(); // караван приносит своё — здесь считаем сделанное
     sim.add_storage(); // станок кормит **склад** (§12.130), а его со §12.215 строит игрок
     let part = 1; // индекс `part` в палитре предметов
@@ -1253,7 +1254,7 @@ fn a_salvage_recipe_takes_no_threshold() {
 /// что у `the_shipped_ruleset_leaves_no_arbitrage` на рынке.
 #[test]
 fn the_shipped_ruleset_never_profits_from_salvage() {
-    let sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let recipes = sim.recipe_flows();
 
     for (a_id, a_cost, a_gives) in &recipes {
@@ -1312,7 +1313,8 @@ fn the_shipped_ruleset_never_profits_from_salvage() {
 /// не понимая, что из неё выйдет, — это мусор, а не производство.
 #[test]
 fn the_shipped_ruleset_opens_the_cloth_branch_in_order() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     sim.without_timeline(); // караван приносит своё — здесь считаем добытое
     sim.add_classroom(); // лабораторию со §12.208 строит игрок
     sim.add_storage(); // а склад — со §12.215: и вскрытие, и разбор берут учтённое

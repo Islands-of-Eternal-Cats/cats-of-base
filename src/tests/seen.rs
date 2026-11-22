@@ -97,7 +97,8 @@ fn worn_gear_is_seen() {
 /// не выбраны» про ресурсы, выбранные самим рулсетом.
 #[test]
 fn the_shipped_ruleset_starts_with_only_what_it_has() {
-    let mut sim = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     // Мир по расписанию — шум для этой проверки: событие с подарком отметило бы
     // предмет, которого база ещё не добывала (§12.28).
     sim.without_timeline();

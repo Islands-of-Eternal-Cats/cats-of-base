@@ -547,7 +547,7 @@ fn part_dates_stay_home_until_the_goal_is_taken() {
 // требует от игрока проиграть или выбрать сторону развилки.
 
 fn shipped() -> Sim {
-    Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет")
+    opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"))
 }
 
 /// **Ни одна цель не потерялась при разборе.**

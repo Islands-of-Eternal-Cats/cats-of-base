@@ -4,6 +4,7 @@
 //! знают. Здесь миры собираются явно: цена задаётся `set_cost_items`, кучи
 //! кладутся `put_item`.
 
+use super::opened;
 use super::sim_from;
 use crate::sim::Sim;
 
@@ -140,7 +141,7 @@ fn storage_capacity_counts_pieces_of_any_kind() {
 #[test]
 fn the_shipped_ruleset_builds_from_two_item_kinds() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let mut sim = opened(Sim::new(yaml).expect("рулсет должен разбираться"));
     sim.without_timeline(); // тест про материал, а не про мир по расписанию
     sim.sight("sample"); // лежанка открывается находкой (§12.210)
     let before = sim.scrap_total();

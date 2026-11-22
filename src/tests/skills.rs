@@ -4,6 +4,7 @@
 //! цену и ёмкость тайла в тестах материала. Порогом уровня удобно ставить
 //! ровно столько очков, сколько кот набивает за один тайл (`BUILD_TICKS`).
 
+use super::opened;
 use super::{BUILD_TICKS, sim_from};
 use crate::sim::Sim;
 
@@ -197,7 +198,7 @@ fn a_site_costlier_than_paws_is_supplied_in_several_trips() {
 #[test]
 fn the_shipped_ruleset_grows_skills_and_deals_paws() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let mut sim = opened(Sim::new(yaml).expect("рулсет должен разбираться"));
     let build = sim.skill_index("build").expect("навык стройки в рулсете");
 
     // «Носильщика» среди стартовых нет: он один на партию — у Кирпича.
@@ -225,7 +226,7 @@ fn the_shipped_ruleset_grows_skills_and_deals_paws() {
 #[test]
 fn the_shipped_ruleset_gives_brick_four_times_the_paws() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
-    let mut sim = Sim::new(yaml).expect("рулсет должен разбираться");
+    let mut sim = opened(Sim::new(yaml).expect("рулсет должен разбираться"));
     let brick = sim.open_recruit("brick");
 
     assert!(sim.hire(brick), "Кирпич нанят");

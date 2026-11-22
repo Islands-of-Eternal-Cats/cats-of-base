@@ -585,7 +585,7 @@ fn a_partly_delivered_sale_frees_the_rest() {
 // --- боевой рулсет ---------------------------------------------------------
 
 fn shipped() -> Sim {
-    Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет")
+    opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"))
 }
 
 /// **Главный тест шага: бесплатных денег не бывает.**

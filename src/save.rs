@@ -227,6 +227,7 @@ pub(crate) const SKIPPED: &[(&str, &str)] = &[
         "MissionRules",
         "правила: пересобирает `Sim::new` из рулсета",
     ),
+    ("FoundRules", "правила: пересобирает `Sim::new` из рулсета"),
     (
         "FactionRules",
         "правила: пересобирает `Sim::new` из рулсета",
