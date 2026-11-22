@@ -606,9 +606,6 @@ onPanelClick(raidWinEl, ".squad-sel", (b, e) => {
   if (e.target.closest(".squad-rename")) return;
   const x = Number(b.dataset.x);
   const y = Number(b.dataset.y);
-  // Shift — взять отряд с собой (§12.364), как кнопкой «+» в шапке.
-  if (e.shiftKey && toggleSquadJoin(x, y)) return;
-  squadJoin.clear();
   // Отряд в деле повторным кликом не снимается (§12.362): его колонка — одна
   // карточка вылазки, и снятый выбор подменял её чужими заказами.
   const again =
@@ -625,24 +622,6 @@ onPanelClick(raidWinEl, ".squad-sel", (b, e) => {
   // Карту выбор отряда не трогает (§12.355): участок выбирает игрок, и
   // прыжок к участку правила отряда уводил его от заказов, которые он смотрел.
   renderRaidWindow();
-});
-// «Взять с собой» (§12.364): отряд дома уходит одной вылазкой с выбранным.
-// Выбранный ведёт — за его столом брифинг, его радист держит связь. Это вид,
-// а не мир: мимо `sendAction`. Вернёт false, если брать некого или не к кому.
-function toggleSquadJoin(x, y) {
-  const lead = !raidHome && raidWinAt ? nodeAt(raidWinAt.x, raidWinAt.y) : null;
-  const n = nodeAt(x, y);
-  if (!lead || lead.busy || !n || n.busy || n === lead) return false;
-  const key = `${x},${y}`;
-  if (squadJoin.has(key)) squadJoin.delete(key);
-  else squadJoin.add(key);
-  crewEdit = null;
-  renderRaidWindow();
-  return true;
-}
-onPanelClick(raidWinEl, ".squad-join", (b) => {
-  if (b.classList.contains("off")) return;
-  toggleSquadJoin(Number(b.dataset.x), Number(b.dataset.y));
 });
 // Свёрнутые отряды штаба (§12.353): ключ — клетка стола «x,y». Это вид, а не
 // мир, поэтому живёт в `localStorage` рядом с прочими настройками вида.
@@ -666,14 +645,11 @@ onPanelClick(raidWinEl, ".squad-fold", (b) => {
 // отряда — зачисляет только «+» в режиме правки.
 onPanelClick(raidWinEl, ".nearby-pick", (b) => {
   if (b.classList.contains("off")) return;
-  // Выбран отряд дома — свободный идёт **с ним** одной вылазкой (§12.365),
-  // как отряд «+ вместе». Нет — отметка ведёт свободных одних, без отряда.
-  // Правка состава так не делает: в ней у строки свой «+».
+  // Выбран отряд дома — свободный идёт **с ним** одной вылазкой (§12.365).
+  // Нет — отметка ведёт свободных одних, без отряда. Правка состава так не
+  // делает: в ней у строки свой «+».
   const lead = !raidHome && raidWinAt ? nodeAt(raidWinAt.x, raidWinAt.y) : null;
-  if (!lead || lead.busy || crewEdit) {
-    raidHome = true;
-    squadJoin.clear();
-  }
+  if (!lead || lead.busy || crewEdit) raidHome = true;
   const id = b.dataset.id;
   if (nearbyPick.has(id)) nearbyPick.delete(id);
   else nearbyPick.add(id);
@@ -704,22 +680,18 @@ onPanelClick(raidWinEl, ".raid-go", (b) => {
   // отвечает на неё свой обработчик: без этой проверки один клик отдал бы две
   // команды — отзыв и новую заявку.
   if (b.classList.contains("raid-stop")) return;
-  // Общая вылазка (§12.364): ведущий и взятые с собой — одной командой.
-  // Свободные коты, взятые с отрядом (§12.365), — той же командой.
+  // Свободные коты, взятые с отрядом (§12.365), — одной командой с ним.
+  // Несколько отрядов на одну вылазку вид не собирает (§12.368): ядро это
+  // умеет (`launch_nodes`), но на дело идёт один отряд.
   const units = (lastSnap?.free ?? []).filter((id) => nearbyPick.has(id));
-  if ((squadJoin.size || units.length) && raidWinAt) {
+  if (units.length && raidWinAt) {
     sendAction({
       type: "launchNodes",
       mission: Number(b.dataset.def),
-      cells: [
-        raidWinAt.x,
-        raidWinAt.y,
-        ...[...squadJoin].flatMap((k) => k.split(",").map(Number)),
-      ],
+      cells: [raidWinAt.x, raidWinAt.y],
       units,
       site: b.dataset.site == null ? -1 : Number(b.dataset.site),
     });
-    squadJoin.clear();
     nearbyPick.clear();
     syncNearbyPick();
     syncSquadPick();
@@ -10495,10 +10467,19 @@ function raidGate(i, node) {
   // (§12.363): сколько котов заказ ещё возьмёт, считает ядро
   // (`RaidSnap::room`) тем же выражением, каким заявка отклонит лишних.
   const room = def.nearby ? (gates?.room ?? 0) : null;
+  // На одну вылазку идёт один отряд (§12.368): ядро пустило бы на «Пошарить
+  // рядом» и второй (§12.363), но вид его не отправляет — пока заказ ведёт
+  // другой отряд, кнопка гаснет. Свободные коты этим не заняты: они не отряд.
+  const otherSquad =
+    def.nearby && !node.nearby
+      ? missionsOut.find(
+          (m) => m.def === i && !m.solo && !missionHolds(m, node.x, node.y),
+        )
+      : null;
   // У зачистки занят только выбранный на карте очаг (§12.315).
   const taken =
     room != null
-      ? node.crew.length > room
+      ? node.crew.length > room || !!otherSquad
       : running.has(raidKey(i, pickedTarget(i))) || ruled;
   // Ворота места (§12.198): участок заказа заражён — или у зачистки не осталось
   // ни одного очага. Считает их ядро (`RaidSnap::reachable`), здесь только
@@ -10574,6 +10555,8 @@ function raidGate(i, node) {
   const roomWhy =
     room == null || !taken
       ? null
+      : otherSquad
+        ? `эту вылазку уже ведёт ${esc(nodes.find((o) => missionHolds(otherSquad, o.x, o.y))?.name ?? "другой отряд")}`
       : room === 0
         ? `мест нет: на заказе уже ${most} — дождитесь, пока вернутся`
         : `мест осталось ${room} из ${most}, а ${node.nearby ? "отмечено" : "в отряде"}` +
@@ -10682,7 +10665,7 @@ function raidGate(i, node) {
         ? blightWhy
         : busyWhy
           ? null
-          : roomWhy
+          : roomWhy && !otherSquad
           ? roomWhy
           : taken
             ? // Кто именно её ведёт, названо серой строкой выше — номером отряда
@@ -11139,8 +11122,7 @@ function syncRaidMap() {
   // §12.349): разовые вылазки рядом с базой (§12.367) не пустеют, и первая из
   // них назвала бы окрестности обшаренными ещё до первого выхода.
   const nearAll = lastSnap?.nearby ?? [];
-  const near =
-    nearAll.find((n) => (meta.missions?.[n.def]?.yields ?? []).length > 0) ?? nearAll[0];
+  const near = nearAll.find((n) => (meta.missions?.[n.def]?.yields ?? []).length > 0);
   if (raidUi.home && near) {
     const full = (meta.missions?.[near.def]?.yields ?? []).length;
     raidUi.home.style.setProperty(
@@ -11155,9 +11137,11 @@ function syncRaidMap() {
       raidUi.note,
       '<div class="map-h">База</div>' +
         `<div>${
-          near && near.left > 0
-            ? `окрестности: ещё ${plural(near.left, "заметный выход", "заметных выхода", "заметных выходов")}`
-            : "окрестности обшарены: дальше мелочь, изредка деталь"
+          !near
+            ? "окрестности ещё не осмотрены"
+            : near.left > 0
+              ? `окрестности: ещё ${plural(near.left, "заметный выход", "заметных выхода", "заметных выходов")}`
+              : "окрестности обшарены: дальше мелочь, изредка деталь"
         }</div>`,
     );
     return;
@@ -16173,16 +16157,12 @@ function openRaidWindow(x, y, pick = null) {
 const NEARBY_X = -1000;
 const NEARBY_Y = -1000;
 let nearbyPick = new Set();
-// Отряды, взятые с собой выбранным (§12.364): ключи столов «x,y». Выбранный
-// отряд — ведущий (`raidWinAt`), эти уйдут с ним **одной** вылазкой. Прогноз
-// общего состава считает ядро (`Snapshot::combo`) по `setSquadPick`.
-let squadJoin = new Set();
+// Прогноз отряда со взятыми свободными котами (§12.365) считает ядро
+// (`Snapshot::combo`): ему нужен стол отряда (`setSquadPick`) и отметки
+// свободных (`setNearbyPick`). Других отрядов в нём не бывает (§12.368).
 let squadPickSent = "";
 function syncSquadPick() {
-  const cells =
-    (squadJoin.size || nearbyPick.size) && raidWinAt && !raidHome
-      ? [[raidWinAt.x, raidWinAt.y], ...[...squadJoin].map((k) => k.split(",").map(Number))]
-      : [];
+  const cells = nearbyPick.size && raidWinAt && !raidHome ? [[raidWinAt.x, raidWinAt.y]] : [];
   const key = cells.join(";");
   if (key === squadPickSent) return;
   squadPickSent = key;
@@ -16323,8 +16303,6 @@ function onSquadRenamed(m) {
 
 function closeRaidWindow() {
   endSquadRename(true);
-  // Взятые с собой (§12.364) — выбор этого визита, как отметки свободных.
-  squadJoin.clear();
   syncSquadPick();
   // Гасим на закрытии: колонка заказов в штабе видна **всегда**, даже когда
   // отряд в поле, — значит визит и есть «посмотрел» (§12.120). Но с §12.243
@@ -16865,31 +16843,21 @@ function renderRaidWindow() {
     crewEdit = null;
     if (slotPick?.slot === "radio") slotPick = null;
   }
-  // Взятые с собой (§12.364) живут, пока ведущий выбран и дома: ушли, снесли
-  // стол, сменили выбор — список чистится, иначе пережил бы выбор скрытым
-  // состоянием, как правка состава до §12.359.
-  if (!sel || sel.busy || crewEdit) squadJoin.clear();
-  for (const k of [...squadJoin]) {
-    const [jx, jy] = k.split(",").map(Number);
-    const n = nodeAt(jx, jy);
-    if (!n || n.busy || n === sel) squadJoin.delete(k);
-  }
   syncSquadPick();
-  // Прогноз общей вылазки — из ядра (`combo`), тот же `NodeSnap`; пока ответ
-  // по новому выбору не пришёл, честнее прогноз ведущего, чем чужой.
+  // Прогноз отряда со свободными — из ядра (`combo`), тот же `NodeSnap`; пока
+  // ответ по новому выбору не пришёл, честнее прогноз самого отряда.
   const freeNow = new Set(lastSnap.free ?? []);
   const joinFree = sel ? [...nearbyPick].filter((id) => freeNow.has(id)) : [];
   const want = [
     ...new Set([
       ...(sel?.crew ?? []),
       ...joinFree,
-      ...[...squadJoin].flatMap((k) => nodeAt(...k.split(",").map(Number))?.crew ?? []),
     ]),
   ]
     .sort()
     .join(",");
   const combo =
-    (squadJoin.size || joinFree.length) &&
+    joinFree.length &&
     lastSnap.combo &&
     lastSnap.combo.crew.join(",") === want
       ? lastSnap.combo
@@ -17148,10 +17116,6 @@ function crewGroups(sel) {
         y: n.y,
         on,
         busy: n.busy,
-        // Взять с собой (§12.364): кнопка у отрядов дома, пока выбран ведущий
-        // дома. `joined` — уже взят.
-        joinable: !on && !n.busy && !!sel && !sel.busy && !crewEdit,
-        joined: squadJoin.has(`${n.x},${n.y}`),
         folded,
         // В правке у имени карандаш переименования (§12.359).
         html: squadHeadHtml(
@@ -17359,27 +17323,9 @@ function syncCrewRows(sel) {
       }
       // Поле переименования (§12.359) — соседом в той же шапке; без него в
       // списке `orderChildren` перекладывал бы узлы каждым кадром.
-      // «Вместе» (§12.364) — отряд уходит одной вылазкой с выбранным. Узел
-      // постоянный, прячется, когда брать не к кому: шапка не перестраивается.
-      const join = mk(`join:${g.key}`, "tool squad-join", "button");
-      join.dataset.key = `join@${g.sel.x},${g.sel.y}`;
-      join.dataset.x = g.sel.x;
-      join.dataset.y = g.sel.y;
-      join.hidden = !g.sel.joinable;
-      join.classList.toggle("on", g.sel.joined);
-      b.classList.toggle("joined", g.sel.joined);
-      const jtip = g.sel.joined
-        ? "Не брать с собой — отряд останется дома"
-        : "Взять с собой: уйдёт одной вылазкой с выбранным отрядом (Shift+клик по шапке)";
-      if (join.dataset.tip !== jtip) join.dataset.tip = jtip;
-      const jhtml = g.sel.joined ? "✓ вместе" : "+ вместе";
-      if (join._html !== jhtml) {
-        join._html = jhtml;
-        join.innerHTML = jhtml;
-      }
       const extra =
         squadEdit && squadEdit.head === head ? squadEdit.extra : [];
-      orderChildren(head, [fold, edit, join, b, ...extra]);
+      orderChildren(head, [fold, edit, b, ...extra]);
       order.push(head);
       continue;
     }
