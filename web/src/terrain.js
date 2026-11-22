@@ -110,7 +110,10 @@ export function terrainTexture(w, h) {
 
       // Вода — гребень шума: линия, где он пересекает середину, сама виляет и
       // ветвится. Второй шум рвёт её на притоки, иначе сеть замыкается в кольца.
-      const flow = soft(u / 190 + 41.3 + height * 0.5, v / 190 + 17.9 - height * 0.5);
+      const flow = soft(
+        u / 190 + 41.3 + height * 0.5,
+        v / 190 + 17.9 - height * 0.5,
+      );
       const reach = ramp(0.3, 0.42, soft(u / 300 + 3.7, v / 300 + 59.1));
       const off = Math.abs(flow - 0.5);
       mix(WATER, (1 - ramp(0.0, 0.02, off)) * 0.06 * reach); // свечение берега
@@ -132,7 +135,14 @@ export function terrainTexture(w, h) {
   ctx.scale(SCALE, SCALE);
 
   // Виньетка уводит край: участки стоят с запасом, и смотреть туда незачем.
-  const glow = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.max(w, h) * 0.72);
+  const glow = ctx.createRadialGradient(
+    w / 2,
+    h / 2,
+    Math.min(w, h) * 0.35,
+    w / 2,
+    h / 2,
+    Math.max(w, h) * 0.72,
+  );
   glow.addColorStop(0, "rgba(6, 12, 14, 0)");
   glow.addColorStop(1, "rgba(6, 12, 14, 0.65)");
   ctx.fillStyle = glow;

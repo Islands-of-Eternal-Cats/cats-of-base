@@ -97,13 +97,25 @@ export function drawOblique(d) {
       if (v < 0) continue;
       const id = palette[v]?.id;
       const mat = MATERIAL[id] ?? "concrete";
-      floorCell(ground, mat, x, y, T, mix(BASE[mat], tints[v] ?? BASE[mat], TINT), d);
+      floorCell(
+        ground,
+        mat,
+        x,
+        y,
+        T,
+        mix(BASE[mat], tints[v] ?? BASE[mat], TINT),
+        d,
+      );
       // Граница зоны между комнатами разного типа — тонкая линия, как и было.
       if (at(x + 1, y) >= 0 && at(x + 1, y) !== v) {
-        ground.rect(x * T + T - 1.5, y * T, 1.5, T).fill({ color: 0, alpha: 0.45 });
+        ground
+          .rect(x * T + T - 1.5, y * T, 1.5, T)
+          .fill({ color: 0, alpha: 0.45 });
       }
       if (at(x, y + 1) >= 0 && at(x, y + 1) !== v) {
-        ground.rect(x * T, y * T + T - 1.5, T, 1.5).fill({ color: 0, alpha: 0.45 });
+        ground
+          .rect(x * T, y * T + T - 1.5, T, 1.5)
+          .fill({ color: 0, alpha: 0.45 });
       }
     }
   }
@@ -132,7 +144,8 @@ export function drawOblique(d) {
           if (at(x + dx, y + dy) >= 0) near = true;
         }
       }
-      if (near) ground.rect(x * T, y * T, T, T).fill({ color: 0x2a2d36, alpha: 0.45 });
+      if (near)
+        ground.rect(x * T, y * T, T, T).fill({ color: 0x2a2d36, alpha: 0.45 });
     }
   }
 
@@ -183,7 +196,17 @@ export function drawOblique(d) {
           // стены комнаты сверху, и перемычка читается одной стеной.
           const thin = at(x, y - 2) >= 0;
           const top = thin ? py - T : py - h - wt;
-          wallFace(faces, px, py - h, T, h, x, y, tints[at(x, y)] ?? 0x464b57, d);
+          wallFace(
+            faces,
+            px,
+            py - h,
+            T,
+            h,
+            x,
+            y,
+            tints[at(x, y)] ?? 0x464b57,
+            d,
+          );
           caps.rect(px, top, T, py - h - top).fill(wallTop);
           caps.rect(px, py - h - 1.5, T, 1.5).fill(edge);
           // Угловые столбы: верх боковой стены поднимается к верху северной.
@@ -205,7 +228,11 @@ export function drawOblique(d) {
           const wx = s < 0 ? px - wt : px + T;
           const ex = s < 0 ? px - 1.5 : px + T;
           const raised = at(x + s, y + 1) >= 0;
-          const bottom = !raised ? py + T : at(x + s, y - 1) >= 0 ? py : py + T - h;
+          const bottom = !raised
+            ? py + T
+            : at(x + s, y - 1) >= 0
+              ? py
+              : py + T - h;
           if (bottom > py) {
             caps.rect(wx, py, wt, bottom - py).fill(wallTop);
             // Кромку кладём после всех верхов: верх поднятой стены ряда ниже
@@ -224,7 +251,8 @@ export function drawOblique(d) {
           // поднятой стены отбрасывает тень на юг, а не вбок: полоса вдоль него
           // ложилась бы чёрной щелью на углу.
           const span = side(-1);
-          if (span > 0) ground.rect(px, py, T * 0.12, span).fill({ color: 0, alpha: 0.16 });
+          if (span > 0)
+            ground.rect(px, py, T * 0.12, span).fill({ color: 0, alpha: 0.16 });
         }
         if (right) side(1);
         if (down) {
@@ -239,8 +267,6 @@ export function drawOblique(d) {
     }
 
     for (const [rx, ry, rw, rh, c] of late) caps.rect(rx, ry, rw, rh).fill(c);
-
-
   }
 
   // Опущенные стены: лицо на кромке пола, в скалу заходит только `LIFT`.
@@ -306,12 +332,12 @@ export function drawOblique(d) {
           [1, -1],
         ]) {
           if (at(x + dx, y) < 0 || at(x, y + dy) < 0) continue;
-          caps.rect(dx < 0 ? x * T : x * T + T - wt, y * T, wt, wt).fill(wallTop);
+          caps
+            .rect(dx < 0 ? x * T : x * T + T - wt, y * T, wt, wt)
+            .fill(wallTop);
         }
       }
     }
-
-
   }
 
   // 4. Мебель — после лиц стен: то, что стоит у северной стены, стоит перед ней.
@@ -320,7 +346,8 @@ export function drawOblique(d) {
       const v = at(x, y);
       if (v < 0) continue;
       const def = palette[v];
-      if (def) prop(props, def.id, x, y, tints[v] ?? 0x3a3e47, noise(x, y, 7), d);
+      if (def)
+        prop(props, def.id, x, y, tints[v] ?? 0x3a3e47, noise(x, y, 7), d);
     }
   }
 }
@@ -338,11 +365,22 @@ function floorCell(g, mat, x, y, T, base, d) {
       for (let i = 0; i < rows; i++) {
         const c = shade(base, (noise(x, y, 50 + i) - 0.5) * 0.18);
         g.rect(px, py + i * bh, T, bh).fill(c);
-        g.rect(px, py + i * bh + bh - 1, T, 1).fill({ color: 0x1e140c, alpha: 0.7 });
+        g.rect(px, py + i * bh + bh - 1, T, 1).fill({
+          color: 0x1e140c,
+          alpha: 0.7,
+        });
         const j = ((x * 3 + i * 5 + y) % 4) * (T / 4);
-        g.rect(px + j, py + i * bh, 1, bh).fill({ color: 0x1e140c, alpha: 0.6 });
+        g.rect(px + j, py + i * bh, 1, bh).fill({
+          color: 0x1e140c,
+          alpha: 0.6,
+        });
         // Волокно.
-        g.rect(px + noise(x, y, 60 + i) * T * 0.6, py + i * bh + bh * 0.45, T * 0.3, 1).fill({
+        g.rect(
+          px + noise(x, y, 60 + i) * T * 0.6,
+          py + i * bh + bh * 0.45,
+          T * 0.3,
+          1,
+        ).fill({
           color: 0x000000,
           alpha: 0.12,
         });
@@ -356,8 +394,14 @@ function floorCell(g, mat, x, y, T, base, d) {
         for (let i = 0; i < 2; i++) {
           const c = shade(base, (noise(x * 2 + i, y * 2 + j, 3) - 0.5) * 0.1);
           g.rect(px + i * s, py + j * s, s, s).fill(c);
-          g.rect(px + i * s, py + j * s, s, 1).fill({ color: 0xffffff, alpha: 0.18 });
-          g.rect(px + i * s + s - 1, py + j * s, 1, s).fill({ color: 0x000000, alpha: 0.25 });
+          g.rect(px + i * s, py + j * s, s, 1).fill({
+            color: 0xffffff,
+            alpha: 0.18,
+          });
+          g.rect(px + i * s + s - 1, py + j * s, 1, s).fill({
+            color: 0x000000,
+            alpha: 0.25,
+          });
         }
       }
       break;
@@ -397,7 +441,12 @@ function floorCell(g, mat, x, y, T, base, d) {
     case "carpet": {
       g.rect(px, py, T, T).fill(base);
       for (let i = 0; i < 6; i++) {
-        g.rect(px + noise(x, y, 70 + i) * (T - 2), py + noise(x, y, 80 + i) * (T - 2), 2, 2).fill({
+        g.rect(
+          px + noise(x, y, 70 + i) * (T - 2),
+          py + noise(x, y, 80 + i) * (T - 2),
+          2,
+          2,
+        ).fill({
           color: 0xffffff,
           alpha: 0.05,
         });
@@ -430,7 +479,15 @@ function floorCell(g, mat, x, y, T, base, d) {
 /// месте выбеливает пол.
 export function wallDecor(noise, x, y) {
   const raw = (n) =>
-    n > 0.86 ? "vent" : n > 0.72 ? "sconce" : n > 0.6 ? "pipe" : n > 0.52 ? "poster" : null;
+    n > 0.86
+      ? "vent"
+      : n > 0.72
+        ? "sconce"
+        : n > 0.6
+          ? "pipe"
+          : n > 0.52
+            ? "poster"
+            : null;
   const kind = raw(noise(x, y, 90));
   if (kind === "sconce" && raw(noise(x - 1, y, 90)) === "sconce") return "pipe";
   return kind;
@@ -462,21 +519,31 @@ function wallFace(g, x, y, w, h, cx, cy, tint, d) {
   // Нижняя панель (ламбрис) темнее, с кромкой; стык листов и плинтус.
   g.rect(x, y + h * 0.55, w, h * 0.45).fill(panel);
   g.rect(x, y + h * 0.55, w, 1.5).fill(shade(paint, 0.25));
-  g.rect(x + w * 0.5, y + h * 0.55, 1, h * 0.45).fill({ color: 0x000000, alpha: 0.3 });
+  g.rect(x + w * 0.5, y + h * 0.55, 1, h * 0.45).fill({
+    color: 0x000000,
+    alpha: 0.3,
+  });
   g.rect(x, y + h - 3, w, 3).fill(shade(panel, -0.4));
   const kind = wallDecor(noise, cx, cy);
   const { T } = d;
   const mx = x + w * 0.5;
   if (kind === "vent") {
     // Вентиляционная решётка.
-    g.rect(mx - T * 0.18, y + h * 0.14, T * 0.36, h * 0.24).fill(shade(paint, -0.45));
+    g.rect(mx - T * 0.18, y + h * 0.14, T * 0.36, h * 0.24).fill(
+      shade(paint, -0.45),
+    );
     for (let i = 0; i < 3; i++) {
-      g.rect(mx - T * 0.16, y + h * 0.17 + i * h * 0.07, T * 0.32, 1).fill(shade(paint, 0.15));
+      g.rect(mx - T * 0.16, y + h * 0.17 + i * h * 0.07, T * 0.32, 1).fill(
+        shade(paint, 0.15),
+      );
     }
   } else if (kind === "sconce") {
     // Бра: тёплое пятно на стене над светильником. Светит оно по-настоящему —
     // `sconceCells` отдаёт его свету, и лампа встаёт под ним (`light.js`).
-    g.ellipse(mx, y + h * 0.3, T * 0.36, h * 0.3).fill({ color: 0xffd890, alpha: 0.1 });
+    g.ellipse(mx, y + h * 0.3, T * 0.36, h * 0.3).fill({
+      color: 0xffd890,
+      alpha: 0.1,
+    });
     g.rect(mx - T * 0.08, y + h * 0.26, T * 0.16, h * 0.1).fill(0xffe6b0);
     g.rect(mx - T * 0.1, y + h * 0.36, T * 0.2, 2).fill(0x3a3d46);
   } else if (kind === "pipe") {
@@ -486,7 +553,9 @@ function wallFace(g, x, y, w, h, cx, cy, tint, d) {
   } else if (kind === "poster") {
     // Плакат.
     g.rect(mx - T * 0.13, y + h * 0.1, T * 0.26, h * 0.36).fill(0xcfc4a2);
-    g.rect(mx - T * 0.1, y + h * 0.14, T * 0.2, h * 0.16).fill(shade(tint, 0.2));
+    g.rect(mx - T * 0.1, y + h * 0.14, T * 0.2, h * 0.16).fill(
+      shade(tint, 0.2),
+    );
   }
 }
 
@@ -515,7 +584,7 @@ function prop(g, id, x, y, tint, n, d) {
       // Завал (§12.367): груда камней коробками разной высоты — ниже стены,
       // выше мебели; раскладка своя у каждой клетки (`n`).
       let seed = Math.floor(n * 9973) + 1;
-      const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+      const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
       const stones = [0x6b6052, 0x7d7262, 0x5a5145, 0x8a7f6c];
       for (let i = 0; i < 5; i++) {
         const w = 0.28 + rnd() * 0.22;
@@ -532,12 +601,18 @@ function prop(g, id, x, y, tint, n, d) {
       // Изголовье у северного края — выше рамы.
       box(0.12, 0.08, 0.76, 0.08, 0.36, shade(frame, 0.1));
       const t = box(0.14, 0.14, 0.72, 0.74, 0.16, frame);
-      g.roundRect(t.x + 1, t.y + 1, t.w - 2, t.d - 2, 3).fill(white ? 0xdcdad2 : 0x8f8a7c);
-      g.roundRect(t.x + 3, t.y + 3, t.w - 6, t.d * 0.26, 2).fill(white ? 0xf4f2ea : 0xe9e4d4);
+      g.roundRect(t.x + 1, t.y + 1, t.w - 2, t.d - 2, 3).fill(
+        white ? 0xdcdad2 : 0x8f8a7c,
+      );
+      g.roundRect(t.x + 3, t.y + 3, t.w - 6, t.d * 0.26, 2).fill(
+        white ? 0xf4f2ea : 0xe9e4d4,
+      );
       g.roundRect(t.x + 1, t.y + t.d * 0.42, t.w - 2, t.d * 0.56, 3).fill(
         white ? 0xb8c4cc : shade(tint, 0.25),
       );
-      g.rect(t.x + 1, t.y + t.d * 0.42, t.w - 2, 2).fill(white ? 0xdde4ea : shade(tint, 0.5));
+      g.rect(t.x + 1, t.y + t.d * 0.42, t.w - 2, 2).fill(
+        white ? 0xdde4ea : shade(tint, 0.5),
+      );
       if (white) {
         const cx = px + T / 2;
         // Середина передней грани изголовья.
@@ -561,7 +636,15 @@ function prop(g, id, x, y, tint, n, d) {
     }
     case "storage": {
       // Паллета: низкая, пустая (содержимое рисует `drawScrap`).
-      const t = box(0.12, 0.14, 0.76, 0.74, SURFACE.storage, 0x6a5638, 0x3a2e1e);
+      const t = box(
+        0.12,
+        0.14,
+        0.76,
+        0.74,
+        SURFACE.storage,
+        0x6a5638,
+        0x3a2e1e,
+      );
       for (let i = 1; i < 3; i++) {
         g.rect(t.x, t.y + i * (t.d / 3), t.w, 1.5).fill(0x3a2e1e);
       }
@@ -600,7 +683,10 @@ function prop(g, id, x, y, tint, n, d) {
       // закроет её своим верхом сам.
       g.rect(px, py + T - h, T, h).fill(0x1b1e23);
       g.rect(px, py + T - h * 0.42, T, h * 0.18).fill(shade(steel, -0.15));
-      g.rect(px, py + T - h * 0.24, T, h * 0.24).fill({ color: 0, alpha: 0.35 });
+      g.rect(px, py + T - h * 0.24, T, h * 0.24).fill({
+        color: 0,
+        alpha: 0.35,
+      });
       // Щель за стеллажом: тёмная полоса по заднему краю отделяет его от
       // стены и от того, что стоит позади.
       if (!u) g.rect(px, py - h - 2, T, 2).fill({ color: 0, alpha: 0.55 });
@@ -659,7 +745,9 @@ function prop(g, id, x, y, tint, n, d) {
     }
     case "desk_table": {
       const t = box(0.08, 0.2, 0.84, 0.6, 0.3, 0x8a6a44);
-      g.rect(t.x + t.w * 0.3, t.y + t.d * 0.2, t.w * 0.4, t.d * 0.6).fill(0xe6e1d2);
+      g.rect(t.x + t.w * 0.3, t.y + t.d * 0.2, t.w * 0.4, t.d * 0.6).fill(
+        0xe6e1d2,
+      );
       break;
     }
     case "lectern": {
@@ -668,7 +756,9 @@ function prop(g, id, x, y, tint, n, d) {
         [1, 0],
         [0, -1],
         [0, 1],
-      ].find(([ox, oy]) => tileDefAt(x + ox, y + oy)?.id === "desk_table") ?? [0, 1];
+      ].find(([ox, oy]) => tileDefAt(x + ox, y + oy)?.id === "desk_table") ?? [
+        0, 1,
+      ];
       // Спинка со стороны, дальней от стола; северную рисуем до сиденья, южную после.
       const back = shade(tint, 0.35);
       if (dy > 0) box(0.3, 0.26, 0.4, 0.08, 0.5, back);
@@ -696,15 +786,28 @@ function prop(g, id, x, y, tint, n, d) {
       const my = cy - h - mh / 2;
       g.rect(mx + 1, my + 1, mw, mh).fill({ color: 0x000000, alpha: 0.25 });
       g.rect(mx, my, mw, mh).fill(0xe2d6b0);
-      g.rect(mx + mw / 2, my, mw / 2, mh).fill({ color: 0x000000, alpha: 0.06 });
+      g.rect(mx + mw / 2, my, mw / 2, mh).fill({
+        color: 0x000000,
+        alpha: 0.06,
+      });
       g.moveTo(mx + mw / 2, my)
         .lineTo(mx + mw / 2, my + mh)
         .stroke({ color: 0xb8a97e, width: 0.6 });
       g.moveTo(mx + mw * 0.62, my)
         .quadraticCurveTo(mx + mw * 0.5, my + mh * 0.5, mx + mw * 0.9, my + mh)
         .stroke({ color: 0x5a86b0, width: 1.2 });
-      g.ellipse(mx + mw * 0.22, my + mh * 0.28, mw * 0.08, mw * 0.08 * 0.86).fill(0x6f8f4a);
-      g.ellipse(mx + mw * 0.34, my + mh * 0.22, mw * 0.06, mw * 0.06 * 0.86).fill(0x6f8f4a);
+      g.ellipse(
+        mx + mw * 0.22,
+        my + mh * 0.28,
+        mw * 0.08,
+        mw * 0.08 * 0.86,
+      ).fill(0x6f8f4a);
+      g.ellipse(
+        mx + mw * 0.34,
+        my + mh * 0.22,
+        mw * 0.06,
+        mw * 0.06 * 0.86,
+      ).fill(0x6f8f4a);
       g.rect(mx + mw * 0.1, my + mh * 0.7, mw * 0.12, mh * 0.14).fill(0x4a4438);
       const route = [
         [0.22, 0.74],
@@ -717,7 +820,10 @@ function prop(g, id, x, y, tint, n, d) {
         const [ax, ay] = route[i];
         const [bx, by] = route[i + 1];
         g.moveTo(mx + mw * ax, my + mh * ay)
-          .lineTo(mx + mw * (ax + (bx - ax) * 0.6), my + mh * (ay + (by - ay) * 0.6))
+          .lineTo(
+            mx + mw * (ax + (bx - ax) * 0.6),
+            my + mh * (ay + (by - ay) * 0.6),
+          )
           .stroke({ color: 0xb04a3a, width: 1 });
       }
       const [qx, qy] = [mx + mw * 0.82, my + mh * 0.3];
@@ -737,7 +843,10 @@ function prop(g, id, x, y, tint, n, d) {
         const fy = t.y + t.d * 0.5;
         g.rect(fx - 1.5, fy - T * 0.2, 3, T * 0.12).fill(0xc8d0dc);
         g.circle(fx, fy - T * 0.06, T * 0.09).fill(fl[i]);
-        g.circle(fx - T * 0.03, fy - T * 0.09, T * 0.025).fill({ color: 0xffffff, alpha: 0.7 });
+        g.circle(fx - T * 0.03, fy - T * 0.09, T * 0.025).fill({
+          color: 0xffffff,
+          alpha: 0.7,
+        });
       }
       break;
     }
@@ -752,7 +861,9 @@ function prop(g, id, x, y, tint, n, d) {
     case "shop": {
       const t = box(0.06, 0.36, 0.88, 0.5, 0.32, 0x8a6a3c);
       // Тиски и шестерня на столешнице.
-      g.rect(t.x + t.w * 0.62, t.y - 4, t.w * 0.24, t.d * 0.5 + 4).fill(0x8a8f9c);
+      g.rect(t.x + t.w * 0.62, t.y - 4, t.w * 0.24, t.d * 0.5 + 4).fill(
+        0x8a8f9c,
+      );
       g.rect(t.x + t.w * 0.62, t.y - 4, t.w * 0.24, 2).fill(0xc0c4cc);
       const gx = t.x + t.w * 0.28;
       const gy = t.y + t.d * 0.4;
@@ -762,14 +873,21 @@ function prop(g, id, x, y, tint, n, d) {
     }
     case "post": {
       // Прилавок и навес на двух стойках.
-      g.rect(px + T * 0.12, py + T * 0.2 - T * 0.72, 2, T * 0.72).fill(0x5a4630);
-      g.rect(px + T * 0.86, py + T * 0.2 - T * 0.72, 2, T * 0.72).fill(0x5a4630);
+      g.rect(px + T * 0.12, py + T * 0.2 - T * 0.72, 2, T * 0.72).fill(
+        0x5a4630,
+      );
+      g.rect(px + T * 0.86, py + T * 0.2 - T * 0.72, 2, T * 0.72).fill(
+        0x5a4630,
+      );
       const t = box(0.08, 0.5, 0.84, 0.36, 0.38, 0x8a6a40);
       g.rect(t.x + t.w * 0.6, t.y + 2, t.w * 0.25, t.d * 0.5).fill(0xb8bcc4);
       for (let i = 0; i < 5; i++) {
-        g.rect(px + T * (0.08 + i * 0.168), py + T * 0.2 - T * 0.8, T * 0.168, T * 0.16).fill(
-          i % 2 ? 0xd9b64a : 0xe6e1d2,
-        );
+        g.rect(
+          px + T * (0.08 + i * 0.168),
+          py + T * 0.2 - T * 0.8,
+          T * 0.168,
+          T * 0.16,
+        ).fill(i % 2 ? 0xd9b64a : 0xe6e1d2);
       }
       break;
     }
@@ -826,10 +944,17 @@ export function drawGlass(g, d) {
       g.rect(px, top, T, T).fill({ color: 0xcfe8ff, alpha: 0.1 });
       // Рамка по краю ряда: светлая сверху и слева (свет падает сверху),
       // тёмная снизу и справа.
-      if (!isRack(x, y - 1)) g.rect(px, top, T, 1.5).fill({ color: 0xffffff, alpha: 0.45 });
-      if (!isRack(x - 1, y)) g.rect(px, top, 1.5, T).fill({ color: 0xffffff, alpha: 0.3 });
-      if (!isRack(x, y + 1)) g.rect(px, top + T - 1.5, T, 1.5).fill({ color: 0x0b0d12, alpha: 0.5 });
-      if (!isRack(x + 1, y)) g.rect(px + T - 1.5, top, 1.5, T).fill({ color: 0x0b0d12, alpha: 0.35 });
+      if (!isRack(x, y - 1))
+        g.rect(px, top, T, 1.5).fill({ color: 0xffffff, alpha: 0.45 });
+      if (!isRack(x - 1, y))
+        g.rect(px, top, 1.5, T).fill({ color: 0xffffff, alpha: 0.3 });
+      if (!isRack(x, y + 1))
+        g.rect(px, top + T - 1.5, T, 1.5).fill({ color: 0x0b0d12, alpha: 0.5 });
+      if (!isRack(x + 1, y))
+        g.rect(px + T - 1.5, top, 1.5, T).fill({
+          color: 0x0b0d12,
+          alpha: 0.35,
+        });
     }
   }
   // Блики: по горизонтальному ряду, косая полоса через каждые три клетки,
@@ -871,6 +996,8 @@ export function drawGlass(g, d) {
 /// освещаемого слоя** — сетка это прицел, а не часть мира, и в тени она
 /// пропадала ровно там, где игрок строит: в темноте за стеной.
 export function drawGrid(g, W, H, T) {
-  for (let x = 0; x <= W; x++) g.rect(x * T, 0, 1, H * T).fill({ color: 0xffffff, alpha: 0.09 });
-  for (let y = 0; y <= H; y++) g.rect(0, y * T, W * T, 1).fill({ color: 0xffffff, alpha: 0.09 });
+  for (let x = 0; x <= W; x++)
+    g.rect(x * T, 0, 1, H * T).fill({ color: 0xffffff, alpha: 0.09 });
+  for (let y = 0; y <= H; y++)
+    g.rect(0, y * T, W * T, 1).fill({ color: 0xffffff, alpha: 0.09 });
 }

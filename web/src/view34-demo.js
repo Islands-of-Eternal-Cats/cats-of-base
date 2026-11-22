@@ -45,7 +45,8 @@ const tints = ids.map((k) => parseInt(TILES[k][1].slice(1), 16));
 const H = MAP.length;
 const W = MAP[0].length;
 const cells = MAP.flatMap((row) => [...row].map((ch) => ids.indexOf(ch)));
-const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? -1 : cells[y * W + x]);
+const at = (x, y) =>
+  x < 0 || y < 0 || x >= W || y >= H ? -1 : cells[y * W + x];
 
 function cellNoise(x, y, k = 0) {
   let h = (x * 374761393 + y * 668265263 + k * 982451653) | 0;
@@ -141,8 +142,16 @@ for (const [x, y, c] of [
   extra.ellipse(cx, cy + 9, 8, 3).fill({ color: 0, alpha: 0.4 });
   extra.roundRect(cx - 6, cy - 4, 12, 13, 5).fill(c);
   extra.circle(cx, cy - 8, 7).fill(c);
-  extra.moveTo(cx - 6, cy - 12).lineTo(cx - 4, cy - 18).lineTo(cx - 1, cy - 13).fill(c);
-  extra.moveTo(cx + 6, cy - 12).lineTo(cx + 4, cy - 18).lineTo(cx + 1, cy - 13).fill(c);
+  extra
+    .moveTo(cx - 6, cy - 12)
+    .lineTo(cx - 4, cy - 18)
+    .lineTo(cx - 1, cy - 13)
+    .fill(c);
+  extra
+    .moveTo(cx + 6, cy - 12)
+    .lineTo(cx + 4, cy - 18)
+    .lineTo(cx + 1, cy - 13)
+    .fill(c);
   extra.circle(cx - 2.5, cy - 8, 1.2).fill(0x111111);
   extra.circle(cx + 2.5, cy - 8, 1.2).fill(0x111111);
 }
@@ -157,11 +166,21 @@ function drawGlassLayer() {
 drawGlassLayer();
 
 function fit() {
-  const s = Math.min(app.screen.width / (W * T + 40), app.screen.height / (H * T + 60));
+  const s = Math.min(
+    app.screen.width / (W * T + 40),
+    app.screen.height / (H * T + 60),
+  );
   world.scale.set(s);
   world.x = (app.screen.width - W * T * s) / 2;
   world.y = (app.screen.height - H * T * s) / 2 + 10;
 }
 fit();
 window.addEventListener("resize", fit);
-globalThis.__sp = { app, world, toggle: () => { lowered = !lowered; draw(); } };
+globalThis.__sp = {
+  app,
+  world,
+  toggle: () => {
+    lowered = !lowered;
+    draw();
+  },
+};

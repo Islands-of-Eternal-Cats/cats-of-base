@@ -133,7 +133,11 @@ function env(g, t, a, peak, decay) {
   g.gain.exponentialRampToValueAtTime(0.0001, t + a + decay);
 }
 
-function tone(dest, t, { type = "sine", f, f2, a = 0.004, peak = 0.3, decay = 0.15 }) {
+function tone(
+  dest,
+  t,
+  { type = "sine", f, f2, a = 0.004, peak = 0.3, decay = 0.15 },
+) {
   const o = ctx.createOscillator();
   const g = ctx.createGain();
   o.type = type;
@@ -145,7 +149,11 @@ function tone(dest, t, { type = "sine", f, f2, a = 0.004, peak = 0.3, decay = 0.
   o.stop(t + a + decay + 0.05);
 }
 
-function noise(dest, t, { filter = "bandpass", f, q = 1, f2, a = 0.003, peak = 0.3, decay = 0.1 }) {
+function noise(
+  dest,
+  t,
+  { filter = "bandpass", f, q = 1, f2, a = 0.003, peak = 0.3, decay = 0.1 },
+) {
   const s = ctx.createBufferSource();
   s.buffer = noiseBuf;
   const fl = ctx.createBiquadFilter();
@@ -166,68 +174,119 @@ const vary = (f) => f * (0.95 + Math.random() * 0.1);
 const SOUNDS = {
   // Молоток: деревянный тук и короткий металлический щелчок.
   hammer: {
-    bus: "sfx", max: 4, gap: 60,
+    bus: "sfx",
+    max: 4,
+    gap: 60,
     synth(d, t) {
-      tone(d, t, { type: "triangle", f: vary(220), f2: 90, peak: 0.35, decay: 0.09 });
+      tone(d, t, {
+        type: "triangle",
+        f: vary(220),
+        f2: 90,
+        peak: 0.35,
+        decay: 0.09,
+      });
       noise(d, t, { f: vary(3200), q: 4, peak: 0.18, decay: 0.03 });
     },
   },
   // Лом: хруст — шум пониже и подлиннее, с опусканием фильтра.
   crowbar: {
-    bus: "sfx", max: 4, gap: 60,
+    bus: "sfx",
+    max: 4,
+    gap: 60,
     synth(d, t) {
       noise(d, t, { f: vary(1400), f2: 400, q: 2, peak: 0.35, decay: 0.16 });
-      tone(d, t, { type: "square", f: vary(140), f2: 60, peak: 0.08, decay: 0.07 });
+      tone(d, t, {
+        type: "square",
+        f: vary(140),
+        f2: 60,
+        peak: 0.08,
+        decay: 0.07,
+      });
     },
   },
   // Пыль достроенной клетки.
   puff: {
-    bus: "sfx", max: 3, gap: 80,
+    bus: "sfx",
+    max: 3,
+    gap: 80,
     synth(d, t) {
-      noise(d, t, { filter: "lowpass", f: 1800, f2: 300, a: 0.02, peak: 0.3, decay: 0.35 });
+      noise(d, t, {
+        filter: "lowpass",
+        f: 1800,
+        f2: 300,
+        a: 0.02,
+        peak: 0.3,
+        decay: 0.35,
+      });
     },
   },
   click: {
-    bus: "ui", max: 2, gap: 30,
+    bus: "ui",
+    max: 2,
+    gap: 30,
     synth(d, t) {
-      tone(d, t, { type: "square", f: 1800, peak: 0.08, a: 0.001, decay: 0.025 });
+      tone(d, t, {
+        type: "square",
+        f: 1800,
+        peak: 0.08,
+        a: 0.001,
+        decay: 0.025,
+      });
     },
   },
   // Отказ: кнопка погашена (`.off`) — глуше и ниже.
   deny: {
-    bus: "ui", max: 1, gap: 80,
+    bus: "ui",
+    max: 1,
+    gap: 80,
     synth(d, t) {
-      tone(d, t, { type: "triangle", f: 180, f2: 140, peak: 0.15, decay: 0.08 });
+      tone(d, t, {
+        type: "triangle",
+        f: 180,
+        f2: 140,
+        peak: 0.15,
+        decay: 0.08,
+      });
     },
   },
   open: {
-    bus: "ui", max: 1, gap: 60,
+    bus: "ui",
+    max: 1,
+    gap: 60,
     synth(d, t) {
       tone(d, t, { type: "sine", f: 440, f2: 880, peak: 0.12, decay: 0.09 });
     },
   },
   close: {
-    bus: "ui", max: 1, gap: 60,
+    bus: "ui",
+    max: 1,
+    gap: 60,
     synth(d, t) {
       tone(d, t, { type: "sine", f: 760, f2: 380, peak: 0.1, decay: 0.08 });
     },
   },
   // Разметка чертежа: мягкий «чпок».
   blueprint: {
-    bus: "ui", max: 2, gap: 40,
+    bus: "ui",
+    max: 2,
+    gap: 40,
     synth(d, t) {
       tone(d, t, { type: "sine", f: 520, f2: 700, peak: 0.12, decay: 0.06 });
     },
   },
   news: {
-    bus: "ui", max: 1, gap: 250,
+    bus: "ui",
+    max: 1,
+    gap: 250,
     synth(d, t) {
       tone(d, t, { f: 988, peak: 0.12, decay: 0.25 });
       tone(d, t + 0.09, { f: 1319, peak: 0.12, decay: 0.35 });
     },
   },
   squad: {
-    bus: "ui", max: 1, gap: 400,
+    bus: "ui",
+    max: 1,
+    gap: 400,
     synth(d, t) {
       [523, 659, 784].forEach((f, i) =>
         tone(d, t + i * 0.1, { type: "triangle", f, peak: 0.14, decay: 0.3 }),
@@ -235,7 +294,9 @@ const SOUNDS = {
     },
   },
   goal: {
-    bus: "ui", max: 1, gap: 400,
+    bus: "ui",
+    max: 1,
+    gap: 400,
     synth(d, t) {
       for (const f of [523, 659, 784, 1047]) {
         tone(d, t, { type: "triangle", f, a: 0.02, peak: 0.09, decay: 1.2 });
@@ -246,12 +307,19 @@ const SOUNDS = {
   // Удар — синус с негармоничным обертоном (у колокола он не кратен основному)
   // и долгим хвостом; второй чуть тише, как отзвук.
   bell: {
-    bus: "sfx", max: 1, gap: 1200,
+    bus: "sfx",
+    max: 1,
+    gap: 1200,
     synth(d, t) {
       [0, 0.22].forEach((dt, i) => {
         const k = i ? 0.75 : 1;
         tone(d, t + dt, { f: 1568, peak: 0.12 * k, a: 0.002, decay: 0.6 });
-        tone(d, t + dt, { f: 1568 * 2.76, peak: 0.035 * k, a: 0.002, decay: 0.25 });
+        tone(d, t + dt, {
+          f: 1568 * 2.76,
+          peak: 0.035 * k,
+          a: 0.002,
+          decay: 0.25,
+        });
         noise(d, t + dt, { f: 5000, q: 3, peak: 0.03 * k, decay: 0.02 });
       });
     },
@@ -259,27 +327,59 @@ const SOUNDS = {
   // Тема изучена: короткий звонкий подъём кварта–октава с искрой сверху —
   // меньше `goal` (это шаг, а не цель), но заметнее `news`.
   research: {
-    bus: "ui", max: 1, gap: 800,
+    bus: "ui",
+    max: 1,
+    gap: 800,
     synth(d, t) {
       [659, 880, 1319].forEach((f, i) =>
-        tone(d, t + i * 0.08, { type: "triangle", f, peak: 0.12, decay: i === 2 ? 0.7 : 0.18 }),
+        tone(d, t + i * 0.08, {
+          type: "triangle",
+          f,
+          peak: 0.12,
+          decay: i === 2 ? 0.7 : 0.18,
+        }),
       );
       tone(d, t + 0.16, { type: "sine", f: 2637, peak: 0.03, decay: 0.5 });
     },
   },
   // Портал начала партии (§12.372): мерцающий подъём и шорох — кот вышел.
   portal: {
-    bus: "sfx", max: 1, gap: 1000,
+    bus: "sfx",
+    max: 1,
+    gap: 1000,
     synth(d, t) {
-      tone(d, t, { type: "sine", f: 220, f2: 880, a: 0.05, peak: 0.12, decay: 0.7 });
-      tone(d, t + 0.05, { type: "triangle", f: 330, f2: 1320, a: 0.05, peak: 0.06, decay: 0.6 });
-      noise(d, t, { f: 4000, f2: 1200, q: 1.5, a: 0.05, peak: 0.08, decay: 0.6 });
+      tone(d, t, {
+        type: "sine",
+        f: 220,
+        f2: 880,
+        a: 0.05,
+        peak: 0.12,
+        decay: 0.7,
+      });
+      tone(d, t + 0.05, {
+        type: "triangle",
+        f: 330,
+        f2: 1320,
+        a: 0.05,
+        peak: 0.06,
+        decay: 0.6,
+      });
+      noise(d, t, {
+        f: 4000,
+        f2: 1200,
+        q: 1.5,
+        a: 0.05,
+        peak: 0.08,
+        decay: 0.6,
+      });
     },
   },
   // Фанфара ачивки (§12.255): короткий подъём до октавы и тянущийся аккорд —
   // крупнее `goal`, потому что закрыта связка условий, а не одно.
   victory: {
-    bus: "ui", max: 1, gap: 1500,
+    bus: "ui",
+    max: 1,
+    gap: 1500,
     synth(d, t) {
       [392, 523, 659].forEach((f, i) =>
         tone(d, t + i * 0.11, { type: "square", f, peak: 0.06, decay: 0.14 }),
@@ -288,7 +388,13 @@ const SOUNDS = {
       for (const f of [523, 659, 784, 1047]) {
         tone(d, at, { type: "triangle", f, a: 0.01, peak: 0.1, decay: 1.6 });
       }
-      tone(d, at, { type: "square", f: 1047, f2: 1060, peak: 0.03, decay: 1.2 });
+      tone(d, at, {
+        type: "square",
+        f: 1047,
+        f2: 1060,
+        peak: 0.03,
+        decay: 1.2,
+      });
       noise(d, at, { f: 6000, q: 0.7, peak: 0.05, decay: 0.5 });
     },
   },
