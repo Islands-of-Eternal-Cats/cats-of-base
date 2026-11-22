@@ -79,8 +79,8 @@ fn the_shipped_ruleset_digs_scrap_out_of_the_rubble() {
     assert!(sim.scrap_total() > 0, "завал дал лом");
 }
 
-/// Сначала открыт только «Осмотреть вход»; «Пошарить» и «Исследовать …» —
-/// после него, стол — после «Исследовать местность вокруг шлюза».
+/// Сначала открыт только «Осмотреть вход»; «Исследовать …» — после него,
+/// «Пошарить» и стол — после «Исследовать местность вокруг шлюза» (§12.377).
 #[test]
 fn the_shipped_ruleset_opens_one_verb_at_a_time() {
     let mut sim = start();
@@ -103,7 +103,7 @@ fn the_shipped_ruleset_opens_one_verb_at_a_time() {
         sim.raid_gates(gatehouse).unlocked,
         "открылась местность вокруг шлюза"
     );
-    assert!(sim.raid_gates(scavenge).unlocked, "и «Пошарить»");
+    assert!(!sim.raid_gates(scavenge).unlocked, "«Пошарить» ещё нет");
     assert!(!sim.structure_is_open(muster), "стола ещё нет");
 
     assert!(sim.scavenge(gatehouse, vec!["excellent".into()], -1));
@@ -114,6 +114,7 @@ fn the_shipped_ruleset_opens_one_verb_at_a_time() {
     assert!(sim.has_unit("sp2") && sim.has_unit("sp3"), "свои нашлись");
     assert_eq!(sim.unit_count(), 3);
     assert!(sim.structure_is_open(muster), "стол брифинга открылся");
+    assert!(sim.raid_gates(scavenge).unlocked, "открылось «Пошарить»");
 }
 
 /// Свободные коты ходят только рядом с базой (§12.367): дальний заказ — только
