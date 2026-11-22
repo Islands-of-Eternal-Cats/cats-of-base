@@ -12,9 +12,17 @@ fn start() -> Sim {
     sim
 }
 
-/// Прокопать кратчайший путь к шлюзу: четыре клетки завала по `x = 5`.
+/// Разобрать путь к шлюзу (§12.372): выход из правой верхней комнатки и
+/// коридор по `y = 3`, затем шахта по `x = 11` до верха.
 fn dig(sim: &mut Sim) {
-    assert!(sim.plan_demolish_rect(5, 6, 1, 4), "завал размечен на снос");
+    assert!(
+        sim.plan_demolish_rect(12, 3, 3, 1),
+        "коридор размечен на разбор"
+    );
+    assert!(
+        sim.plan_demolish_rect(11, 1, 1, 3),
+        "шахта размечена на разбор"
+    );
     let open = (0..3000).any(|_| {
         sim.tick_n(1);
         sim.exit_open()
@@ -40,7 +48,7 @@ fn the_shipped_ruleset_starts_with_one_cat_behind_rubble() {
     assert!(!sim.exit_open(), "к шлюзу не дойти");
     let rubble = sim.tile_index("rubble").expect("завал в палитре");
     assert!(
-        !sim.add_blueprint(8, 12, i32::from(rubble)),
+        !sim.add_blueprint(5, 4, i32::from(rubble)),
         "завал не строится — его можно только разобрать"
     );
 }
@@ -54,7 +62,7 @@ fn the_shipped_ruleset_digs_scrap_out_of_the_rubble() {
 }
 
 /// Сначала открыт только «Осмотреть вход»; «Пошарить» и «Исследовать …» —
-/// после него, стол — после «Проходной».
+/// после него, стол — после «Исследовать местность вокруг шлюза».
 #[test]
 fn the_shipped_ruleset_opens_one_verb_at_a_time() {
     let mut sim = start();
@@ -73,12 +81,18 @@ fn the_shipped_ruleset_opens_one_verb_at_a_time() {
     dig(&mut sim);
     assert!(sim.scavenge(inspect, vec!["excellent".into()], -1));
     assert!(done(&mut sim, inspect, 2000), "вход осмотрен");
-    assert!(sim.raid_gates(gatehouse).unlocked, "открылась проходная");
+    assert!(
+        sim.raid_gates(gatehouse).unlocked,
+        "открылась местность вокруг шлюза"
+    );
     assert!(sim.raid_gates(scavenge).unlocked, "и «Пошарить»");
     assert!(!sim.structure_is_open(muster), "стола ещё нет");
 
     assert!(sim.scavenge(gatehouse, vec!["excellent".into()], -1));
-    assert!(done(&mut sim, gatehouse, 3000), "проходная исследована");
+    assert!(
+        done(&mut sim, gatehouse, 3000),
+        "местность вокруг шлюза исследована"
+    );
     assert!(sim.has_unit("sp2") && sim.has_unit("sp3"), "свои нашлись");
     assert_eq!(sim.unit_count(), 3);
     assert!(sim.structure_is_open(muster), "стол брифинга открылся");
@@ -121,7 +135,9 @@ fn the_shipped_ruleset_keeps_the_first_raids_harmless() {
 fn the_shipped_ruleset_opening_fits_before_hunger() {
     let mut sim = start();
     let inspect = sim.mission_index("inspect").expect("осмотр");
-    let gatehouse = sim.mission_index("explore_gatehouse").expect("проходная");
+    let gatehouse = sim
+        .mission_index("explore_gatehouse")
+        .expect("местность вокруг шлюза");
     dig(&mut sim);
     let dug = sim.world.resource::<SimTime>().tick;
     assert!(sim.scavenge(inspect, vec!["excellent".into()], -1));
@@ -133,4 +149,105 @@ fn the_shipped_ruleset_opening_fits_before_hunger() {
     let (energy, fed) = (sim.energy_of("excellent"), sim.fed_of("excellent"));
     println!("прокоп {dug}, осмотр {inspected}, свои {found} · бодрость {energy} · сытость {fed}");
     assert!(sim.has_unit("sp2"), "свои нашлись");
+}
+
+/// Стартовая база — шахта к шлюзу и шесть комнаток 3×3 по её сторонам, всё
+/// под завалом (§12.372): свободна только клетка портала в правой верхней
+/// комнатке, все восемь соседей кота завалены. Шагнуть ему некуда — он
+/// «застрял», и это законное состояние (инвариант 6): разбирает он с места, и
+/// первая же разобранная клетка его выпускает.
+#[test]
+fn the_shipped_ruleset_starts_in_one_rubble_room() {
+    let mut sim = start();
+    let rubble = sim.tile_index("rubble").expect("завал");
+    let floor = sim.tile_index("floor").expect("пол");
+    assert_eq!(
+        sim.pos_of("excellent"),
+        (15, 3),
+        "кот в правой верхней комнатке"
+    );
+    sim.tick_n(1);
+    assert!(sim.stuck_of("excellent"), "вокруг кота сплошной завал");
+    assert_eq!(sim.tile(15, 3), floor, "клетка портала свободна");
+    let mut cells: Vec<(i32, i32)> = (1..15).map(|y| (11, y)).collect();
+    for left in [6, 14] {
+        for top in [2, 7, 12] {
+            cells.extend((left..left + 3).flat_map(|x| (top..top + 3).map(move |y| (x, y))));
+        }
+    }
+    for row in [3, 8, 13] {
+        cells.extend([(9, row), (10, row), (12, row), (13, row)]);
+    }
+    for (x, y) in cells {
+        if (x, y) != (15, 3) {
+            assert_eq!(sim.tile(x, y), rubble, "завалено: ({x}, {y})");
+        }
+    }
+    let (w, h) = {
+        let map = sim.world.resource::<BaseMap>();
+        (map.width, map.height)
+    };
+    let piles = (0..w)
+        .flat_map(|x| (0..h).map(move |y| (x, y)))
+        .filter(|&(x, y)| sim.tile(x, y) == rubble)
+        .count();
+    assert_eq!(piles, 79);
+    let garage = sim.tile_index("garage").expect("шлюз");
+    assert_eq!(sim.tile(11, 0), garage, "шлюз над шахтой");
+    assert!(
+        sim.tile_index("portal").is_none(),
+        "портал — картинка, а не тайл"
+    );
+
+    // Разбирает он стоя на месте, и первая же клетка снимает «застрял».
+    assert!(sim.plan_demolish_rect(14, 3, 1, 1));
+    let freed = (0..500).any(|_| {
+        sim.tick_n(1);
+        !sim.stuck_of("excellent")
+    });
+    assert!(freed, "кот так и не выбрался из завала");
+}
+
+/// На старте не строится ничего (§12.372): пол, склад, шлюз и лежанка открыты
+/// выполненным «Осмотреть вход».
+#[test]
+fn the_shipped_ruleset_builds_nothing_before_the_entrance_is_inspected() {
+    let mut sim = start();
+    let palette: Vec<usize> = {
+        let rules = sim.world.resource::<TileRules>();
+        (0..rules.0.len())
+            .filter(|&t| !rules.is_internal(t as i16))
+            .collect()
+    };
+    let open: Vec<usize> = palette
+        .into_iter()
+        .filter(|&t| sim.tile_is_open(t))
+        .collect();
+    assert!(open.is_empty(), "на старте открыты постройки {open:?}");
+
+    let inspect = sim.mission_index("inspect").expect("осмотр");
+    dig(&mut sim);
+    assert!(sim.scavenge(inspect, vec!["excellent".into()], -1));
+    assert!(done(&mut sim, inspect, 3000), "вход осмотрен");
+    for id in ["floor", "garage", "storage", "bed"] {
+        let t = sim.tile_index(id).expect("тайл в палитре");
+        assert!(sim.tile_is_open(t as usize), "`{id}` не открылся осмотром");
+    }
+}
+
+/// Что нельзя построить, того нельзя и разобрать (§12.372): на старте ластик
+/// берёт только завал — пол комнаты и единственный шлюз ему не даются, иначе
+/// партия запиралась бы одним мазком.
+#[test]
+fn the_shipped_ruleset_dismantles_only_rubble_at_the_start() {
+    let mut sim = start();
+    assert!(!sim.add_blueprint(15, 3, -1), "пол у портала разобран");
+    assert!(!sim.add_blueprint(11, 0, -1), "шлюз разобран");
+    assert!(sim.add_blueprint(6, 2, -1), "завал не разбирается");
+    let mask = sim.buildable(-1, 0, 0, 0, 0);
+    let w = sim.world.resource::<BaseMap>().width;
+    let at = |x: i32, y: i32| mask[(y * w + x) as usize];
+    assert_eq!(at(15, 3), 0, "маска зовёт разобрать пол");
+    assert_eq!(at(11, 0), 0, "маска зовёт разобрать шлюз");
+    assert_eq!(at(7, 2), 1, "маска не даёт разобрать завал");
 }

@@ -683,7 +683,10 @@ onPanelClick(raidWinEl, ".raid-go", (b) => {
   // Свободные коты, взятые с отрядом (§12.365), — одной командой с ним.
   // Несколько отрядов на одну вылазку вид не собирает (§12.368): ядро это
   // умеет (`launch_nodes`), но на дело идёт один отряд.
+  // Только на «Пошарить рядом»: дальние заказы свободных не берут (§12.371),
+  // и кнопка у них гаснет с причиной словом (`crewWhy`).
   const units = (lastSnap?.free ?? []).filter((id) => nearbyPick.has(id));
+  if (units.length && !meta.missions[Number(b.dataset.def)]?.nearby) return;
   if (units.length && raidWinAt) {
     sendAction({
       type: "launchNodes",
@@ -880,6 +883,12 @@ bpLayer.addChild(bpGfx);
 // миллисекунд, и узел на каждую был бы тем самым седьмым лицом граблей §12.84.
 const sparkGfx = new Graphics();
 bpLayer.addChild(sparkGfx);
+// Портал начала партии (§12.372): открывается на пятачке посреди заваленной
+// комнаты, выпускает кота и закрывается. Мира в нём нет — ни тайла, ни
+// компонента: ядро ставит кота на клетку с нулевого тика, а вид только
+// рассказывает, откуда он взялся. Узел постоянный (§12.84), под котами.
+const portalGfx = new Graphics();
+bpLayer.addChild(portalGfx);
 const dealGfx = new Graphics();
 dealLayer.addChild(dealGfx);
 
@@ -935,7 +944,7 @@ let paletteColors = []; // number[]
 let itemColors = []; // number[] — цвет предмета по индексу палитры items
 let mapCells = null; // Int-массив состояния карты
 let mode = "cursor"; // 'cursor' | 'build'
-let buildTile = 0; // индекс палитры, или -1 = стереть (в режиме build)
+let buildTile = 0; // индекс палитры, или -1 = разобрать (в режиме build)
 // Объект-штамп в руке (§12.162): -1 = игрок держит тайл или ластик. Тайл и
 // объект взаимно исключают друг друга — в руке всегда одно.
 let buildStruct = -1;
@@ -1193,6 +1202,13 @@ let triedResume = false;
 worker.onmessage = (e) => {
   const m = e.data;
   if (m.type === "ready") {
+    // Окна прошлого мира закрываются (§12.375): новая партия и загрузка
+    // начинаются с базы. Иначе штаб, открытый в прошлой партии, оставался на
+    // экране — до прокопа, когда двери «Вылазки» ещё нет. Закрываем **до**
+    // смены `meta`: закрытие гасит новости по открытому окну, и делать это
+    // обязано против того мира, чьё окно открыто. Без звука — это не жест.
+    wikiBack = null;
+    for (const [, isOpen, close] of WINDOWS) if (isOpen()) close();
     // Звук событий мира молчит до первого снимка нового мира: иначе загрузка
     // партии прозвучит залпом новостей и возвращений (§12.253).
     soundQuiet = true;
@@ -1215,6 +1231,10 @@ worker.onmessage = (e) => {
     // всё уже закрытое «только что закрытым» (см. `goalsDoneSeen`).
     goalsDoneSeen = null;
     exitSeen = null;
+    // Портал (§12.372): играет первый снимок свежего мира, не загрузки.
+    portalArmed = true;
+    portal = null;
+    portalGfx.clear();
     skillLevelsSeen = null;
     wikiOpenSeen = null;
     wikiQueue = [];
@@ -1252,6 +1272,7 @@ worker.onmessage = (e) => {
       drawPlaceable();
       if (hoverAt) updateHover(hoverAt);
     }
+    if (portalArmed) startPortal(m.snap);
     renderSnapshot(m.snap);
     soundQuiet = false;
   } else if (m.type === "saved") {
@@ -1641,16 +1662,6 @@ function drawFurniture(g, id, x, y, tint, n) {
         g.circle(cx, cy, r).fill(c);
         g.circle(cx - r * 0.3, cy - r * 0.3, r * 0.35).fill({ color: 0xffffff, alpha: 0.12 });
       }
-      break;
-    }
-    case "portal": {
-      // Портал (§12.367): светящиеся кольца на полу — место, откуда пришли.
-      const cx = px + T / 2;
-      const cy = py + T / 2;
-      g.circle(cx, cy, T * 0.46).fill({ color: 0x8a6cff, alpha: 0.18 });
-      g.circle(cx, cy, T * 0.4).stroke({ color: 0xb59cff, width: 2, alpha: 0.85 });
-      g.circle(cx, cy, T * 0.26).stroke({ color: 0x8a6cff, width: 1.5, alpha: 0.7 });
-      g.circle(cx, cy, T * 0.1).fill({ color: 0xd9ccff, alpha: 0.6 });
       break;
     }
     case "bed": {
@@ -3053,7 +3064,7 @@ function renderSnapshot(snap) {
     const lying = e.job === "heal" && !e.moving;
     // Спящий кот пригашен: игрок должен видеть, почему тот не работает.
     // Лежачий раненый — тоже: причины разные, а следствие для базы одно (§12.37).
-    c.alpha = asleep || lying ? 0.55 : 1;
+    c.alpha = (asleep || lying ? 0.55 : 1) * portalVeil(e.id);
     // Лежит — значит лежит (SS13): фигурка поворачивается на бок. Только на
     // смене — `rotation` грязный трансформ, а `wadeUnit` его у стоящего не
     // трогает (бредут только идущие).
@@ -3870,6 +3881,7 @@ function stepUnits(ticker) {
   // Глиф работы крутится здесь же, а не в своём тикере: `speed` — то самое, чем
   // умножается доля тика, поэтому на паузе мир и картинка встают вместе. Второй
   // копии «сколько сейчас идёт время» в проекте быть не должно (§12.140).
+  stepPortal(ticker.deltaMS);
   stepSparks(ticker.deltaMS);
   for (const n of workNodes.values()) {
     if (n.glyph && n.live) {
@@ -4075,6 +4087,174 @@ function puffChanged(prev, next) {
     }
   }
 }
+// Портал (§12.372). Время — настенное, а не тики: это заставка партии, и
+// на паузе она доигрывает, а на ×10 не проскакивает за кадр. Взводится на
+// `ready`, запускается первым снимком, если мир свежий (тик у нуля), — у
+// поднятой из сохранения партии портала нет.
+// Кот **вываливается** из портала: падает, кувыркаясь на бок, лежит, пока
+// кольцо схлопывается за ним, и только потом встаёт и отряхивается.
+const PORTAL_OPEN = 900; // кольцо раскрылось — кот вываливается
+const PORTAL_LAND = 1250; // упал на бок
+const PORTAL_SHUT = 1500; // кольцо начинает схлопываться
+const PORTAL_GONE = 2200; // кольца нет
+const PORTAL_RISE = 2400; // кот начинает вставать
+const PORTAL_UP = 2900; // встал — отряхивается
+const PORTAL_END = 3150;
+let portalArmed = false;
+let portal = null; // { id, x, y, t, out }
+function startPortal(snap) {
+  portalArmed = false;
+  const e = snap.entities?.[0];
+  if (!e || snap.tick > 2) return;
+  portal = {
+    id: e.id,
+    x: (e.x + 0.5) * TILE,
+    y: (e.y + 0.5) * TILE,
+    t: 0,
+    out: false,
+    landed: false,
+    gone: false,
+    // Бок, на который упадёт, — случайный, как у спящего (это вид).
+    side: Math.random() < 0.5 ? -1 : 1,
+  };
+}
+// Сколько кота уже видно: до раскрытия кольца — нисколько, потом проявляется.
+function portalVeil(id) {
+  if (!portal || portal.id !== id) return 1;
+  return Math.max(0, Math.min(1, (portal.t - PORTAL_OPEN) / 150));
+}
+// Поза тела во время портала: падение с кувырком, лёжка, подъём, встряска.
+// Пишет только `body` (поворот, сдвиг, сжатие), `scale.x` — разворот кота —
+// не трогает. Прочие анимации пишут те же поля только на переходах, так что
+// после портала всё возвращается в ноль одной записью.
+function portalPose(c, t, side) {
+  const lie = TILE * 0.1;
+  const ease = (k) => 1 - (1 - k) ** 3;
+  let rot = 0;
+  let dy = 0;
+  let sy = 1;
+  if (t < PORTAL_LAND) {
+    const k = Math.max(0, (t - PORTAL_OPEN) / (PORTAL_LAND - PORTAL_OPEN));
+    dy = lie - TILE * 0.6 * (1 - k * k); // падает с ускорением
+    rot = side * (Math.PI / 2) * (0.2 + 0.8 * k); // и заваливается на бок
+  } else if (t < PORTAL_RISE) {
+    const k = (t - PORTAL_LAND) / 180;
+    dy = lie - (k < 1 ? Math.sin(Math.PI * k) * TILE * 0.08 : 0); // отскок
+    rot = side * (Math.PI / 2);
+  } else if (t < PORTAL_UP) {
+    const k = ease((t - PORTAL_RISE) / (PORTAL_UP - PORTAL_RISE));
+    rot = side * (Math.PI / 2) * (1 - k);
+    dy = lie * (1 - k);
+    sy = 1 - 0.14 * Math.sin(Math.PI * k);
+  } else {
+    const k = (t - PORTAL_UP) / (PORTAL_END - PORTAL_UP);
+    rot = Math.sin((t - PORTAL_UP) * 0.06) * 0.14 * (1 - k); // отряхивается
+  }
+  c.body.rotation = rot;
+  c.body.y = dy;
+  c.body.scale.y = sy;
+}
+function portalDust(x, y) {
+  for (let j = 0; j < 8; j++) {
+    const a = (j / 8) * Math.PI * 2 + Math.random() * 0.5;
+    addSpark({
+      kind: "dust",
+      x,
+      y: y + TILE * 0.2,
+      vx: Math.cos(a) * 0.03,
+      vy: Math.sin(a) * 0.015 - 0.008,
+      g: 0,
+      life: 600,
+      max: 600,
+      size: 2.5 + Math.random() * 2,
+      color: 0xa8a49a,
+    });
+  }
+}
+function portalBurst(x, y, n, speed0) {
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
+    const v = speed0 * (0.6 + Math.random() * 0.6);
+    addSpark({
+      kind: "spark",
+      x,
+      y,
+      vx: Math.cos(a) * v,
+      vy: Math.sin(a) * v,
+      g: 0,
+      life: 700,
+      max: 700,
+      size: 1.2 + Math.random() * 1.4,
+      color: [0xb59cff, 0xd9ccff, 0x8a6cff][i % 3],
+    });
+  }
+}
+function stepPortal(deltaMS) {
+  if (!portal) return;
+  const p = portal;
+  p.t += deltaMS;
+  const c = units.get(p.id);
+  if (!p.out && p.t >= PORTAL_OPEN) {
+    p.out = true;
+    portalBurst(p.x, p.y, 18, 0.06);
+    play("portal");
+  }
+  if (!p.landed && p.t >= PORTAL_LAND) {
+    p.landed = true;
+    portalDust(p.x, p.y);
+    play("puff");
+  }
+  if (!p.gone && p.t >= PORTAL_GONE) {
+    p.gone = true;
+    portalBurst(p.x, p.y, 10, 0.03);
+  }
+  const g = portalGfx;
+  g.clear();
+  if (p.t >= PORTAL_END) {
+    portal = null;
+    if (c) {
+      c.alpha = c.down ? 0.55 : 1;
+      c.body.rotation = 0;
+      c.body.y = c.down ? TILE * 0.1 : 0;
+      c.body.scale.y = 1;
+      // Если ядро уже уложило кота, пусть снимок положит его своим боком.
+      c.down = false;
+    }
+    return;
+  }
+  if (c) {
+    c.alpha = portalVeil(p.id);
+    if (p.t >= PORTAL_OPEN) portalPose(c, p.t, p.side);
+  }
+  const ease = (k) => 1 - (1 - k) ** 3;
+  const R = TILE * 0.62;
+  const open = ease(Math.min(1, p.t / PORTAL_OPEN));
+  const shut =
+    p.t > PORTAL_SHUT ? ease(Math.min(1, (p.t - PORTAL_SHUT) / (PORTAL_GONE - PORTAL_SHUT))) : 0;
+  const r = R * open * (1 - shut);
+  if (r < 0.5) return;
+  const { x, y } = p;
+  const spin = p.t * 0.005;
+  const pulse = 0.85 + 0.15 * Math.sin(p.t * 0.012);
+  g.circle(x, y, r * 1.35).fill({ color: 0x8a6cff, alpha: 0.12 * pulse });
+  g.circle(x, y, r).fill({ color: 0x241a46, alpha: 0.85 });
+  g.circle(x, y, r).stroke({ color: 0xb59cff, width: 2.2, alpha: 0.9 });
+  // Вихрь: три дуги, закрученные к центру.
+  for (let i = 0; i < 3; i++) {
+    for (const [k, w, a] of [
+      [0.78, 1.6, 0.75],
+      [0.5, 1.3, 0.6],
+    ]) {
+      const a0 = spin * (k > 0.6 ? 1 : -1.4) + (i * Math.PI * 2) / 3;
+      const rr = r * k;
+      g.moveTo(x + Math.cos(a0) * rr, y + Math.sin(a0) * rr)
+        .arc(x, y, rr, a0, a0 + 1.6)
+        .stroke({ color: 0xd9ccff, width: w, alpha: a });
+    }
+  }
+  g.circle(x, y, r * 0.22 * pulse).fill({ color: 0xf0eaff, alpha: 0.8 });
+}
+
 let sparksDrawn = false;
 function stepSparks(deltaMS) {
   if (!sparks.length) {
@@ -4254,7 +4434,7 @@ function jobLabel(e) {
     case "build":
       return going ? "идёт на площадку" : "строит";
     case "demolish":
-      return going ? "идёт на снос" : "разбирает";
+      return going ? "идёт разбирать" : "разбирает";
     // Приказ без маршрута — это и есть `stuck`, и он подписан отдельно.
     case "order":
       return going ? "идёт по приказу" : "";
@@ -4629,7 +4809,7 @@ function renderCellPanel(snap) {
   if (bp) {
     const what =
       bp.tile < 0
-        ? "Снос"
+        ? "Разбор"
         : `Стройка: ${esc(meta.palette[bp.tile]?.label || meta.palette[bp.tile]?.id || "?")}`;
     const supplied = bp.delivered >= bp.need;
     const pct = supplied
@@ -7944,7 +8124,7 @@ function modeChrome() {
       };
     }
     if (buildTile < 0) {
-      return { key: "erase", label: "СНОС", color: COLORS.erase, tint: null };
+      return { key: "erase", label: "РАЗБОР", color: COLORS.erase, tint: null };
     }
     const p = meta?.palette?.[buildTile];
     return {
@@ -9176,7 +9356,7 @@ function buildToolbar() {
   });
 
   const er = mkTool(
-    '<span class="sw sw-erase"></span><span>Стереть</span>',
+    '<span class="sw sw-erase"></span><span>Разобрать</span>',
     () => selectBuild(-1, er),
   );
   build.appendChild(er);
@@ -10576,7 +10756,10 @@ function raidGate(i, node) {
       ? gates?.unlocked && !nodes.length
         ? "дальние вылазки — только отрядом: нужен стол брифинга"
         : "дальние вылазки — только отрядом: выберите отряд слева"
-      : null;
+      : !node.nearby && !def.nearby && freeJoiners().length
+        ? "дальние вылазки — только отрядом, без свободных: снимите отметку" +
+          " или зачислите их в отряд (карандаш в шапке)"
+        : null;
   const ready =
     !crewWhy &&
     !nogate &&
@@ -14388,7 +14571,7 @@ function wikiIndexHtml() {
     ["Объекты", "structure"],
     ["Вещи", "item"],
     ["Наука", "topic"],
-    ["Заказы", "raid"],
+    ["Миссии", "raid"],
     ["Коты", "recruit"],
     ["Стороны", "faction"],
     ["Навыки", "skill"],
@@ -16128,6 +16311,11 @@ function orderWareRows() {
 function openRaidWindow(x, y, pick = null) {
   closeOtherWindows("raid");
   raidWinOpen = true;
+  // Кот на базе один и свободен — он и выбран (§12.373): выбирать не из кого,
+  // и лишний клик перед первой же вылазкой был бы чистой формальностью.
+  const solo = soloFreeCat();
+  soloSeen = solo;
+  if (pick == null && solo) pick = [solo];
   // Кого клик по шлюзу привёл к «Пошарить рядом» (§12.349): они уже отмечены,
   // и окно открывается сразу на окрестностях.
   nearbyPick = new Set(pick ?? []);
@@ -16157,6 +16345,17 @@ function openRaidWindow(x, y, pick = null) {
 const NEARBY_X = -1000;
 const NEARBY_Y = -1000;
 let nearbyPick = new Set();
+// Единственный кот базы, если он свободен (§12.373): в списке штаба больше
+// никого нет — ни в отрядах, ни на вылазке, ни в плену. Иначе `null`.
+function soloFreeCat() {
+  const all = lastSnap?.entities ?? [];
+  const free = lastSnap?.free ?? [];
+  return all.length === 1 && free.length === 1 && free[0] === all[0].id ? free[0] : null;
+}
+// Каким `soloFreeCat` был в прошлый раз: автовыбор срабатывает на **смене**
+// (окно открылось, кот вернулся с вылазки), а не каждым кадром, — иначе
+// снятую игроком отметку тут же ставило бы обратно.
+let soloSeen = null;
 // Прогноз отряда со взятыми свободными котами (§12.365) считает ядро
 // (`Snapshot::combo`): ему нужен стол отряда (`setSquadPick`) и отметки
 // свободных (`setNearbyPick`). Других отрядов в нём не бывает (§12.368).
@@ -16167,6 +16366,15 @@ function syncSquadPick() {
   if (key === squadPickSent) return;
   squadPickSent = key;
   worker.postMessage({ type: "setSquadPick", cells: cells.flat() });
+}
+// Свободные коты, отмеченные идти **с выбранным отрядом** (§12.365). На
+// дальние заказы вид их не пускает (§12.371): туда идёт отряд, и только он —
+// ядро умеет и так (`launch_nodes`), но решение «кто идёт далеко» принимается
+// составом отряда, а не отметкой мимо него.
+function freeJoiners() {
+  if (!raidWinAt || raidHome) return [];
+  const free = new Set(lastSnap?.free ?? []);
+  return [...nearbyPick].filter((id) => free.has(id));
 }
 // Держит ли вылазка этот стол (§12.364): ведущий или присоединённый — то же
 // выражение, что `Mission::holds` в ядре.
@@ -16378,7 +16586,7 @@ function buildRaidWindow(key) {
     '<div class="map-note"></div>' +
     "</div>" +
     '<div class="raidwin-col raidwin-jobs">' +
-    '<div class="raidwin-h">Заказы</div>' +
+    '<div class="raidwin-h">Миссии</div>' +
     '<div class="raid-nearby" hidden></div>' +
     '<div class="raid-rules"></div>' +
     '<div class="raid-cards"></div>' +
@@ -16813,6 +17021,15 @@ function trustLines(node) {
 
 function renderRaidWindow() {
   if (!raidWinOpen || !meta || !lastSnap) return;
+  const solo = soloFreeCat();
+  if (solo !== soloSeen) {
+    soloSeen = solo;
+    if (solo && !nearbyPick.size && !crewEdit) {
+      nearbyPick.add(solo);
+      raidHome = true;
+      syncNearbyPick();
+    }
+  }
   // Узел мог не называться вовсе (дверь тулбара) или пропасть вместе со
   // снесённым гаражом — тогда берём тот же, что взяла бы новость: первый
   // свободный, иначе первый по порядку. Закрывать окно на снос нельзя: у базы
@@ -16889,9 +17106,12 @@ function renderRaidWindow() {
   // Без выбора своей вылазки у колонки нет: ушедшие без отряда стоят слева
   // своими группами, а карточка «Свалки» над пустым участком выглядела бы
   // его заказом.
+  // Прогноз со свободными годится только «Пошарить рядом»: на дальние заказы
+  // их не берут (§12.371), и карточка такого заказа считает отряд без них
+  // (`squad`), иначе сила и доля обещали бы вылазку, которой не будет.
   syncRaidCards(
     sel && raid ? [raid] : [],
-    combo ?? sel ?? outskirtsNode(),
+    combo ? { ...combo, squad: sel } : (sel ?? outskirtsNode()),
   );
   // Список вещей слота (§12.293) — один на всю колонку.
   syncSlotPop("raid");
@@ -17417,7 +17637,9 @@ function syncRaidCards(trips, node) {
   );
   const want = (meta.missions ?? []).map((_, i) => [
     String(i),
-    open[i] && here(i) ? raidCard(i, node) : "",
+    open[i] && here(i)
+      ? raidCard(i, node.squad && !meta.missions[i]?.nearby ? node.squad : node)
+      : "",
     i,
   ]);
   // Отряд в деле (§12.361): колонка — только про его вылазку. Прочие заказы

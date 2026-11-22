@@ -524,16 +524,6 @@ function prop(g, id, x, y, tint, n, d) {
       }
       break;
     }
-    case "portal": {
-      // Портал (§12.367): светящиеся кольца на полу.
-      const cx = px + T / 2;
-      const cy = py + T / 2;
-      g.ellipse(cx, cy, T * 0.46, T * 0.4).fill({ color: 0x8a6cff, alpha: 0.18 });
-      g.ellipse(cx, cy, T * 0.4, T * 0.34).stroke({ color: 0xb59cff, width: 2, alpha: 0.85 });
-      g.ellipse(cx, cy, T * 0.24, T * 0.2).stroke({ color: 0x8a6cff, width: 1.5, alpha: 0.7 });
-      g.ellipse(cx, cy, T * 0.1, T * 0.08).fill({ color: 0xd9ccff, alpha: 0.6 });
-      break;
-    }
     case "bed":
     case "ward": {
       const white = id === "ward";

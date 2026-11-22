@@ -459,3 +459,36 @@ fn the_shipped_ruleset_can_bandage_the_wounded() {
         );
     }
 }
+
+/// Раны копятся **за работу на месте** (§12.369): по дороге туда отряд цел,
+/// на работе здоровье убывает по прогнозу исхода, а к концу работы снят ровно
+/// тот урон, что насчитал исход, — дома лишнего не прибавляется.
+#[test]
+fn wounds_build_up_during_the_work() {
+    let (mut sim, m) = sim_with_raid(&["#######", "#a...b#", "#######"], (3, 1), 2, 100, 50);
+    sim.set_mission_work(m, 40);
+    assert!(sim.launch(m, vec!["a".to_string(), "b".to_string()]));
+    while !sim.is_away("a") {
+        sim.tick();
+    }
+    while sim.mission_phase() == Some("travel") {
+        sim.tick();
+        assert_eq!(sim.health_of("a"), 100, "по дороге туда ран нет");
+    }
+
+    let mut seen = vec![];
+    while sim.mission_phase() == Some("work") {
+        sim.tick();
+        seen.push(sim.health_of("a"));
+    }
+    assert!(
+        seen.iter().any(|&h| h < 100 && h > 50),
+        "на работе раны копятся: {seen:?}"
+    );
+    assert_eq!(sim.health_of("a"), 50, "к концу работы — весь урон провала");
+
+    while sim.is_away("a") {
+        sim.tick();
+        assert_eq!(sim.health_of("a"), 50, "дорога домой ран не прибавляет");
+    }
+}

@@ -280,16 +280,16 @@ fn eating_stops_the_double_burn() {
     assert_eq!(sim.energy_of("a"), before - 10, "жжёт по очку, как все");
 }
 
-/// Ушедших с базы голод не берёт вовсе — как и усталость: в поле кот не
-/// симулируется, он считается (§12.22).
+/// В поле голод идёт (§12.370): еды за шлюзом нет, и сытость тает по тику,
+/// как дома.
 #[test]
-fn a_cat_away_on_a_mission_does_not_starve() {
+fn a_cat_away_on_a_mission_gets_hungry() {
     let mut sim = sim_from(&["######", "#a.b.#", "######"]);
     sim.set_gate(1, true);
     sim.set_relay(1, true);
     sim.force_tile(4, 1, 1);
     sim.set_nutrition(RATION, 100);
-    sim.set_food(100, 40, 2);
+    sim.set_food(1000, 40, 2);
     let mission = sim.set_mission(2, 100, &[]);
 
     assert!(sim.launch(mission, vec!["a".to_string(), "b".to_string()]));
@@ -298,7 +298,74 @@ fn a_cat_away_on_a_mission_does_not_starve() {
     let fed = sim.fed_of("a");
 
     sim.tick_n(20);
-    assert_eq!(sim.fed_of("a"), fed, "за шлюзом сытость не считается");
+    assert_eq!(sim.fed_of("a"), fed - 20, "за шлюзом сытость тает");
+}
+
+/// Мир для еды перед вылазкой: шлюз в (6,1), паёк на полу в (1,1), коты `a`
+/// и `b` в коридоре. Срок вылазки — 300 тиков, полная сытость 1000, «пора есть»
+/// ниже 100: по обычному порогу сытый кот к еде не пошёл бы.
+fn sim_before_a_raid(fed: i32) -> (Sim, usize) {
+    let mut sim = sim_from(&["########", "#.a.b..#", "########"]);
+    sim.set_gate(1, true);
+    sim.force_tile(6, 1, 1);
+    sim.set_nutrition(RATION, 1000);
+    sim.set_food(1000, 100, 2);
+    sim.put_item(1, 1, RATION, 2);
+    sim.set_fed("a", fed);
+    sim.set_fed("b", 900);
+    let mission = sim.set_mission(2, 300, &[]);
+    (sim, mission)
+}
+
+/// Сытости не хватит на срок — кот из отряда сначала ест (§12.370), отряд его
+/// ждёт и уходит, когда он наелся. Сытому есть незачем.
+#[test]
+fn a_squad_cat_eats_before_a_raid_it_would_starve_on() {
+    let (mut sim, m) = sim_before_a_raid(150);
+    assert!(sim.launch(m, vec!["a".to_string(), "b".to_string()]));
+
+    for _ in 0..60 {
+        sim.tick();
+        if sim.is_away("a") {
+            break;
+        }
+    }
+    // Паёк в шаге: кот ест с места тем же тиком (§12.250), поэтому след —
+    // съеденный паёк, а не задача.
+    assert_eq!(
+        sim.item_at(1, 1, RATION),
+        1,
+        "a поел, хотя по обычному порогу сыт, а b хватает и так"
+    );
+    assert!(
+        sim.is_away("a") && sim.is_away("b"),
+        "отряд ушёл вместе с ним"
+    );
+    assert!(sim.fed_of("a") > 300, "и сытости хватит на всю вылазку");
+}
+
+/// Хватает — никто к еде не идёт, отряд уходит без задержки.
+#[test]
+fn a_fed_squad_leaves_without_a_meal() {
+    let (mut sim, m) = sim_before_a_raid(600);
+    assert!(sim.launch(m, vec!["a".to_string(), "b".to_string()]));
+    for _ in 0..30 {
+        sim.tick();
+        assert!(!sim.is_eating("a") && !sim.is_eating("b"), "есть незачем");
+    }
+    assert!(sim.is_away("a"), "ушли");
+    assert_eq!(sim.item_at(1, 1, RATION), 2, "пайки целы");
+}
+
+/// Еды нет — отряд не застревает: идёт голодным (голод бодрости в поле не
+/// жжёт, цену он заплатит дома).
+#[test]
+fn without_food_the_squad_still_leaves() {
+    let (mut sim, m) = sim_before_a_raid(150);
+    sim.take_item(1, 1, RATION);
+    assert!(sim.launch(m, vec!["a".to_string(), "b".to_string()]));
+    sim.tick_n(30);
+    assert!(sim.is_away("a"), "ушли без еды");
 }
 
 // --- боевой рулсет ----------------------------------------------------------

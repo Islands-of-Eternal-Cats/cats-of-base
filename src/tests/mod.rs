@@ -1843,28 +1843,54 @@ impl Sim {
     /// самого заказа, а не пишем журнал — журнал вылазок и цели остаются
     /// прежними. Правила в снимок не идут, поэтому загруженной партии их
     /// снимают ещё раз.
+    ///
+    /// С §12.372 так же сняты ворота стройки: пол, склад, шлюз и лежанка были
+    /// открыты с нулевого тика, а теперь их открывает «Осмотреть вход».
     fn open_rules(&mut self) {
         if let Some(scavenge) = self.mission_index("scavenge") {
             self.world.resource_mut::<MissionRules>().0[scavenge].raided = None;
         }
+        if let Some(inspect) = self.mission_index("inspect") {
+            for rule in &mut self.world.resource_mut::<TileRules>().0 {
+                if rule.raided == Some(inspect) {
+                    rule.raided = None;
+                }
+            }
+        }
     }
 
+    ///
+    /// С §12.372 стартовая база — одна заваленная комната, поэтому прежняя
+    /// застройка собирается здесь целиком: две комнаты, коридор, перемычки и
+    /// шлюз в верхнем ряду (§12.208, §12.348) — ровно то, что стояло в `build:`
+    /// до §12.367.
     fn open_base(&mut self) {
-        let rubble = self.tile_index("rubble");
-        let portal = self.tile_index("portal");
         let floor = self.tile_index("floor").expect("пол в палитре");
+        let garage = self.tile_index("garage").expect("шлюз в палитре");
         let (w, h) = {
             let map = self.world.resource::<BaseMap>();
             (map.width, map.height)
         };
         for y in 0..h {
             for x in 0..w {
-                let t = self.tile(x, y);
-                if Some(t) == rubble || Some(t) == portal {
+                self.force_tile(x, y, -1);
+            }
+        }
+        for (rx, ry, rw, rh) in [
+            (3, 7, 6, 2),
+            (3, 2, 5, 4),
+            (3, 10, 6, 5),
+            (5, 6, 2, 1),
+            (5, 9, 2, 1),
+            (5, 1, 1, 1),
+        ] {
+            for y in ry..ry + rh {
+                for x in rx..rx + rw {
                     self.force_tile(x, y, floor);
                 }
             }
         }
+        self.force_tile(5, 0, garage);
         if let Some(bed) = self.tile_index("bed") {
             for x in 3..6 {
                 self.force_tile(x, 14, bed);
