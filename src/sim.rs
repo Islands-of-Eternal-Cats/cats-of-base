@@ -7279,6 +7279,48 @@ impl Sim {
         String::new()
     }
 
+    /// **Снесённый стол распускает свой состав** — приписки `Enlisted` и
+    /// `Posted` к клетке, где места брифинга больше нет. Та же уборка, что у
+    /// правила автовылазки на снесённом столе (`run_auto_raids`): иначе коты
+    /// числились бы в отряде, которого нет, — ни в составе, ни среди свободных,
+    /// то есть пропадали бы из штаба вовсе, а новый стол их не видел.
+    ///
+    /// Ушедших (`Squad`) не трогаем: вылазка держит свой стол сама (§12.22), и
+    /// приписку снимет следующий тик после их возвращения.
+    fn drop_orphan_crews(&mut self) {
+        let nodes = self.node_cells_of();
+        let orphans: Vec<(Entity, bool, bool)> = {
+            let mut q = self.world.query_filtered::<
+                (Entity, Option<&Enlisted>, Option<&Posted>),
+                (Without<Squad>, Or<(With<Enlisted>, With<Posted>)>),
+            >();
+            q.iter(&self.world)
+                .map(|(e, en, po)| {
+                    (
+                        e,
+                        en.is_some_and(|c| !nodes.contains(&c.spot)),
+                        po.is_some_and(|c| !nodes.contains(&c.spot)),
+                    )
+                })
+                .filter(|&(_, en, po)| en || po)
+                .collect()
+        };
+        for (e, en, po) in orphans {
+            let mut cat = self.world.entity_mut(e);
+            if en {
+                cat.remove::<Enlisted>();
+            }
+            if po {
+                // Дежурство за приписку держалось — снимаем вместе с ней, как
+                // `unpost_relay`; маршрут — только если он вёл к дежурству.
+                if cat.contains::<OnDuty>() {
+                    cat.remove::<(OnDuty, Path, Stride)>();
+                }
+                cat.remove::<Posted>();
+            }
+        }
+    }
+
     /// Один фиксированный шаг симуляции.
     pub fn tick(&mut self) {
         // Правило автовылазки — **до** цепочки и в фасаде, а не в ней (§12.67):
@@ -7286,6 +7328,7 @@ impl Sim {
         // Перед тиком, потому что игрок нажал бы её между тиками, и заявка
         // обязана застать `gather_squad` этого же тика — иначе отряд теряет тик
         // на ровном месте.
+        self.drop_orphan_crews();
         self.run_auto_raids();
         // Автопродажа — там же и по той же причине (§12.87): она повторяет клик
         // по кнопке «Продать», а у кнопки трое ворот, второй экземпляр которых

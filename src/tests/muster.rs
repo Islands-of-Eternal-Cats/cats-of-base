@@ -199,6 +199,22 @@ fn a_torn_down_table_disbands_the_gathering_squad() {
     assert!(!sim.in_squad("a") && !sim.in_squad("b"));
 }
 
+/// Снесённый стол распускает и **постоянный состав**: приписка к клетке, где
+/// стола больше нет, прятала котов из штаба — ни в отряде, ни среди свободных.
+#[test]
+fn a_torn_down_table_releases_its_crew_and_operator() {
+    let mut sim = hall_with_radio();
+    let node = sim.node_cells_of()[0];
+    assert!(sim.enlist("a", node.0, node.1));
+    assert!(sim.enlist("b", node.0, node.1));
+
+    sim.force_tile(3, 2, 0); // стол снесли
+    sim.tick_n(1);
+    assert_eq!(sim.enlisted_at("a"), None);
+    assert_eq!(sim.enlisted_at("b"), None);
+    assert_eq!(sim.post_of("c"), None, "радист без стола не радист");
+}
+
 /// Брифинг (§12.280): севший отряд сидит за столом `brief` тиков и только
 /// потом выбирает дверь. Дверь, выбранная раньше, звала бы к выходу посреди
 /// разговора.
