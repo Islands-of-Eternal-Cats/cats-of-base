@@ -1934,6 +1934,10 @@ pub(crate) struct TileRule {
     /// `None` — ворот нет. Шкала — `Reached`, монотонная, как `Seen`: так шлюз
     /// приходит в палитру, когда прокоп упёрся в сломанный шлюз.
     pub(crate) reached: Option<i16>,
+    /// Во что руину превращает обследование (§12.379); `None` — нечего.
+    pub(crate) examine: Option<i16>,
+    /// Что встаёт на руину ремонтом (§12.379); `None` — нечего.
+    pub(crate) repair: Option<i16>,
     /// Поверх какого тайла ставится этот (§12.238); `None` — на основание.
     /// Индекс строго меньше собственного, как у `after`.
     pub(crate) on: Option<i16>,
@@ -2142,6 +2146,16 @@ impl TileRules {
     /// До какого тайла обязан был дойти кот, чтобы этот открылся (§12.376).
     pub(crate) fn reached_of(&self, tile: i16) -> Option<i16> {
         self.of(tile).and_then(|r| r.reached)
+    }
+
+    /// Во что превращает эту руину обследование (§12.379).
+    pub(crate) fn examine_of(&self, tile: i16) -> Option<i16> {
+        self.of(tile).and_then(|r| r.examine)
+    }
+
+    /// Что встаёт на эту руину ремонтом (§12.379).
+    pub(crate) fn repair_of(&self, tile: i16) -> Option<i16> {
+        self.of(tile).and_then(|r| r.repair)
     }
 
     pub(crate) fn is_lab(&self, tile: i16) -> bool {

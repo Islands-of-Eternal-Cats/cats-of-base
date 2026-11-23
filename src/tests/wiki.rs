@@ -99,12 +99,14 @@ fn palettes(rs: &Ruleset) -> Vec<(&'static str, Vec<String>)> {
     vec![
         // Внутренность объекта (`internal`, §12.163) своей статьи не получает:
         // игрок её не ставит и отдельно не видит, о ней рассказывает объект.
+        // Кроме того, что встаёт ремонтом руины (§12.379): шлюз в палитру не
+        // идёт, но игрок его чинит и видит, и статья о нём нужна.
         (
             "tile",
             ids(rs
                 .tiles
                 .iter()
-                .filter(|x| !x.internal)
+                .filter(|x| !x.internal || rs.tiles.iter().any(|r| r.repair == x.id))
                 .map(|x| &x.id)
                 .collect()),
         ),

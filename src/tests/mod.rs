@@ -270,6 +270,8 @@ fn sim_from(rows: &[&str]) -> Sim {
             internal: false,
             // Руин и ворот «дошли» у схемы нет (§12.376).
             reached: String::new(),
+            examine: String::new(),
+            repair: String::new(),
             fixed: false,
         }],
         // Штампов у схемы нет (§12.160): объекты ставит только `set_structure`,
@@ -1862,11 +1864,13 @@ impl Sim {
             }
         }
         // Шлюз на прежней застройке — без руины под ним (§12.376): ставится в
-        // скалу верхнего ряда и сносится в неё, как до сломанного шлюза.
+        // скалу верхнего ряда и сносится в неё, как до сломанного шлюза, и
+        // строится из палитры, а не ремонтом (§12.379).
         if let Some(garage) = self.tile_index("garage") {
             let rule = &mut self.world.resource_mut::<TileRules>().0[garage as usize];
             rule.reached = None;
             rule.on = None;
+            rule.internal = false;
         }
     }
 

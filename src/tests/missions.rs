@@ -1732,3 +1732,24 @@ fn fatigue_builds_up_while_the_squad_is_out() {
         assert_eq!(sim.energy_of("a"), back, "дорога домой бодрости не стоит");
     }
 }
+
+/// Заказ без дороги (`travel: 0`, §12.379): конец работы и конец срока —
+/// один тик, и исход обязан посчитаться раньше возвращения. Иначе отряд
+/// приходил ни с чем, а заказ не засчитывался — «Осмотреть вход снаружи» с
+/// нулевой дорогой не открывал ничего.
+#[test]
+fn a_mission_without_a_road_still_brings_its_loot() {
+    let (mut sim, m) = sim_with_gate(&["#######", "#a....#", "#######"], (3, 1), 1, 0);
+    sim.set_mission_work(m, 6);
+    assert!(sim.launch(m, squad(&["a"])));
+    let home = (0..100).any(|_| {
+        sim.tick_n(1);
+        sim.mission_left().is_none() && !sim.is_away("a") && sim.item_at(3, 1, 0) > 0
+    });
+    assert!(home, "отряд вернулся без добычи или не вернулся");
+    assert_eq!(sim.item_at(3, 1, 0), 5, "добыча целиком");
+    assert!(
+        sim.world.resource::<Raids>().0.contains(&m),
+        "заказ засчитан"
+    );
+}

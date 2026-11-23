@@ -14,7 +14,7 @@ fn start() -> Sim {
 
 /// Разобрать путь к сломанному шлюзу (§12.372, §12.376): выход из правой
 /// верхней комнатки и коридор по `y = 3`, затем шахта по `x = 11` до верха.
-/// Кончается, когда кот может дойти до руины, — тогда шлюз и открывается.
+/// Кончается, когда верх шахты разобран и к руине можно подойти.
 fn dig_to_ruin(sim: &mut Sim) {
     assert!(
         sim.plan_demolish_rect(12, 3, 3, 1),
@@ -24,23 +24,33 @@ fn dig_to_ruin(sim: &mut Sim) {
         sim.plan_demolish_rect(11, 1, 1, 3),
         "шахта размечена на разбор"
     );
-    let garage = sim.tile_index("garage").expect("шлюз") as usize;
-    let open = (0..3000).any(|_| {
+    let rubble = sim.tile_index("rubble").expect("завал");
+    let dug = (0..3000).any(|_| {
         sim.tick_n(1);
-        sim.tile_is_open(garage)
+        sim.tile(11, 1) != rubble
     });
-    assert!(open, "докопались до сломанного шлюза");
+    assert!(dug, "докопались до сломанного шлюза");
 }
 
-/// Докопаться и поставить шлюз на руину (§12.376): выход открыт, когда шлюз
-/// достроен.
+/// Ждать, пока на клетке не встанет тайл `id`.
+fn until_tile(sim: &mut Sim, x: i32, y: i32, id: &str, ticks: usize) -> bool {
+    let t = sim.tile_index(id).expect("тайл в палитре");
+    (0..ticks).any(|_| {
+        sim.tick_n(1);
+        sim.tile(x, y) == t
+    })
+}
+
+/// Докопаться, обследовать руину и починить шлюз (§12.376, §12.379): выход
+/// открыт, когда шлюз достроен.
 fn dig(sim: &mut Sim) {
     dig_to_ruin(sim);
-    let garage = sim.tile_index("garage").expect("шлюз");
+    assert!(sim.fix_at(11, 0), "руина размечена на обследование");
     assert!(
-        sim.add_blueprint(11, 0, i32::from(garage)),
-        "шлюз размечен на руине"
+        until_tile(sim, 11, 0, "gate_ruin", 3000),
+        "руину обследовали"
     );
+    assert!(sim.fix_at(11, 0), "шлюз размечен на ремонт");
     let open = (0..3000).any(|_| {
         sim.tick_n(1);
         sim.exit_open()
@@ -271,88 +281,104 @@ fn the_shipped_ruleset_dismantles_only_rubble_at_the_start() {
     assert_eq!(at(7, 2), 1, "маска не даёт разобрать завал");
 }
 
-/// Сломанный шлюз (§12.376): докопался — в палитре шлюз, ставится он ровно на
-/// руину, и маска показывает ровно её; дверью руина не считается, выход
-/// открывает достроенный шлюз.
+/// Сломанный шлюз (§12.376, §12.379): руину сперва обследуют, потом чинят —
+/// кнопкой в панели клетки, а не палитрой. Шлюза в палитре нет ни до, ни
+/// после: его чинят, а не строят. Дверью руина не считается, выход открывает
+/// достроенный шлюз.
 #[test]
-fn the_shipped_ruleset_repairs_the_broken_gate() {
+fn the_shipped_ruleset_examines_then_repairs_the_broken_gate() {
     let mut sim = start();
     let garage = sim.tile_index("garage").expect("шлюз");
+    let ruin = sim.tile_index("gate_ruin").expect("обследованный шлюз");
     assert!(
-        !sim.tile_is_open(garage as usize),
-        "шлюз открыт, пока до руины не дойти"
+        !sim.add_blueprint(11, 0, i32::from(garage)),
+        "шлюз ставится палитрой"
     );
+    assert!(
+        !sim.add_blueprint(11, 0, i32::from(ruin)),
+        "обследование ставится палитрой"
+    );
+    assert!(!sim.fix_at(10, 0), "чинится скала, а не руина");
+    // Обследование размечается и за завалом — работа ждёт прокопа, как
+    // любой чертёж (§12.379).
+    assert!(sim.fix_at(11, 0), "руина за завалом не размечается");
     dig_to_ruin(&mut sim);
     assert!(!sim.exit_open(), "руина — не дверь");
+    assert_eq!(sim.hand_tag("excellent", 11, 0), "examine");
     assert!(
-        sim.raid_gates(sim.mission_index("inspect").expect("осмотр"))
-            .unlocked,
-        "осмотр открыт заранее"
+        until_tile(&mut sim, 11, 0, "gate_ruin", 3000),
+        "обследовали"
     );
-
-    let mask = sim.buildable(i32::from(garage), 0, 0, 0, 0);
-    let w = sim.world.resource::<BaseMap>().width;
-    let places: Vec<(i32, i32)> = mask
-        .iter()
-        .enumerate()
-        .filter(|&(_, &m)| m == 1)
-        .map(|(i, _)| (i as i32 % w, i as i32 / w))
-        .collect();
-    assert_eq!(places, vec![(11, 0)], "шлюз ставится только на руину");
+    assert!(!sim.exit_open(), "обследованная руина — тоже не дверь");
+    assert_eq!(sim.hand_tag("excellent", 11, 0), "repair");
     assert!(
-        !sim.add_blueprint(10, 0, i32::from(garage)),
-        "в скалу верхнего ряда шлюз не встаёт"
+        !sim.add_blueprint(11, 0, i32::from(garage)),
+        "и после обследования шлюз не в палитре"
     );
 
     let dug = sim.scrap_total();
     assert!(dug >= 3, "прокоп дал лом на шлюз: {dug}");
-    assert!(sim.add_blueprint(11, 0, i32::from(garage)));
+    assert!(sim.fix_at(11, 0), "шлюз размечен на ремонт");
     let open = (0..3000).any(|_| {
         sim.tick_n(1);
         sim.exit_open()
     });
     assert!(open, "шлюз починен, выход открыт");
     assert_eq!(sim.tile(11, 0), garage);
+    assert!(!sim.fix_at(11, 0), "целый шлюз чинить нечего");
+    assert!(
+        sim.world.resource::<TileRules>().is_internal(garage),
+        "шлюз в палитру не идёт"
+    );
 }
 
-/// Снесённый шлюз оставляет руину, а не яму (§12.376): выход наверх потерять
-/// нельзя — шлюз открыт навсегда, и его можно поставить заново.
+/// Снесённый шлюз оставляет обследованную руину, а не яму и не «?» (§12.376,
+/// §12.379): выход наверх потерять нельзя, а обследованное не забывается —
+/// шлюз чинится заново сразу.
 #[test]
 fn the_shipped_ruleset_never_loses_its_way_up() {
     let mut sim = start();
     dig(&mut sim);
-    let ruin = sim.tile_index("broken_gate").expect("сломанный шлюз");
-    let garage = sim.tile_index("garage").expect("шлюз");
+    let ruin = sim.tile_index("gate_ruin").expect("обследованный шлюз");
     assert!(sim.add_blueprint(11, 0, -1), "шлюз разбирается");
     let gone = (0..2000).any(|_| {
         sim.tick_n(1);
         sim.tile(11, 0) == ruin
     });
-    assert!(gone, "снос оставил сломанный шлюз");
+    assert!(gone, "снос оставил обследованный шлюз");
     assert!(!sim.add_blueprint(11, 0, -1), "руину не снести");
-    assert!(sim.tile_is_open(garage as usize), "шлюз остался в палитре");
-    assert!(
-        sim.add_blueprint(11, 0, i32::from(garage)),
-        "и встаёт снова"
-    );
+    assert_eq!(sim.hand_tag("excellent", 11, 0), "repair");
+    assert!(sim.fix_at(11, 0), "и шлюз чинится снова");
 }
 
-/// Шкала «дошли» переживает снимок (§12.376): иначе загруженная партия убрала
-/// бы шлюз из палитры, стоит пути к руине оборваться.
+/// Приказ коту по руине (§12.379): работу берёт **этот** кот, тем же кликом,
+/// а не ближайший свободный.
 #[test]
-fn reaching_the_ruin_survives_a_save() {
-    let mut sim = start();
-    dig_to_ruin(&mut sim);
-    let json = sim.save().expect("снимок");
-    let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
-    let garage = loaded.tile_index("garage").expect("шлюз") as usize;
-    assert!(
-        loaded
-            .world
-            .resource::<Reached>()
-            .has(loaded.tile_index("broken_gate").unwrap())
-    );
-    assert!(loaded.tile_is_open(garage));
+fn an_ordered_cat_examines_the_ruin_itself() {
+    let mut sim = opened(Sim::new(CORE).expect("рулсет"));
+    sim.without_timeline();
+    let broken = sim.tile_index("broken_gate").expect("сломанный шлюз");
+    sim.force_tile(5, 0, broken);
+    let units: Vec<String> = {
+        let mut q = sim.world.query::<&UnitId>();
+        q.iter(&sim.world).map(|u| u.0.clone()).collect()
+    };
+    assert!(units.len() > 1, "выбирать есть из кого");
+    // Самый дальний от руины — его раздача не взяла бы первым.
+    let far = units
+        .iter()
+        .max_by_key(|id| {
+            let (x, y) = sim.pos_of(id);
+            ((x - 5).abs() + y, (*id).clone())
+        })
+        .unwrap()
+        .clone();
+    assert!(sim.command_at(&far, 5, 0), "приказ принят");
+    assert!(sim.has_assignment(&far), "работу взял названный кот");
+    for id in units.iter().filter(|id| **id != far) {
+        assert!(!sim.has_assignment(id), "`{id}` перехватил руину");
+    }
+    assert!(until_tile(&mut sim, 5, 0, "gate_ruin", 3000), "обследовали");
 }
 
 /// Караван, пришедший раньше починки (§12.376), оставляет груз на руине, а

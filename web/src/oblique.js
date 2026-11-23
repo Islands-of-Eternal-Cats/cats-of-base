@@ -45,6 +45,7 @@ const MATERIAL = {
   ward: "tile",
   garage: "plate",
   broken_gate: "plate",
+  gate_ruin: "plate",
   muster_table: "plate",
   shop: "rubber",
   post: "rubber",
@@ -703,8 +704,10 @@ function prop(g, id, x, y, tint, n, d) {
       if (l) g.rect(px, py - h, 1, T).fill({ color: 0, alpha: 0.18 });
       break;
     }
-    case "broken_gate": {
+    case "broken_gate":
+    case "gate_ruin": {
       // Сломанный шлюз (§12.376): плита с провалом и обломками кромки.
+      // Обследованный (§12.379) выглядит так же — разница в глифе.
       g.moveTo(px + T * 0.36, py + T * 0.34)
         .lineTo(px + T * 0.6, py + T * 0.4)
         .lineTo(px + T * 0.66, py + T * 0.62)

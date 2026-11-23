@@ -1879,6 +1879,8 @@ impl Sim {
                         .filter(|&prev| prev < def)
                         .map(|prev| prev as i16),
                     reached: tile_index_of(&t.reached).map(|t| t as i16),
+                    examine: tile_index_of(&t.examine).map(|t| t as i16),
+                    repair: tile_index_of(&t.repair).map(|t| t as i16),
                     fixed: t.fixed,
                     internal: t.internal,
                     quiet: t.quiet,
@@ -2878,6 +2880,12 @@ impl Sim {
         if !may_build(&plan, self.world.resource::<TileRules>(), (x, y), t) {
             return false;
         }
+        self.spawn_blueprint(x, y, t)
+    }
+
+    /// Чертёж на клетке без единых ворот: уже стоящий тайл не размечается, а
+    /// чертёж на клетке перезаписывается.
+    fn spawn_blueprint(&mut self, x: i32, y: i32, t: i16) -> bool {
         if self.world.resource::<BaseMap>().tile_at(x, y) == t {
             return false; // уже построено этим тайлом
         }
@@ -2898,6 +2906,107 @@ impl Sim {
             delivered: Vec::new(),
         });
         true
+    }
+
+    /// Обследовать или починить руину (§12.379) — кнопка в панели клетки:
+    /// работу возьмёт любой свободный кот, как у чертежа. Руина сама говорит,
+    /// что с ней делать (`examine`, потом `repair`), поэтому команда одна, а
+    /// ворот палитры у неё нет: шлюз чинят, а не строят.
+    pub fn fix_at(&mut self, x: i32, y: i32) -> bool {
+        note(&mut self.world, format!("fix {x} {y}"));
+        self.fix_blueprint(x, y).is_some()
+    }
+
+    /// Во что обернётся работа над руиной в клетке (§12.379): обследование,
+    /// если руину ещё не обследовали, иначе ремонт. `None` — клетка не руина.
+    fn fix_target(&self, x: i32, y: i32) -> Option<(i16, bool)> {
+        if !self.in_bounds(x, y) {
+            return None;
+        }
+        let tile = self.world.resource::<BaseMap>().tile_at(x, y);
+        let rules = self.world.resource::<TileRules>();
+        rules
+            .examine_of(tile)
+            .map(|t| (t, true))
+            .or_else(|| rules.repair_of(tile).map(|t| (t, false)))
+    }
+
+    /// Чертёж работы над руиной: уже размеченный или новый (§12.379).
+    fn fix_blueprint(&mut self, x: i32, y: i32) -> Option<Entity> {
+        let (t, _) = self.fix_target(x, y)?;
+        // Руина стоит, где стоит: доступ, зонирование и верхний ряд — ворота
+        // **новой** постройки, а не работы над старой. Спросить их значило бы
+        // отказать «?» за шахтой, ещё заваленной, — без причины, которую
+        // игрок мог бы понять (§12.53): работа просто ждёт, пока до руины
+        // докопаются, как любой чертёж. Слой спрашиваем: он про то, что во что
+        // превращается, и это свойство рулсета, а не места.
+        let below = self.world.resource::<BaseMap>().tile_at(x, y);
+        if !self.world.resource::<TileRules>().rests_on(below, t) || !self.spawn_blueprint(x, y, t)
+        {
+            return None;
+        }
+        self.blueprint_at(x, y)
+    }
+
+    /// Приказ коту по руине (§12.379): работу над ней берёт **этот** кот, а не
+    /// ближайший свободный. Сейчас это ярлык — исход от кота не зависит, — но
+    /// тем же жестом потом пойдут руины, которые по силам не каждому.
+    ///
+    /// Чертёж, которому не хватает материала, кот не возьмёт: сперва подвоз
+    /// (§12.15). Тогда приказ только размечает работу, и её возьмёт кто угодно.
+    /// `None` — клетка не руина, и приказ обычный.
+    fn fix_order(&mut self, unit_id: &str, x: i32, y: i32) -> Option<bool> {
+        self.fix_target(x, y)?;
+        let mut cats = self.world.query::<(Entity, &UnitId, &Position)>();
+        let (cat, from) = cats
+            .iter(&self.world)
+            .find(|(_, id, _)| id.0 == unit_id)
+            .map(|(e, _, p)| (e, (p.x, p.y)))?;
+        if self.world.get::<Away>(cat).is_some() {
+            return Some(false);
+        }
+        let Some(bp_e) = self.fix_blueprint(x, y) else {
+            return Some(false);
+        };
+        let (tile, supplied, other) = {
+            let rules = self.world.resource::<TileRules>();
+            let bp = self.world.get::<Blueprint>(bp_e)?;
+            (bp.tile, missing(rules, bp).is_empty(), bp.assignee)
+        };
+        if !supplied || other == Some(cat) {
+            return Some(true);
+        }
+        // Спящего приказ не будит, пока включено «Беречь себя» (§12.51):
+        // работа размечена, и возьмёт её кто-то другой.
+        if self.world.resource::<AutoRest>().0 && self.world.get::<Rest>(cat).is_some() {
+            return Some(true);
+        }
+        let steps = {
+            let map = self.world.resource::<BaseMap>();
+            let rules = self.world.resource::<TileRules>();
+            let reach = Reach::all(map, rules, from);
+            let Some((spot, _)) = build_spot(map, rules, &reach, (x, y), tile, None, &[]) else {
+                return Some(true);
+            };
+            reach.path_to(spot.0, spot.1).unwrap_or_default()
+        };
+        if let Some(prev) = other {
+            self.world
+                .entity_mut(prev)
+                .remove::<(Assignment, Path, Stride)>();
+        }
+        self.release_task(cat);
+        if let Some(mission_e) = self.world.get::<Squad>(cat).map(|s| s.0) {
+            self.disband(mission_e);
+        }
+        if let Some(mut bp) = self.world.get_mut::<Blueprint>(bp_e) {
+            bp.assignee = Some(cat);
+        }
+        self.world
+            .entity_mut(cat)
+            .remove::<Order>()
+            .insert((Assignment(bp_e), Path { steps }));
+        Some(true)
     }
 
     /// Поставить чертежи `tile` на весь прямоугольник — один жест рамкой.
@@ -6891,6 +7000,9 @@ impl Sim {
         if self.teach_at(unit_id, x, y) {
             return true;
         }
+        if let Some(done) = self.fix_order(unit_id, x, y) {
+            return done;
+        }
         match self.hand_verb(unit_id, x, y) {
             Some(HandVerb::Refuse(_)) => false,
             Some(verb) => self.give_hand(unit_id, x, y, verb),
@@ -6908,6 +7020,10 @@ impl Sim {
         // команды в мир этот клик не шлёт.
         if let Some(tag) = self.gate_door(unit_id, x, y) {
             return tag.to_string();
+        }
+        // Руина отвечает работой над собой (§12.379): `examine` · `repair`.
+        if let Some((_, examine)) = self.fix_target(x, y) {
+            return if examine { "examine" } else { "repair" }.to_string();
         }
         match self.hand_verb(unit_id, x, y) {
             None => "",

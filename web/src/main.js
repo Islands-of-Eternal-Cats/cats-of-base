@@ -5,6 +5,7 @@ import { Application, Container, Graphics, Text } from "pixi.js";
 import {
   DOOR_GLYPHS,
   ITEM_GLYPHS,
+  RUIN_GLYPHS,
   SITE_GLYPHS,
   STAT_GLYPHS,
   TILE_GLYPHS,
@@ -309,6 +310,11 @@ const cellEl = document.getElementById("cell");
 // единственная кнопка идёт делегированием и парой `mousedown`/`mouseup`
 // (§12.80, §12.95): узел кнопки живёт один кадр, а клик человека — сотню
 // миллисекунд. Регистрируется один раз, здесь, а не при отрисовке панели.
+// Руина (§12.379): «Обследовать», потом «Починить» — работу берёт любой
+// свободный кот; конкретного посылают приказом по самой клетке.
+onPanelClick(cellEl, ".ruin-fix", (b) =>
+  sendAction({ type: "fix", x: Number(b.dataset.x), y: Number(b.dataset.y) }),
+);
 onPanelClick(cellEl, ".store-mark", (b) =>
   sendAction({
     type: "store",
@@ -922,12 +928,29 @@ overlay.addChild(gridGfx);
 // ответ про конкретный жест и читается поверх.
 const placeGfx = new Graphics();
 overlay.addChild(placeGfx);
-// Руины, которые можно починить (§12.376): пульсирующая рамка на клетке
-// сломанного шлюза, пока шлюз открыт в палитре, — «вот где», ещё до того, как
-// игрок взял инструмент. Узел постоянный: рамка перерисовывается только на
+// Руины (§12.376, §12.379): пульсирующая рамка на клетке руины, пока с ней
+// есть что делать, — «вот где», ещё до того, как игрок её выбрал. Узел постоянный: рамка перерисовывается только на
 // смене карты или ворот, а пульс — это `alpha` в тикере.
 const ruinGfx = new Graphics();
 overlay.addChild(ruinGfx);
+// Знак над руиной (§12.379): «?» — обследовать, ключ — починить. Узлы
+// пересобираются только на смене ключа `syncRuins`, снятые разрушаются явно
+// (§12.84); контекст глифа общий на глагол — `destroy()` без аргументов.
+const ruinMarks = new Container();
+overlay.addChild(ruinMarks);
+const ruinGlyphCache = new Map();
+function ruinGlyphContext(verb) {
+  if (!ruinGlyphCache.has(verb)) {
+    ruinGlyphCache.set(
+      verb,
+      new Graphics().svg(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+          `<path fill="#ffffff" d="${RUIN_GLYPHS[verb]}"/></svg>`,
+      ).context,
+    );
+  }
+  return ruinGlyphCache.get(verb);
+}
 let ruinKey = "";
 overlay.addChild(hoverRect);
 overlay.addChild(orderMarker);
@@ -1770,7 +1793,9 @@ function drawFurniture(g, id, x, y, tint, n) {
       g.rect(px, py, T, T).stroke({ color: dark, width: 1 });
       break;
     }
-    case "broken_gate": {
+    case "broken_gate":
+    case "gate_ruin": {
+      // Обследованный (§12.379) выглядит так же — разница в глифе «?» / ключ.
       // Сломанный шлюз (§12.376): та же плита, но сорванная — перекошенные
       // полосы, провал посередине и обломки кромки. Читается «был выход».
       g.rect(px, py, T, T).fill(0x2c2a25);
@@ -3354,7 +3379,7 @@ function renderSnapshot(snap) {
   syncNewsMarks();
   syncStockWindow();
   syncTileButtons(snap.techs, snap.tiles_open, snap.structures_open);
-  syncRuins(snap.tiles_open);
+  syncRuins();
   renderNotePanel(snap.notes, snap.tick);
   renderGoalsPanel(snap.goals, snap.goals_required, snap);
   noteSkillUps(snap);
@@ -4866,10 +4891,15 @@ function renderCellPanel(snap) {
   // не завезли, работа и не начнётся (§12.15).
   const bp = (snap.blueprints ?? []).find((b) => b.x === x && b.y === y);
   if (bp) {
+    const bpDef = meta.palette[bp.tile];
     const what =
       bp.tile < 0
         ? "Разбор"
-        : `Стройка: ${esc(meta.palette[bp.tile]?.label || meta.palette[bp.tile]?.id || "?")}`;
+        : def?.examine && def.examine === bpDef?.id
+          ? "Обследование"
+          : def?.repair && def.repair === bpDef?.id
+            ? `Ремонт: ${esc(bpDef?.label || bpDef?.id)}`
+            : `Стройка: ${esc(bpDef?.label || bpDef?.id || "?")}`;
     const supplied = bp.delivered >= bp.need;
     const pct = supplied
       ? bp.total > 0
@@ -4882,7 +4912,11 @@ function renderCellPanel(snap) {
       '<div class="cat-skill">' +
         `<div class="cat-row"><span>${what}</span><b>${pct}%</b></div>` +
         `<div class="bar"><i style="width:${pct}%"></i></div>` +
-        `<div class="cat-sub">${supplied ? "материал на месте" : `завезено ${bp.delivered} из ${bp.need}`}</div>` +
+        // У работы без цены (обследование руины, §12.379) про материал
+        // говорить нечего — строка «материал на месте» читалась бы загадкой.
+        (bp.need > 0
+          ? `<div class="cat-sub">${supplied ? "материал на месте" : `завезено ${bp.delivered} из ${bp.need}`}</div>`
+          : "") +
         // Постройку ставят на чистый пол (§12.237): пока уборка не унесла
         // кучи, строитель не придёт, и без этой строки площадка с материалом
         // на месте молчала бы о том, чего ждёт (§12.53). Число — из ядра.
@@ -4902,6 +4936,23 @@ function renderCellPanel(snap) {
               .map((m) => `${itemGlyph(m.item)}${m.left}`)
               .join(" ")}</div>`) +
         "</div>",
+    );
+  }
+
+  // Руина (§12.379): что с ней делать, говорит она сама — `examine`, потом
+  // `repair`. Работу размечает кнопка, а возьмёт её любой свободный кот, как
+  // чертёж; приказ выбранному коту по клетке посылает именно его. Цена ремонта
+  // написана на кнопке (§12.80). Размеченная работа отвечает полоской выше.
+  const fix = def && (def.examine || def.repair);
+  if (fix && !bp) {
+    const target = meta.palette.find((p) => p.id === fix);
+    const label = def.examine
+      ? "Обследовать"
+      : `Починить: ${esc(target?.label || fix)} ${costChips(target?.cost)}`;
+    parts.push(
+      `<div class="cat-sub">${def.examine ? "что с этим делать, пока неясно" : "обследовано: понятно, как чинить"}</div>`,
+      `<button class="tool ruin-fix" data-key="fix@${x}, ${y}"` +
+        ` data-x="${x}" data-y="${y}">${label}</button>`,
     );
   }
 
@@ -8070,6 +8121,9 @@ function command(global, add) {
 const HAND_WORDS = {
   take: "взять из кучи",
   put: "положить сюда",
+  // Руина отвечает работой над собой (§12.379): пойдёт именно этот кот.
+  examine: "обследовать",
+  repair: "починить",
   site: "отнести на стройку",
   shop: "отнести к станку",
 };
@@ -8328,32 +8382,37 @@ function placeableArea() {
   return area;
 }
 
-// Клетки руин, у которых открыт тайл-починка (§12.376): руина — `fixed` в
-// палитре, починка — тайл с `on` на неё. Где ставить, решает ядро (маска в
-// руке игрока); здесь только приглашение — «эту руину уже можно починить».
-function syncRuins(open) {
+// Клетки руин (§12.376, §12.379): рамка и знак глагола — приглашение, а не
+// правило: что сделает клик, решает ядро (`fix_at`, `hand_tag`).
+function syncRuins() {
+  // Руина говорит сама, что с ней делать (§12.379): `examine`, потом `repair`.
+  // Ворот у этого нет — кнопка в панели клетки и приказ коту работают сразу.
   const pal = meta?.palette ?? [];
-  const fixable = new Set();
-  pal.forEach((t, i) => {
-    if (!t.on || !(open ?? [])[i]) return;
-    const below = pal.findIndex((b) => b.id === t.on);
-    if (below >= 0 && pal[below].fixed) fixable.add(below);
-  });
   const cells = [];
-  if (mapCells && fixable.size) {
+  if (mapCells) {
     for (let i = 0; i < mapCells.length; i++) {
-      if (fixable.has(mapCells[i])) cells.push(i);
+      const def = pal[mapCells[i]];
+      if (def?.examine) cells.push([i, "examine"]);
+      else if (def?.repair) cells.push([i, "repair"]);
     }
   }
-  const key = cells.join(",");
+  const key = cells.map(([i, v]) => `${i}${v[0]}`).join(",");
   if (key === ruinKey) return;
   ruinKey = key;
   ruinGfx.clear();
+  for (const n of ruinMarks.removeChildren()) n.destroy();
   const W = meta.width;
-  for (const i of cells) {
+  const size = TILE * 0.62;
+  for (const [i, verb] of cells) {
     const x = i % W;
     const y = (i - x) / W;
     ruinGfx.rect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2);
+    const mark = new Graphics(ruinGlyphContext(verb));
+    mark.scale.set(size / 24);
+    mark.x = x * TILE + (TILE - size) / 2;
+    mark.y = y * TILE + (TILE - size) / 2;
+    mark.tint = COLORS.placeable;
+    ruinMarks.addChild(mark);
   }
   if (cells.length) ruinGfx.stroke({ color: COLORS.placeable, width: 2.5 });
 }
@@ -8762,6 +8821,9 @@ const KEEPS_CELL = new Set([
   // пометку» недостижимой, у заказа — спрятало бы ответ («станок свободен»).
   "store",
   "cancelCraft",
+  // «Обследовать» и «Починить» у руины (§12.379) — там же и по тому же
+  // доводу: ответ («обследование 40 %») стоит в этой же панели.
+  "fix",
   // Набор ящика (§12.195) — там же и по тому же доводу: значки стоят в панели
   // самой клетки, и снятое выделение закрыло бы её тем же кликом, которым
   // игрок только что выбрал предмет. А выбирают тут по нескольку подряд.
