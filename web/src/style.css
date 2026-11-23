@@ -1028,6 +1028,57 @@ main#stage.mode-cursor #mode-banner {
 .crew-head.crew-mission + .squad-head {
   margin-top: 4px;
 }
+/* Полоса идущей вылазки (§12.389): прогноз и добыча слева, «Отменить» и
+   значки правила справа. Высота держится под кнопку — на уходе она пропадает,
+   и полоса не должна сжиматься под соседями. */
+.crew-trip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 24px;
+  margin: 2px 0 4px;
+}
+.crew-trip + .squad-head {
+  margin-top: 4px;
+}
+.crew-trip-what {
+  flex: 1;
+  min-width: 0;
+}
+.crew-trip-what .raidwin-verdict,
+.crew-trip-what .raidwin-loot,
+.crew-trip-what .raidwin-gather {
+  margin-top: 0;
+}
+/* Добыча переносится по фишкам, а не уезжает под кнопки: у дальних заказов
+   её пять-шесть видов и строка образцов ниже. Вердикт — целыми кусками. */
+.crew-trip-what .raidwin-verdict > * {
+  white-space: nowrap;
+}
+.crew-trip-what .raidwin-verdict,
+.crew-trip-what .raidwin-loot,
+.crew-trip-what .raidwin-gather {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.crew-trip-act {
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px;
+  flex: none;
+}
+/* Кнопки полосы — одного роста: «Отменить» и значки правила (их общий
+   `.raid-icon` рассчитан на карточку заказа и тут вдвое выше строки). */
+.crew-trip-act .tool {
+  height: 24px;
+  min-width: 24px;
+  width: auto;
+  padding: 0 8px;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+}
 .crew-head:first-child {
   margin-top: 0;
 }
@@ -1058,6 +1109,48 @@ main#stage.mode-cursor #mode-banner {
 .raidwin-crew .crew-row:has(> .nearby-pick.on) {
   border-color: var(--accent);
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+/* Перетаскивание котов (§12.392): призрак под курсором и зоны броска. */
+.crew-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: 0.92;
+}
+.crew-ghost .crew-row {
+  border-color: var(--accent);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.crew-ghost-why {
+  position: absolute;
+  left: 8px;
+  bottom: -18px;
+  font-size: 11px;
+  color: var(--bad);
+  white-space: nowrap;
+}
+body.crew-dragging,
+body.crew-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+.raidwin-crew [data-drop].drop-ok {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+  border-radius: 7px;
+}
+.raidwin-crew [data-drop].drop-bad {
+  outline: 2px dashed var(--bad);
+  outline-offset: 2px;
+  border-radius: 7px;
+}
+/* Пустое «Без отряда» на время жеста — место, куда бросить. */
+.raidwin-crew .crew-list[data-drop="free"]:empty {
+  min-height: 44px;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
 }
 .raidwin-crew .crew-row:has(> .crew-pick.idle) {
   border-color: var(--bad);

@@ -579,6 +579,182 @@ onPanelClick(raidWinEl, ".crew-out", (b) => {
     y: Number(b.dataset.y),
   });
 });
+// Перетаскивание котов между отрядами и «Без отряда» (§12.392). Жест свой, на
+// pointer-событиях, а не HTML5 `draggable`: строки штаба переписываются по
+// снимку, и пересобранный посреди жеста узел обрывает родной drag молча, по-
+// разному в разных браузерах (те же грабли, что §12.84). Бросок — те же
+// команды, что «+» и «−» в правке состава: `enlist` (перевод из соседнего
+// отряда ядро делает само, §12.61) и `dismiss`. Режима правки жест не
+// требует: §12.359 закрыл **клик**, который незаметно становился приказом, а
+// перетаскивание намеренно по построению.
+//
+// Тащат по порогу в 6 px — до него это обычный клик (осмотр, отметка). После
+// порога клик гасится: `mouseup` ловится на окне в фазе захвата, раньше
+// `onPanelClick`. `preventDefault` на `pointerdown` нельзя — он погасил бы
+// совместимые mouse-события, то есть все клики штаба.
+let crewDrag = null;
+const DRAG_START = 6;
+// Куда можно бросить этого кота и почему нельзя — словом (§12.53).
+// Зоны: `free` — «Без отряда», `x,y` — состав отряда, `radio@x,y` — место его
+// радиста (§12.393). `null` — бросок сюда ничего не меняет.
+function crewDropWhy(drag, drop) {
+  if (!drop) return null;
+  if (drop === "free") return drag.from ? "" : null;
+  const radio = drop.startsWith("radio@");
+  const [x, y] = drop.replace("radio@", "").split(",").map(Number);
+  const f = drag.from;
+  if (f && f.x === x && f.y === y && f.radio === radio) return null;
+  const n = nodeAt(x, y);
+  if (!n || n.busy) return `«${n?.name ?? ""}» в деле`;
+  if (wounded.has(drag.id)) return "ранен";
+  // Допуск радиста считает ядро (`may_relay`, §12.291), вид его только читает.
+  if (radio && !drag.cat.may_relay) return `не умеет «${relayLevel(drag.cat).name}»`;
+  return "";
+}
+function crewDropAt(px, py) {
+  const el = document.elementFromPoint(px, py)?.closest("[data-drop]");
+  return el && el.dataset.drop && raidWinEl.contains(el) ? el : null;
+}
+function crewDragMark(el, why) {
+  for (const o of raidWinEl.querySelectorAll(".drop-ok, .drop-bad"))
+    if (o !== el) o.classList.remove("drop-ok", "drop-bad");
+  if (!el) return;
+  el.classList.toggle("drop-ok", why === "");
+  el.classList.toggle("drop-bad", !!why);
+}
+raidWinEl.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || crewDrag) return;
+  const pick = e.target.closest(".crew-pick");
+  if (!pick || !raidWinEl.contains(pick)) return;
+  const cat = (lastSnap?.entities ?? []).find((c) => c.id === pick.dataset.id);
+  // Ушедший и пленный не тащатся — их нет на базе. Отряд в деле заморожен
+  // (§12.22). Радист тащится от места радиста своего отряда (§12.393).
+  if (!cat || cat.away) return;
+  const from =
+    cat.post_x >= 0 && nodeAt(cat.post_x, cat.post_y)
+      ? { x: cat.post_x, y: cat.post_y, radio: true }
+      : cat.crew_x >= 0
+        ? { x: cat.crew_x, y: cat.crew_y, radio: false }
+        : null;
+  if (from && nodeAt(from.x, from.y)?.busy) return;
+  // Размер и копию снимаем **сейчас**, а не на пороге: строку пересобирает
+  // снимок (бодрость, занятие), и запомненный узел к началу жеста уже вне
+  // документа — у такого нулевой прямоугольник, и призрак улетал в угол окна.
+  const row = pick.closest(".crew-row") ?? pick;
+  const rect = row.getBoundingClientRect();
+  crewDrag = {
+    id: cat.id,
+    cat,
+    from,
+    x0: e.clientX,
+    y0: e.clientY,
+    px: e.clientX,
+    py: e.clientY,
+    rect,
+    copy: row.cloneNode(true),
+    ghost: null,
+    on: false,
+  };
+});
+function crewDragStart(d) {
+  d.on = true;
+  const r = d.rect;
+  // Обёртка с классом колонки — чтобы строка сохранила свой вид вне неё.
+  const g = document.createElement("div");
+  g.className = "crew-ghost raidwin-crew";
+  for (const t of d.copy.querySelectorAll("[data-tip]")) t.removeAttribute("data-tip");
+  g.appendChild(d.copy);
+  g.style.width = `${r.width}px`;
+  d.dx = d.x0 - r.left;
+  d.dy = d.y0 - r.top;
+  d.ghost = g;
+  d.why = document.createElement("div");
+  d.why.className = "crew-ghost-why";
+  g.appendChild(d.why);
+  document.body.appendChild(g);
+  document.body.classList.add("crew-dragging");
+  hideLiveTip();
+  // «Без отряда» появляется только на время жеста (`crewGroups`).
+  if (d.from) renderRaidWindow();
+  crewDragScroll();
+}
+// Автопрокрутка у края колонки: из верха длинного списка в низ иначе не
+// дотянуться. Кадром, пока жест жив, — курсор у края стоит, а не движется.
+function crewDragScroll() {
+  const d = crewDrag;
+  if (!d?.on) return;
+  const sc = raidUi?.crew?.closest(".raidwin-col");
+  if (sc) {
+    const r = sc.getBoundingClientRect();
+    if (d.py < r.top + 36) sc.scrollTop -= 10;
+    else if (d.py > r.bottom - 36) sc.scrollTop += 10;
+  }
+  crewDragMove(d.px, d.py);
+  requestAnimationFrame(crewDragScroll);
+}
+function crewDragMove(px, py) {
+  const d = crewDrag;
+  d.ghost.style.left = `${px - d.dx}px`;
+  d.ghost.style.top = `${py - d.dy}px`;
+  const el = crewDropAt(px, py);
+  const why = crewDropWhy(d, el?.dataset.drop);
+  crewDragMark(why == null ? null : el, why);
+  const text = why ? `нельзя: ${why}` : "";
+  if (d.why.textContent !== text) d.why.textContent = text;
+}
+function crewDragEnd(drop) {
+  const d = crewDrag;
+  crewDrag = null;
+  if (!d?.on) return;
+  d.ghost.remove();
+  document.body.classList.remove("crew-dragging");
+  crewDragMark(null);
+  // Клик, которым кончился жест, — не клик (осмотр, отметка): гасим его.
+  const eat = (ev) => {
+    ev.stopPropagation();
+    window.removeEventListener("mouseup", eat, true);
+  };
+  window.addEventListener("mouseup", eat, true);
+  setTimeout(() => window.removeEventListener("mouseup", eat, true), 0);
+  if (drop) {
+    const where = drop.dataset.drop;
+    if (crewDropWhy(d, where) === "") {
+      if (where === "free")
+        sendAction({ type: "dismiss", id: d.id, x: d.from.x, y: d.from.y });
+      else if (where.startsWith("radio@")) {
+        // `post_relay` сам снимает кота из бойцов и сменяет прежнего радиста.
+        const [x, y] = where.slice(6).split(",").map(Number);
+        sendAction({ type: "postRelay", id: d.id, x, y });
+      } else {
+        const [x, y] = where.split(",").map(Number);
+        sendAction({ type: "enlist", id: d.id, x, y });
+      }
+    }
+  }
+  renderRaidWindow();
+}
+window.addEventListener("pointermove", (e) => {
+  const d = crewDrag;
+  if (!d) return;
+  d.px = e.clientX;
+  d.py = e.clientY;
+  if (!d.on) {
+    if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < DRAG_START) return;
+    crewDragStart(d);
+  }
+  crewDragMove(e.clientX, e.clientY);
+});
+window.addEventListener("pointerup", (e) => {
+  if (!crewDrag) return;
+  crewDragEnd(crewDrag.on ? crewDropAt(e.clientX, e.clientY) : null);
+});
+window.addEventListener("pointercancel", () => crewDrag && crewDragEnd(null));
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && crewDrag?.on) {
+    e.stopPropagation();
+    crewDragEnd(null);
+  }
+}, true);
 // Строка списка радиста (§12.357): приписать или снять — те же команды, что
 // раньше у кнопки рации в строке кота.
 onPanelClick(raidWinEl, ".radio-pick", (b) => {
@@ -664,11 +840,11 @@ onPanelClick(raidWinEl, ".squad-fold", (b) => {
 // отряда — зачисляет только «+» в режиме правки.
 onPanelClick(raidWinEl, ".nearby-pick", (b) => {
   if (b.classList.contains("off")) return;
-  // Выбран отряд дома — свободный идёт **с ним** одной вылазкой (§12.365).
-  // Нет — отметка ведёт свободных одних, без отряда. Правка состава так не
-  // делает: в ней у строки свой «+».
-  const lead = !raidHome && raidWinAt ? nodeAt(raidWinAt.x, raidWinAt.y) : null;
-  if (!lead || lead.busy || crewEdit) raidHome = true;
+  // На заказ идёт **либо** отряд, **либо** свободные коты (§12.391): отметка
+  // свободного снимает выбор отряда. Взять свободного с отрядом ядро умеет
+  // (§12.365, `launch_nodes`), но вид это не собирает — в отряд зачисляют «+»
+  // в правке состава.
+  raidHome = true;
   const id = b.dataset.id;
   if (nearbyPick.has(id)) nearbyPick.delete(id);
   else nearbyPick.add(id);
@@ -699,26 +875,9 @@ onPanelClick(raidWinEl, ".raid-go", (b) => {
   // отвечает на неё свой обработчик: без этой проверки один клик отдал бы две
   // команды — отзыв и новую заявку.
   if (b.classList.contains("raid-stop")) return;
-  // Свободные коты, взятые с отрядом (§12.365), — одной командой с ним.
-  // Несколько отрядов на одну вылазку вид не собирает (§12.368): ядро это
-  // умеет (`launch_nodes`), но на дело идёт один отряд.
-  // Только на «Пошарить рядом»: дальние заказы свободных не берут (§12.371),
-  // и кнопка у них гаснет с причиной словом (`crewWhy`).
-  const units = (lastSnap?.free ?? []).filter((id) => nearbyPick.has(id));
-  if (units.length && !meta.missions[Number(b.dataset.def)]?.nearby) return;
-  if (units.length && raidWinAt) {
-    sendAction({
-      type: "launchNodes",
-      mission: Number(b.dataset.def),
-      cells: [raidWinAt.x, raidWinAt.y],
-      units,
-      site: b.dataset.site == null ? -1 : Number(b.dataset.site),
-    });
-    nearbyPick.clear();
-    syncNearbyPick();
-    syncSquadPick();
-    return;
-  }
+  // Отряд идёт один (§12.391): ни других отрядов (§12.368), ни свободных
+  // котов (§12.365) вид к нему не присоединяет, хотя ядро умеет
+  // (`launch_nodes`).
   sendAction({
     type: "launch",
     mission: Number(b.dataset.def),
@@ -5803,7 +5962,7 @@ function renderMissionPanel(list) {
 //   именно» спрашивают, уже открыв штаб;
 // * **сила / сложность** — там же: у ушедшей вылазки состав заморожен (§12.22),
 //   менять по этим числам нечего, а вывод из них и есть вердикт добычи;
-// * **репутация** — в подсказке и в `busyCard`: цена уплачена в момент ухода, и
+// * **репутация** — в подсказке: цена уплачена в момент ухода, и
 //   отменить её нечем.
 //
 // Вердикт при этом остаётся **словом в самой строке**, а не в подсказке: пока
@@ -5864,8 +6023,7 @@ function squadRow(node, m) {
   // ⚠️ **Срока в тиках рядом со стадией нет** (§12.167): доля пути стоит той же
   // строкой справа и отвечает на «скоро ли», а «вернутся через 233» — это она
   // же, только в единицах, которых на экране больше нигде нет. Точное число
-  // осталось там, где по нему решают: в штабе (`busyCard` — «вернутся через N
-  // из M»).
+  // осталось в штабе: «осталось N» над группой вылазки (`backIn`).
   //
   // ⚠️ **Чем отряд занят прямо сейчас — в одной строке с его именем** (§12.173),
   // мелким и приглушённым, как подпись. Строка сводки читается сверху вниз
@@ -5896,9 +6054,7 @@ function squadRow(node, m) {
   // Имя заказа при этом не пишется дважды: у отряда, идущего **по своему
   // правилу**, знак прирастает к тому же имени («↻ Свалка»). Правило на другой
   // заказ — отдельная приписка: это разные дела, и слить их в одно имя значило
-  // бы соврать про то, куда отряд уйдёт следующим кругом. То же деление, по
-  // которому `busyCard` в штабе называет заказ правила только тогда, когда он
-  // не совпадает с идущим.
+  // бы соврать про то, куда отряд уйдёт следующим кругом.
   const auto = node.auto >= 0 ? node.auto : -1;
   const sameRule = auto >= 0 && m && m.def === auto;
   const job = m
@@ -10952,10 +11108,7 @@ function raidGate(i, node) {
       ? gates?.unlocked && !nodes.length
         ? "дальние вылазки — только отрядом: нужен стол брифинга"
         : "дальние вылазки — только отрядом: выберите отряд слева"
-      : !node.nearby && !def.nearby && freeJoiners().length
-        ? "дальние вылазки — только отрядом, без свободных: снимите отметку" +
-          " или зачислите их в отряд (карандаш в шапке)"
-        : null;
+      : null;
   const ready =
     !crewWhy &&
     !nogate &&
@@ -16624,6 +16777,13 @@ function openRaidWindow(x, y, pick = null) {
   const solo = soloFreeCat();
   soloSeen = solo;
   if (pick == null && solo) pick = [solo];
+  // Отряд дома один и других не бывает — он и выбран (§12.390), если только
+  // окно не открыто на чём-то другом (клик по шлюзу, строка отряда).
+  const squad = soloFreeSquad();
+  soloSquadSeen = squad;
+  if (pick == null && x == null && squad) {
+    [x, y] = squad.split(",").map(Number);
+  }
   // Кого клик по шлюзу привёл к «Пошарить рядом» (§12.349): они уже отмечены,
   // и окно открывается сразу на окрестностях.
   nearbyPick = new Set(pick ?? []);
@@ -16662,33 +16822,26 @@ function soloFreeCat() {
     ? free[0]
     : null;
 }
+// Единственный отряд дома, и никого больше выбирать не из кого (§12.390):
+// ни другого отряда дома, ни свободного кота на базе. Ключ — клетка стола,
+// а не узел: узлы снимка пересоздаются каждым кадром.
+function soloFreeSquad() {
+  const home = nodes.filter((n) => !n.busy);
+  if (home.length !== 1) return null;
+  const loose = (lastSnap?.entities ?? []).some(
+    (e) =>
+      !e.away &&
+      !(e.crew_x >= 0) &&
+      !(e.post_x >= 0 && nodeAt(e.post_x, e.post_y)),
+  );
+  return loose ? null : `${home[0].x},${home[0].y}`;
+}
+// Каким `soloFreeSquad` был в прошлый раз — по той же причине, что `soloSeen`.
+let soloSquadSeen = null;
 // Каким `soloFreeCat` был в прошлый раз: автовыбор срабатывает на **смене**
 // (окно открылось, кот вернулся с вылазки), а не каждым кадром, — иначе
 // снятую игроком отметку тут же ставило бы обратно.
 let soloSeen = null;
-// Прогноз отряда со взятыми свободными котами (§12.365) считает ядро
-// (`Snapshot::combo`): ему нужен стол отряда (`setSquadPick`) и отметки
-// свободных (`setNearbyPick`). Других отрядов в нём не бывает (§12.368).
-let squadPickSent = "";
-function syncSquadPick() {
-  const cells =
-    nearbyPick.size && raidWinAt && !raidHome
-      ? [[raidWinAt.x, raidWinAt.y]]
-      : [];
-  const key = cells.join(";");
-  if (key === squadPickSent) return;
-  squadPickSent = key;
-  worker.postMessage({ type: "setSquadPick", cells: cells.flat() });
-}
-// Свободные коты, отмеченные идти **с выбранным отрядом** (§12.365). На
-// дальние заказы вид их не пускает (§12.371): туда идёт отряд, и только он —
-// ядро умеет и так (`launch_nodes`), но решение «кто идёт далеко» принимается
-// составом отряда, а не отметкой мимо него.
-function freeJoiners() {
-  if (!raidWinAt || raidHome) return [];
-  const free = new Set(lastSnap?.free ?? []);
-  return [...nearbyPick].filter((id) => free.has(id));
-}
 // Держит ли вылазка этот стол (§12.364): ведущий или присоединённый — то же
 // выражение, что `Mission::holds` в ядре.
 function missionHolds(m, x, y) {
@@ -16823,7 +16976,6 @@ function onSquadRenamed(m) {
 
 function closeRaidWindow() {
   endSquadRename(true);
-  syncSquadPick();
   // Гасим на закрытии: колонка заказов в штабе видна **всегда**, даже когда
   // отряд в поле, — значит визит и есть «посмотрел» (§12.120). Но с §12.243
   // колонка режется участком, и прочитанным идёт лишь то, что показывалось.
@@ -17381,6 +17533,15 @@ function renderRaidWindow() {
       syncNearbyPick();
     }
   }
+  const squad = soloFreeSquad();
+  if (squad !== soloSquadSeen) {
+    soloSquadSeen = squad;
+    if (squad && !nearbyPick.size && !crewEdit) {
+      const [x, y] = squad.split(",").map(Number);
+      raidWinAt = { x, y };
+      raidHome = false;
+    }
+  }
   // Узел мог не называться вовсе (дверь тулбара) или пропасть вместе со
   // снесённым гаражом — тогда берём тот же, что взяла бы новость: первый
   // свободный, иначе первый по порядку. Закрывать окно на снос нельзя: у базы
@@ -17411,18 +17572,12 @@ function renderRaidWindow() {
     crewEdit = null;
     if (slotPick?.slot === "radio") slotPick = null;
   }
-  syncSquadPick();
-  // Прогноз отряда со свободными — из ядра (`combo`), тот же `NodeSnap`; пока
-  // ответ по новому выбору не пришёл, честнее прогноз самого отряда.
-  const freeNow = new Set(lastSnap.free ?? []);
-  const joinFree = sel ? [...nearbyPick].filter((id) => freeNow.has(id)) : [];
-  const want = [...new Set([...(sel?.crew ?? []), ...joinFree])]
-    .sort()
-    .join(",");
-  const combo =
-    joinFree.length && lastSnap.combo && lastSnap.combo.crew.join(",") === want
-      ? lastSnap.combo
-      : null;
+  // Отряд или свободные, не вместе (§12.391): выбранный отряд снимает
+  // отметки — так ловятся все дороги к отряду разом, карта включительно.
+  if (sel && nearbyPick.size) {
+    nearbyPick.clear();
+    syncNearbyPick();
+  }
   if (!raidUi) buildRaidWindow("one");
   raidUi.tabs.hidden = true;
   raidUi.nearbyCrew.hidden = true;
@@ -17454,8 +17609,8 @@ function renderRaidWindow() {
   // их не берут (§12.371), и карточка такого заказа считает отряд без них
   // (`squad`), иначе сила и доля обещали бы вылазку, которой не будет.
   syncRaidCards(
-    sel && raid ? [raid] : [],
-    combo ? { ...combo, squad: sel } : (sel ?? outskirtsNode()),
+    sel && raid ? raid : null,
+    sel ?? outskirtsNode(),
   );
   // Список вещей слота (§12.293) — один на всю колонку.
   syncSlotPop("raid");
@@ -17671,6 +17826,7 @@ function crewGroups(sel) {
         key: `sqm${n.x},${n.y}`,
         head: `${backIn(raid)}${missionLabel(raid.def)} · ${squadMark(raid)}`,
         bare: true,
+        trip: { m: raid, node: n },
         rows: [],
       });
     const folded = squadFolds.has(`${n.x},${n.y}`);
@@ -17720,6 +17876,10 @@ function crewGroups(sel) {
         groups.push({
           key: `sq${n.x},${n.y}:${g.op ? "op" : "crew"}`,
           head: g.op && g.rows.length ? g.head : "",
+          // Состав — зона броска (§12.392), радист — нет: у него свой слот.
+          // Отряд в деле — тоже зона: на нём бросок отвечает причиной. Место
+          // радиста — своя зона: бросок туда сажает за рацию (§12.393).
+          drop: g.op ? `radio@${n.x},${n.y}` : `${n.x},${n.y}`,
           rows,
         });
       }
@@ -17758,15 +17918,12 @@ function crewGroups(sel) {
     // зачисляла в него, и осмотр кота становился приказом незаметно.
     const can = free.includes(e.id);
     const on = can && nearbyPick.has(e.id);
-    // При выбранном отряде дома свободный идёт с ним (§12.365).
-    const withSquad = !!sel && !sel.busy && !crewEdit;
+    // Отметка снимает выбор отряда (§12.391): идут отряд или свободные.
     const tip = can
       ? on
-        ? withSquad
-          ? "Не брать с отрядом: клик"
-          : "Не пойдёт без отряда: клик"
-        : withSquad
-          ? "Взять с собой: пойдёт одной вылазкой с выбранным отрядом"
+        ? "Не пойдёт без отряда: клик"
+        : sel && !sel.busy
+          ? "Отметить: пойдёт без отряда — выбор отряда снимется"
           : "Отметить: пойдёт без отряда"
       : `Не пойдёт: ${note || "занят"}`;
     const pick =
@@ -17794,7 +17951,10 @@ function crewGroups(sel) {
       raidRows.get(m).push(rowOf(e));
     }
   }
-  if (rows.length) freeGroups.push({ key: "free", head: "Без отряда", rows });
+  // Тащат кота из отряда — «Без отряда» стоит и пустой: это зона броска
+  // (§12.392), и без неё вычеркнуть последнего свободного было бы некуда.
+  if (rows.length || crewDrag?.from)
+    freeGroups.push({ key: "free", head: "Без отряда", drop: "free", rows });
   for (const [m, r] of raidRows) {
     busy.push({
       eta: eta(m),
@@ -17803,6 +17963,9 @@ function crewGroups(sel) {
           // На «Пошарить рядом» вылазок по заказу бывает несколько (§12.363).
           key: `out${m.def}@${m.x},${m.y}`,
           head: `${backIn(m)}${missionLabel(m.def)} · ${squadMark(m)}`,
+          // Свободные, ушедшие с отрядом (§12.365), своей полосы не носят:
+          // вылазка у них общая, и о ней говорит полоса отряда.
+          trip: m.solo ? { m, node: null } : null,
           rows: r,
         },
       ],
@@ -17849,6 +18012,7 @@ function syncCrewRows(sel) {
       // выбором. Стрелка маленькая и стоит поверх шапки в правом верхнем углу
       // (§12.356), а шапка — на всю ширину.
       const head = mk(`shead:${g.key}`, "squad-head");
+      head.dataset.drop = `${g.sel.x},${g.sel.y}`;
       const fold = mk(`fold:${g.key}`, "tool squad-fold", "button");
       fold.dataset.key = `fold@${g.sel.x},${g.sel.y}`;
       fold.dataset.x = g.sel.x;
@@ -17915,13 +18079,20 @@ function syncCrewRows(sel) {
       head.classList.toggle("crew-section", !!g.section);
       head.classList.toggle("squad-crew", g.key.startsWith("sq") && !g.bare);
       head.classList.toggle("crew-mission", !!g.bare);
+      if (head.dataset.drop !== (g.drop ?? "")) head.dataset.drop = g.drop ?? "";
       if (head.textContent !== g.head) head.textContent = g.head;
       order.push(head);
+    }
+    if (g.trip) {
+      const trip = mk(`trip:${g.key}`, "crew-trip");
+      setHtml(trip, tripHtml(g.trip.m, g.trip.node));
+      order.push(trip);
     }
     if (g.section || g.bare) continue;
     const list = mk(`list:${g.key}`, "crew-list");
     // Состав и радист отряда — с отступом под его шапкой (§12.353).
     list.classList.toggle("squad-crew", g.key.startsWith("sq"));
+    if (list.dataset.drop !== (g.drop ?? "")) list.dataset.drop = g.drop ?? "";
     order.push(list);
     const rows = g.rows.map((r) => {
       const row = mk(`row:${r.id}`, "crew-row");
@@ -17939,17 +18110,78 @@ function syncCrewRows(sel) {
   }
 }
 
+// Полоса идущей вылазки в «На вылазках» (§12.389): чем кончится и что
+// принесёт — и, пока не ушли, «Отменить». Справа своей карточки у вылазки
+// нет: заказ, на который ушли, из колонки выброшен, и всё про поход стоит
+// здесь, рядом с теми, кто в него ушёл.
+//
+// * **Вердикт — только плохой** (§12.167): полный успех не новость. Провал
+//   называется словом и прячет добычу — домой он не принесёт ничего.
+// * **Добыча — уже с долей**, из ядра (`share`, `loot`, инвариант 14), тем же
+//   `missionLootRow`, что у карточки заказа.
+// * **«Отменить» — тот же `.raid-stop`**, что стоял в карточке справа:
+//   отряд отзывается по столу, свободные коты — по заказу (§12.349; группа на
+//   заказ в виде одна, значит отзыв адресный). Кнопка стоит справа в той же
+//   полосе, и высота полосы от неё не зависит (`min-height`): на уходе она
+//   пропадает, а соседи по колонке не прыгают (§12.172).
+// * **Правило отряда** (⏸/▶ и ×) — тут же: снять или усыпить его на всё
+//   время похода больше негде.
+function tripHtml(m, node) {
+  const def = (meta.missions ?? [])[m.def] ?? {};
+  const what = m.failed
+    ? '<div class="raidwin-verdict"><span class="bad">провал</span>' +
+      "<i>вернутся без добычи</i></div>"
+    : (!m.rescue && m.share < 100
+        ? `<div class="raidwin-verdict"><span class="warn">доля ${m.share} %</span>` +
+          `<i>сила ${m.strength} против сложности ${m.danger}</i></div>`
+        : "") + missionLootRow(def, m.share, !!m.samples, m.loot, m.gather, true);
+  const act = [];
+  if (!m.away)
+    act.push(
+      `<button class="tool raid-stop crew-stop" data-key="stop${m.def}@${m.x},${m.y}"` +
+        ` data-def="${m.def}" data-x="${m.x}" data-y="${m.y}"${m.solo ? ' data-solo="1"' : ""}` +
+        ` data-tip="${
+          m.solo
+            ? "Ещё не ушли — вернуть котов и отменить заявку"
+            : "Отряд ещё не ушёл — вернуть его и отменить заявку"
+        }">Отменить</button>`,
+    );
+  if (node && node.auto >= 0 && !autoGateHint("raids")) {
+    const at = `${node.x},${node.y}`;
+    act.push(
+      `<button class="tool raid-icon raid-pause${node.auto_on ? " on" : ""}"` +
+        ` data-key="pause@${at}" data-on="${node.auto_on ? "" : "1"}"` +
+        ` data-x="${node.x}" data-y="${node.y}"` +
+        ` data-tip="${
+          node.auto_on
+            ? `Отряд ходит на «${esc(missionLabel(node.auto))}» сам — приостановить правило`
+            : "Правило стоит на паузе — вернуть отряд на этот круг"
+        }">` +
+        (node.auto_on ? "⏸" : "▶") +
+        "</button>" +
+        `<button class="tool raid-icon raid-auto" data-key="off@${at}" data-def="-1"` +
+        ` data-x="${node.x}" data-y="${node.y}"` +
+        ' data-tip="Забыть правило совсем">×</button>',
+    );
+  }
+  return (
+    `<div class="crew-trip-what">${what || "&nbsp;"}</div>` +
+    (act.length ? `<div class="crew-trip-act">${act.join("")}</div>` : "")
+  );
+}
+
 // Карточки заказов. Их число в партии не меняется (палитра миссий), поэтому
 // закрытые известностью **прячем, а не удаляем**: удаление вернуло бы
 // перестройку колонки на ровном месте.
-function syncRaidCards(trips, node) {
-  // Идущие вылазки этой вкладки: у отряда — одна, у свободных котов без
-  // стола (§12.349) — сколько ушло.
-  const raid = trips[0] ?? null;
-  // «Пошарить рядом» идущая вылазка не прячет (§12.363): пока у заказа есть
-  // места, свободные коты могут добавить к ушедшим ещё группу.
-  const going = (i) =>
-    !meta.missions[i]?.nearby && trips.some((t) => t.def === i);
+function syncRaidCards(raid, node) {
+  // `raid` — вылазка выбранного отряда в деле, иначе `null`.
+  // Заказ, на который уже ушли, из колонки **выброшен целиком** (§12.389) —
+  // чей бы ни был поход: отряда, свободных котов или правила. Вылазка говорит
+  // о себе слева, своей группой в «На вылазках» (`tripHtml`): прогноз, добыча
+  // и «Отменить», пока не ушли. «Пошарить рядом» не исключение: ядро держит
+  // на нём несколько вылазок (§12.363, ради будущих патрулей), но вид
+  // отправляет на заказ одну.
+  const going = (i) => missionsOut.some((t) => t.def === i);
   const nothing =
     // Пустая колонка читается как поломка окна, а не как «пока нечего»
     // (§12.79): с сокрытием по известности список впервые в принципе умеет
@@ -17996,7 +18228,7 @@ function syncRaidCards(trips, node) {
   const want = (meta.missions ?? []).map((_, i) => [
     String(i),
     open[i] && here(i)
-      ? raidCard(i, node.squad && !meta.missions[i]?.nearby ? node.squad : node)
+      ? raidCard(i, node)
       : "",
     i,
   ]);
@@ -18004,19 +18236,31 @@ function syncRaidCards(trips, node) {
   // он взять не может, а стопка карточек с «Нельзя» под ней прятала ответ на
   // «куда он идёт». Свободных котов без отряда это не касается: у них
   // вылазок бывает несколько, и отметить новых можно и при ушедших.
-  if (raid && !node.nearby) for (const w of want) w[1] = "";
-  else if (want.every(([, html]) => !html)) {
-    // Единственный заказ, который отряд как раз и ведёт, — это не «заказов
-    // пока нет»: колонка пуста по другой причине, и называть её надо своей
-    // (§12.53). Третья причина — участок: заказы есть, но не здесь, и слово
-    // обязано звать к карте, а не к известности.
+  // Своей карточки у вылазки справа больше нет (§12.389): она стоит слева,
+  // и колонка называет это словом, а не молчит (§12.53).
+  if (raid && !node.nearby) {
+    for (const w of want) w[1] = "";
     want.push([
       "none",
-      raid
-        ? '<div class="cat-sub">других заказов нет — этот отряд уже в деле</div>'
-        : open.some(Boolean)
-          ? `<div class="cat-sub">на участке «${esc(siteLabel(pick))}» заказов нет — выбери другой на карте</div>`
-          : nothing,
+      '<div class="cat-sub">отряд в деле — его вылазка слева, в «На вылазках»</div>',
+    ]);
+  } else if (want.every(([, html]) => !html)) {
+    // Колонка пуста по разным причинам, и называть их надо своими словами
+    // (§12.53): заказы есть, но не на этом участке, — слово зовёт к карте, а
+    // не к известности.
+    // Заказ здесь есть, но в деле (§12.389) — значит не «заказов нет», а
+    // «свободных нет»: тот, что был, ушёл влево, в «На вылазках».
+    const busyHere = (meta.missions ?? []).some(
+      (_, i) => going(i) && here(i) && !hiddenRaid(i),
+    );
+    // У Базы участка нет: `pickedSite` при ней отдаёт запасной участок, и
+    // строка называла бы место, которое на карте не выбрано.
+    const place = base ? "База" : siteLabel(pick);
+    want.push([
+      "none",
+      busyHere || open.some(Boolean)
+        ? `<div class="cat-sub">на участке «${esc(place)}» ${busyHere ? "свободных " : ""}заказов нет — выбери другой на карте</div>`
+        : nothing,
     ]);
   }
   // Что игрок здесь видел, — ради гашения новостей на закрытии (§12.243):
@@ -18067,10 +18311,6 @@ function syncRaidCards(trips, node) {
       want.unshift(ruled);
     }
   }
-  // Карточка идущей вылазки прикалывается **первой и вне групп**: она не заказ,
-  // а ответ на «чем занят этот отряд прямо сейчас».
-  for (const t of [...trips].reverse())
-    want.unshift([`busy${t.def}@${t.site}`, busyCard(t, node)]);
 
   const els = raidUi.cardEls;
   const keep = new Set();
@@ -18137,7 +18377,9 @@ function missionCostFacts(def, share) {
 // нельзя (§12.53): фишка в строке добычи обещала бы то, чего не будет. Есть ли
 // прибор, говорит ядро (`samples` у узла и у вылазки); какие предметы
 // «собирают», а не подбирают, — рулсет (`collected`).
-function missionLootRow(def, share, samples, counts, gather) {
+// `onlyGot` — только то, что отряд привезёт (§12.394): у идущей вылазки решение
+// принято, и зачёркнутое «не достанется» уже ни к чему не зовёт.
+function missionLootRow(def, share, samples, counts, gather, onlyGot = false) {
   if (def.rescue) {
     return '<div class="cat-sub">возвращает пленного, а не добычу</div>';
   }
@@ -18197,7 +18439,7 @@ function missionLootRow(def, share, samples, counts, gather) {
       );
     }
   }
-  const lost = samples ? [] : gathered.filter(([id]) => seenId(id));
+  const lost = samples || onlyGot ? [] : gathered.filter(([id]) => seenId(id));
   // Не достанется — зачёркнутой фишкой в той же строке добычи, а причина — в
   // подсказке (§12.53: названа, но не отдельной строкой под каждым заказом).
   const miss = lost.length
@@ -18638,134 +18880,6 @@ function commsLost(raid) {
 // то есть окно, открытое ради решений об отряде, на время вылазки переставало
 // показывать сам отряд и не давало ни одного решения о нём. Здесь их два, и оба
 // касаются именно этого узла: отозвать ещё не ушедших и снять повтор.
-function busyCard(raid, node) {
-  const at = `${node.x},${node.y}`;
-  const label = esc(missionLabel(raid.def));
-  const def = (meta.missions ?? [])[raid.def] ?? {};
-  const rows = [`<div class="raidwin-name">${label}</div>`];
-  // Прогноз идущей вылазки — из тех же полей снимка, что и в панели справа
-  // (`outcome`, инвариант 14). Пока отряд собирается, это ещё и предупреждение:
-  // увидел «провал» — успел отозвать, и кнопка отзыва стоит тут же.
-  const verdict = raid.failed
-    ? '<span class="bad">провал</span>'
-    : raid.rescue
-      ? '<span class="good">выносят своих</span>'
-      : raid.share >= 100
-        ? '<span class="good">вся добыча</span>'
-        : `<span class="warn">добыча ${raid.share} %</span>`;
-  rows.push(
-    `<div class="raidwin-verdict">${verdict}` +
-      `<i>сила ${raid.strength} против сложности ${raid.danger}</i></div>`,
-  );
-  // Полная информация об идущей вылазке стоит здесь и **только здесь**: её
-  // карточка в списке заказов ниже спрятана (`syncRaidCards`), потому что
-  // вторым экземпляром она отвечала на те же вопросы худшими словами — прогноз
-  // там гадательный («отряд не набран»), а вместо кнопки стояло «Нельзя» с
-  // причиной «этот отряд её сейчас и ведёт», то есть отсылка на самоё себя.
-  // Значит цена, награда, добыча и стороны обязаны быть тут: спрятать карточку,
-  // не перенеся их, — это отказ без причины (§12.53).
-  // Ворота узла — один раз на карточку: из них берётся и вилка состава, и
-  // причина, по которой погашена «Отправить» (§12.53).
-  const busyG = raidGate(raid.def, node);
-  const facts = [
-    [
-      "срок",
-      // Стадию называет **ядро** (`MissionSnap::phase`, §12.168) — тем же
-      // разложением срока, каким его сложил `duration`, — а вид только
-      // переводит тег словом, тем же словарём, что и строка отряда
-      // (`RAID_PHASE`). «В поле» отвечало на вопрос, ответ на который стоит
-      // рядом числами: где отряд, видно из «вернутся через N из M», а не
-      // видно как раз того, дошли ли они уже до места.
-      raid.away
-        ? // Полного срока здесь нет (§12.191): «из 180» отвечало на «стоит ли
-          // брать этот заказ», а решение это уже принято — отряд ушёл, и
-          // менять нечего (§12.22). Осталось «скоро ли», то есть остаток; долю
-          // пути рисует полоска в строке отряда, и число рядом с ней спорило бы.
-          `${RAID_PHASE[raid.phase] ?? "в поле"} · вернутся через ${raid.left}`
-        : raid.resting
-          ? // Оговорки «пойдёт с ухода» здесь нет (§12.191): срок замерзает на
-            // уходе (§12.70), а до него его в строке и нет вовсе — объяснять
-            // отсутствующее число значит отвечать на незаданный вопрос.
-            "ждут, пока выспится"
-          : gatherWord(raid),
-    ],
-    // Вилка состава стоит и здесь (§12.71): у ушедшего отряда она ничего не
-    // решает — состав заморожен (§12.22), — но без неё карточка идущей вылазки
-    // на одну строку короче соседней, и колонка прыгает на каждом уходе и
-    // возвращении. Текст ровно тот же, что в карточке заказа: два разных слова
-    // об одном и том же читались бы как разные факты.
-    [
-      "состав",
-      busyG.need === busyG.most
-        ? `нужно котов ${busyG.need}`
-        : `котов ${busyG.need}—${busyG.most}`,
-    ],
-    ...missionCostFacts(def, raid.share),
-  ];
-  rows.push(
-    '<div class="raid-facts">' +
-      facts.map(([k, v]) => `<i>${k}</i><span>${v}</span>`).join("") +
-      "</div>",
-  );
-  for (const row of [
-    missionLootRow(def, raid.share, !!raid.samples, raid.loot, raid.gather),
-    missionSidesRow(def),
-  ]) {
-    if (row) rows.push(row);
-  }
-  // Ряд кнопок тот же, что у обычной карточки заказа, и это не украшение: пока
-  // отряд в поле, колонка справа показывает те же карточки с «Отправить», и
-  // карточка идущей вылазки, устроенная иначе, читалась бы другим экраном.
-  //
-  // ⚠️ **Но пока отряд не ушёл, на месте «Отправить» стоит живая «Отменить»**
-  // (§12.193, отменяет прежнее решение убрать отзыв отсюда). Довод «кнопка
-  // мелькает» на живой партии не подтвердился: сбор идёт, пока последний кот не
-  // дошёл до шлюза, то есть десятки тиков, а с §12.191 узел ждёт даже спящего —
-  // и всё это время погашенная «Отправить» отвечала на вопрос, которого игрок
-  // уже не задаёт (заявка принята), вместо единственного решения, которое здесь
-  // ещё можно принять. Ушедшему отряду отзыва нет (§12.22), и там «Отправить»
-  // остаётся — погашенная классом, а не `disabled` (§12.71): причину считает
-  // ядро (`raidGate`, тот же `busyWhy`), и живёт она в подсказке — «этот отряд
-  // её сейчас и ведёт».
-  const act = [
-    raid.away
-      ? `<button class="tool raid-go off" data-tip="${esc(busyG.title)}">Отправить</button>`
-      : `<button class="tool raid-go raid-stop on" data-def="${raid.def}"` +
-        ` data-x="${raid.x}" data-y="${raid.y}"${raid.solo ? ' data-solo="1"' : ""}` +
-        ' data-tip="Отряд ещё не ушёл — вернуть его и отменить заявку">Отменить</button>',
-  ];
-  // Повтор снимается прямо отсюда — иначе на всю вылазку его нечем снять, и
-  // следующая уходит «сама» (§12.67). Правило про узел, а не про заказ, поэтому
-  // значки стоят и когда повторяется не эта вылазка, а другая: правило у узла
-  // одно, и заказ его назван строкой над колонкой.
-  //
-  // Ворота автоматики те же, что у обычной карточки (§12.93): без технологии
-  // правила не существует, и значка нет вовсе.
-  if (!autoGateHint("raids") && !node.nearby) {
-    act.push(
-      node.auto >= 0
-        ? `<button class="tool raid-icon raid-pause${node.auto_on ? " on" : ""}"` +
-            ` data-key="pause@${at}" data-on="${node.auto_on ? "" : "1"}"` +
-            ` data-x="${node.x}" data-y="${node.y}"` +
-            ` data-tip="${
-              node.auto_on
-                ? "Отряд ходит сюда сам — приостановить правило"
-                : "Правило стоит на паузе — вернуть отряд на этот круг"
-            }">` +
-            (node.auto_on ? "⏸" : "▶") +
-            "</button>" +
-            `<button class="tool raid-icon raid-auto" data-key="off@${at}" data-def="-1"` +
-            ` data-x="${node.x}" data-y="${node.y}"` +
-            ' data-tip="Забыть правило совсем">×</button>'
-        : `<button class="tool raid-icon raid-auto" data-key="auto@${at}"` +
-            ` data-def="${raid.def}" data-x="${node.x}" data-y="${node.y}"` +
-            ' data-tip="Ходить сюда самому, как только отряд готов">↻</button>',
-    );
-  }
-  if (act.length) rows.push(`<div class="raidwin-act">${act.join("")}</div>`);
-  return `<div class="raidwin-card">${rows.join("")}</div>`;
-}
-
 /// Строка правила автовылазки в штабе (§12.77). Раздела тулбара, для которого
 /// она была вторым потребителем, больше нет (§12.166).
 ///
