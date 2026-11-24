@@ -11576,10 +11576,11 @@ function syncRaidTrips() {
       mark._html = html;
       mark.innerHTML = html;
     }
+    // Место пишется CSS-свойством, а не атрибутом: снимок двигает стопку
+    // скачком раз в тик, а переход в стиле сглаживает его в ровный ход.
     const [x, y] = pointAlong(trail, (m.way ?? 0) / 1000);
-    const at = `translate(${x.toFixed(1)},${y.toFixed(1)})`;
-    if (mark.getAttribute("transform") !== at)
-      mark.setAttribute("transform", at);
+    const at = `translate(${x.toFixed(1)}px,${y.toFixed(1)}px)`;
+    if (mark.style.transform !== at) mark.style.transform = at;
     // На работе отряд стоит кругом у участка (`syncOrbits`), а не стопкой на
     // пути; у участка-дороги конец пути — не кружок, там стопка остаётся.
     // Отряд ещё на базе (собирается) не рисуется: где он, и так ясно, а цель
@@ -11624,7 +11625,8 @@ function faceSvg(id, r, cls = "") {
 }
 
 // Стопка портретов отряда в дороге (§12.397): проводник первым, за ним ещё
-// двое внахлёст, остальные — «+N». Номер отряда — плашкой в углу: он нужен,
+// двое внахлёст, остальные — «+N». Без покачивания шагом: стопка едет по
+// пути ровно, а место считает ядро. Номер отряда — плашкой в углу: он нужен,
 // когда в поле несколько отрядов. На обратной дороге сбоку едет глиф добычи —
 // «в лапах», а не над головой (§12.109), и только если её несут.
 const STACK_R = 11;
@@ -11655,8 +11657,7 @@ function tripStackSvg(m, tags) {
     it && ITEM_GLYPHS[it.id]
       ? `<use class="trip-loot" href="#g-item-${it.id}" x="${(right + 3).toFixed(1)}" y="-3" width="15" height="15" style="color:${it.color};fill:currentColor"/>`
       : "";
-  const walk = m.phase === "travel" || m.phase === "back" ? " walking" : "";
-  return `<g class="trip-stack${walk}">${faces}${plus}${loot}</g>${badge}`;
+  return `<g class="trip-stack">${faces}${plus}${loot}</g>${badge}`;
 }
 
 // Радиус портрета в круге и радиусы круга и дуги работы (§12.396, §12.397).

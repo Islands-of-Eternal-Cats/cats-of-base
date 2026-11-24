@@ -4192,12 +4192,10 @@ body.rail-wide #screenbar .door-label {
   stroke-linecap: round;
   transition: stroke-dasharray 0.3s linear;
 }
-/* Отряд в дороге покачивается шагом. */
-.trip-stack.walking {
-  animation: trip-walk 0.45s ease-in-out infinite alternate;
-}
+/* Стопка в дороге едет ровно: место приходит раз в тик, переход его сглаживает. */
 .map-trip-mark {
   cursor: default;
+  transition: transform 0.25s linear;
 }
 /* Связь (§12.277): импульсы бегут от базы по пути отряда. */
 .map-trip-radio {
@@ -4237,14 +4235,6 @@ body.rail-wide #screenbar .door-label {
     translate: 0 1.5px;
   }
 }
-@keyframes trip-walk {
-  from {
-    translate: 0 -1.5px;
-  }
-  to {
-    translate: 0 1px;
-  }
-}
 @keyframes radio-pulse {
   to {
     stroke-dashoffset: -18;
@@ -4261,9 +4251,11 @@ body.rail-wide #screenbar .door-label {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .map-trip-mark {
+    transition: none;
+  }
   .near-orbit,
   .near-face,
-  .trip-stack,
   .map-trip-radio {
     animation: none;
   }
