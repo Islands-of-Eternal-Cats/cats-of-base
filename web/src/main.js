@@ -11137,6 +11137,15 @@ function raidGate(i, node) {
         (mine.away
           ? ` — вернутся через ${mine.left}`
           : ` — ${gatherWord(mine)}`);
+  // Отряд на автомиссии расписан (§12.400): на чужой заказ ядро его не
+  // отпустит (`AutoRaids::claims` в `launch_node` — те же `auto` и `auto_on`),
+  // пока игрок сам не поставит правило на паузу или не снимет его. Причина
+  // одна на все карточки колонки, поэтому строкой не пишется — только в
+  // подсказке кнопки (§12.181), а шапка отряда стоит в «Автомиссиях».
+  const ruleWhy =
+    !node.nearby && node.auto >= 0 && node.auto_on && node.auto !== i
+      ? `отряд ходит сам на «${esc(missionLabel(node.auto))}» — поставьте правило на паузу ⏸ или снимите ×`
+      : null;
   // Недокомплект вылазку не закрывает (§12.113): минимум вилки — рекомендация,
   // и цена его видна тут же, в доле и сроке. Безусловный минимум остался у
   // вылазки за своим — им ядро меряет обратимость плена, и разойтись с ним
@@ -11199,6 +11208,7 @@ function raidGate(i, node) {
     !crewWhy &&
     !nogate &&
     !busyHere &&
+    !ruleWhy &&
     !taken &&
     known &&
     welcome &&
@@ -11239,7 +11249,9 @@ function raidGate(i, node) {
               // это не уточнение, а второй, неверный ответ: состав ушёл, опасность
               // урезана проводником, и оба числа заморожены на уходе (§12.22).
               busyWhy
-            : roomWhy
+            : ruleWhy
+              ? `${hint} · ${ruleWhy}`
+              : roomWhy
               ? roomWhy
               : taken
                 ? // Одним словом на обе причины (§12.183): «ведёт» — это ответ на
@@ -18147,12 +18159,17 @@ function crewGroups(sel) {
   // раньше, тот выше. Ещё не ушедшим остаток — весь срок.
   const idle = [];
   const busy = [];
+  // Отряды на автомиссии (§12.400) — своей группой между свободными и ушедшими:
+  // правило расписало их, на чужой заказ они не идут, — и дома, и в поле.
+  // Усыплённое правило (§12.77) отряд отпускает: он стоит в «Свободны».
+  const ruled = [];
   const eta = (m) => (m.away ? m.left : m.total);
   for (const n of nodes) {
     const groups = [];
     const on = sel === n;
     const raid = missionsOut.find((m) => missionHolds(m, n.x, n.y));
-    if (n.busy && raid) busy.push({ eta: eta(raid), groups });
+    if (n.auto >= 0 && n.auto_on) ruled.push(groups);
+    else if (n.busy && raid) busy.push({ eta: eta(raid), groups });
     else idle.push(groups);
     // У отряда в деле заказ, стадия и срок — подписью над шапкой, как у
     // котов «Пошарить рядом»: в строке имени срок обрезался.
@@ -18162,6 +18179,20 @@ function crewGroups(sel) {
         head: `${backIn(raid)}${missionLabel(raid.def)} · ${squadMark(raid)}`,
         bare: true,
         trip: { m: raid, node: n },
+        rows: [],
+      });
+    // Отряд с правилом дома (§12.400) называет свой круг той же подписью над
+    // шапкой — «Автомиссии» без заказа не отвечают на «куда они ходят», — а
+    // под ней ⏸/▶ и ×: на паузе отряд стоит в «Свободны», и вернуть его на
+    // круг надо оттуда же.
+    else if (n.auto >= 0)
+      groups.push({
+        key: `sqa${n.x},${n.y}`,
+        // Подпись — в одной строке с кнопками (`rule` в `syncCrewRows`), а не
+        // отдельной шапкой над ними.
+        head: "",
+        bare: true,
+        rule: n,
         rows: [],
       });
     const folded = squadFolds.has(`${n.x},${n.y}`);
@@ -18307,14 +18338,20 @@ function crewGroups(sel) {
     });
   }
   busy.sort((a, b) => a.eta - b.eta);
-  // Два раздела словом (свободны · на вылазках): без них граница между
-  // «можно отправить» и «вернутся» читалась только по порядку.
+  // Три раздела словом (свободны · автомиссии · на вылазках): без них граница
+  // между «можно отправить», «ходят сами» и «вернутся» читалась только по
+  // порядку.
   const out = [];
   const home = [...idle.flat(), ...freeGroups];
   if (home.length)
     out.push(
       { key: "sec-home", head: "Свободны", section: true, rows: [] },
       ...home,
+    );
+  if (ruled.length)
+    out.push(
+      { key: "sec-auto", head: "Автомиссии", section: true, rows: [] },
+      ...ruled.flat(),
     );
   if (busy.length)
     out.push(
@@ -18422,6 +18459,28 @@ function syncCrewRows(sel) {
       const trip = mk(`trip:${g.key}`, "crew-trip");
       setHtml(trip, tripHtml(g.trip.m, g.trip.node));
       order.push(trip);
+    } else if (g.rule) {
+      // Круг правила и его кнопки — одной строкой: подпись слева, ⏸/▶ и ×
+      // справа, как у полосы вылазки.
+      const n = g.rule;
+      // Правило стоит не по воле игрока (отряд великоват, ждёт сбора, прогноз
+      // слабый…) — причина красным в той же строке, объяснение в подсказке:
+      // иначе отряд в «Автомиссиях» выглядит исправным и молча не ходит.
+      const rs = ruleState(n);
+      // Имя заказа режется многоточием, а причина — нет: она и есть новость.
+      const name =
+        `<span class="crew-rule-label">↻ ${rs.label}${n.auto_on ? "" : " · пауза"}</span>` +
+        (rs.stuck
+          ? `<span class="bad"${rs.hold ? ` data-tip="${esc(rs.hold)}"` : rs.blocked ? ' data-tip="Заказ сейчас недоступен — почему, написано у его карточки"' : ""}>${rs.state}</span>`
+          : "");
+      const btns = ruleButtons(n);
+      const trip = mk(`trip:${g.key}`, "crew-trip crew-rule");
+      setHtml(
+        trip,
+        `<div class="crew-trip-what cat-sub crew-rule-name">${name}</div>` +
+          (btns ? `<div class="crew-trip-act">${btns}</div>` : ""),
+      );
+      order.push(trip);
     }
     if (g.section || g.bare) continue;
     const list = mk(`list:${g.key}`, "crew-list");
@@ -18461,6 +18520,30 @@ function syncCrewRows(sel) {
 //   пропадает, а соседи по колонке не прыгают (§12.172).
 // * **Правило отряда** (⏸/▶ и ×) — тут же: снять или усыпить его на всё
 //   время похода больше негде.
+// ⏸/▶ и × правила автовылазки отряда (§12.67, §12.77). Стоят у отряда с
+// правилом всегда — и в поле, и дома, на паузе включительно (§12.400):
+// отряд на паузе стоит в «Свободны», и вернуть его на круг надо оттуда же,
+// не выбирая заказ второй раз.
+function ruleButtons(node) {
+  if (node.auto < 0 || autoGateHint("raids")) return "";
+  const at = `${node.x},${node.y}`;
+  return (
+    `<button class="tool raid-icon raid-pause${node.auto_on ? " on" : ""}"` +
+    ` data-key="pause@${at}" data-on="${node.auto_on ? "" : "1"}"` +
+    ` data-x="${node.x}" data-y="${node.y}"` +
+    ` data-tip="${
+      node.auto_on
+        ? `Отряд ходит на «${esc(missionLabel(node.auto))}» сам — приостановить правило`
+        : "Правило стоит на паузе — вернуть отряд на этот круг"
+    }">` +
+    (node.auto_on ? "⏸" : "▶") +
+    "</button>" +
+    `<button class="tool raid-icon raid-auto" data-key="off@${at}" data-def="-1"` +
+    ` data-x="${node.x}" data-y="${node.y}"` +
+    ' data-tip="Забыть правило совсем">×</button>'
+  );
+}
+
 function tripHtml(m, node) {
   const def = (meta.missions ?? [])[m.def] ?? {};
   const what = m.failed
@@ -18481,27 +18564,12 @@ function tripHtml(m, node) {
             : "Отряд ещё не ушёл — вернуть его и отменить заявку"
         }">Отменить</button>`,
     );
-  if (node && node.auto >= 0 && !autoGateHint("raids")) {
-    const at = `${node.x},${node.y}`;
-    act.push(
-      `<button class="tool raid-icon raid-pause${node.auto_on ? " on" : ""}"` +
-        ` data-key="pause@${at}" data-on="${node.auto_on ? "" : "1"}"` +
-        ` data-x="${node.x}" data-y="${node.y}"` +
-        ` data-tip="${
-          node.auto_on
-            ? `Отряд ходит на «${esc(missionLabel(node.auto))}» сам — приостановить правило`
-            : "Правило стоит на паузе — вернуть отряд на этот круг"
-        }">` +
-        (node.auto_on ? "⏸" : "▶") +
-        "</button>" +
-        `<button class="tool raid-icon raid-auto" data-key="off@${at}" data-def="-1"` +
-        ` data-x="${node.x}" data-y="${node.y}"` +
-        ' data-tip="Забыть правило совсем">×</button>',
-    );
-  }
+  if (node) act.push(ruleButtons(node));
   return (
     `<div class="crew-trip-what">${what || "&nbsp;"}</div>` +
-    (act.length ? `<div class="crew-trip-act">${act.join("")}</div>` : "")
+    (act.some(Boolean)
+      ? `<div class="crew-trip-act">${act.join("")}</div>`
+      : "")
   );
 }
 
@@ -19226,7 +19294,11 @@ function commsLost(raid) {
 /// написанное в карточке, и занимала целый ярус ради двух кнопок. Осталась она
 /// ответом на «что сейчас с правилом» словом: активно, на паузе, ждёт сбора,
 /// прогноз слаб (§12.116).
-function ruleRow(node) {
+// Почему правило автовылазки стоит — слово и объяснение (§12.116, §12.117).
+// Одно выражение на строку правила справа (`ruleRow`) и на строку круга над
+// отрядом слева (§12.400): разойдись они, и слева отряд выглядел бы
+// исправным, пока справа написано «отряд великоват».
+function ruleState(node) {
   const label = esc(missionLabel(node.auto));
   // Правило живо, а заказ закрылся: репутация упала, известность ещё не дошла,
   // спасать стало некого. Отряд молча стоит, а строка до §12.78 говорила
@@ -19336,6 +19408,15 @@ function ruleRow(node) {
                 `и правило пойдёт само. Отправить как есть можно вручную, из штаба: ` +
                 `там доля написана до нажатия`
               : "";
+  // Слово — причина простоя, а не обычное состояние: его стоит показать
+  // и у отряда в списке.
+  const stuck =
+    !!nogate || blocked || (node.auto_on && !!hold && !node.busy);
+  return { label, state, hold, blocked, nogate, stuck };
+}
+
+function ruleRow(node) {
+  const { label, state, hold, blocked, nogate } = ruleState(node);
   return (
     `<div class="raid-rule${node.auto_on ? "" : " off"}${
       blocked || nogate ? " blocked" : ""

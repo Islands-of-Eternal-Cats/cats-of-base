@@ -1038,6 +1038,29 @@ main#stage.mode-cursor #mode-banner {
   min-height: 24px;
   margin: 2px 0 4px;
 }
+/* Круг правила у отряда дома (§12.400): подпись и ⏸/▶ × одной строкой,
+   подпись — в стиле шапки группы. */
+.crew-trip.crew-rule {
+  align-items: center;
+  margin-top: 10px;
+}
+.crew-trip-what.crew-rule-name {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.crew-rule-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.crew-rule-name .bad {
+  flex: none;
+}
 .crew-trip + .squad-head {
   margin-top: 4px;
 }

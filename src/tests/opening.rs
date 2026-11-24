@@ -400,7 +400,11 @@ fn an_ordered_cat_clears_the_rubble_itself() {
     let rubble = sim.tile_index("rubble").expect("завал");
     assert_eq!(sim.tile(14, 3), rubble, "рядом с котом завал");
     assert_eq!(sim.hand_tag("excellent", 14, 3), "dismantle");
-    assert_eq!(sim.hand_tag("excellent", 15, 3), "", "пол — обычное «иди туда»");
+    assert_eq!(
+        sim.hand_tag("excellent", 15, 3),
+        "",
+        "пол — обычное «иди туда»"
+    );
     assert!(sim.command_at("excellent", 14, 3), "приказ принят");
     assert!(sim.has_assignment("excellent"), "разбор взял названный кот");
     let cleared = (0..3000).any(|_| {
