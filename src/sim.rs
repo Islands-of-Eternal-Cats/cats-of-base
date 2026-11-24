@@ -2968,25 +2968,89 @@ impl Sim {
         let Some(bp_e) = self.fix_blueprint(x, y) else {
             return Some(false);
         };
-        let (tile, supplied, other) = {
+        Some(self.take_blueprint(cat, from, bp_e, x, y))
+    }
+
+    /// Завал ли на клетке (§12.395): клетка вне палитры (`internal`), не
+    /// руина, не деталь объекта-штампа и снимается до пола, а не до ямы, —
+    /// значит волна сноса (инвариант 4) её не касается, и разбирать её можно
+    /// с любой стороны.
+    fn rubble_at(&mut self, x: i32, y: i32) -> bool {
+        if !self.in_bounds(x, y) {
+            return false;
+        }
+        let tile = self.world.resource::<BaseMap>().tile_at(x, y);
+        let rules = self.world.resource::<TileRules>();
+        if tile < 0 || !rules.is_internal(tile) || rules.is_fixed(tile) || rules.stripped(tile) < 0
+        {
+            return false;
+        }
+        self.structure_at(x, y).is_none()
+    }
+
+    /// Приказ коту по завалу (§12.395): разбор берёт **этот** кот, как работу
+    /// над руиной (§12.379). Снос размечается тем же чертежом, что у кнопки
+    /// «Разобрать» и у ластика; уже размеченный не отменяется, а отдаётся коту.
+    /// `None` — клетка не завал, и приказ обычный.
+    fn clear_order(&mut self, unit_id: &str, x: i32, y: i32) -> Option<bool> {
+        if !self.rubble_at(x, y) {
+            return None;
+        }
+        let mut cats = self.world.query::<(Entity, &UnitId, &Position)>();
+        let (cat, from) = cats
+            .iter(&self.world)
+            .find(|(_, id, _)| id.0 == unit_id)
+            .map(|(e, _, p)| (e, (p.x, p.y)))?;
+        if self.world.get::<Away>(cat).is_some() {
+            return Some(false);
+        }
+        let planned = self
+            .blueprint_at(x, y)
+            .filter(|&e| self.world.get::<Blueprint>(e).is_some_and(|bp| bp.tile < 0));
+        let bp_e = match planned {
+            Some(e) => e,
+            None => {
+                if !self.add_blueprint(x, y, -1) {
+                    return Some(false);
+                }
+                self.blueprint_at(x, y)?
+            }
+        };
+        Some(self.take_blueprint(cat, from, bp_e, x, y))
+    }
+
+    /// Отдать размеченную работу именно этому коту — общее у приказа по руине
+    /// и по завалу. Работу без материала кот не возьмёт (сперва подвоз,
+    /// §12.15), спящего приказ не будит (§12.51): тогда работа только
+    /// размечена, и её возьмёт кто угодно.
+    fn take_blueprint(
+        &mut self,
+        cat: Entity,
+        from: (i32, i32),
+        bp_e: Entity,
+        x: i32,
+        y: i32,
+    ) -> bool {
+        let Some((tile, supplied, other)) = ({
             let rules = self.world.resource::<TileRules>();
-            let bp = self.world.get::<Blueprint>(bp_e)?;
-            (bp.tile, missing(rules, bp).is_empty(), bp.assignee)
+            self.world
+                .get::<Blueprint>(bp_e)
+                .map(|bp| (bp.tile, missing(rules, bp).is_empty(), bp.assignee))
+        }) else {
+            return false;
         };
         if !supplied || other == Some(cat) {
-            return Some(true);
+            return true;
         }
-        // Спящего приказ не будит, пока включено «Беречь себя» (§12.51):
-        // работа размечена, и возьмёт её кто-то другой.
         if self.world.resource::<AutoRest>().0 && self.world.get::<Rest>(cat).is_some() {
-            return Some(true);
+            return true;
         }
         let steps = {
             let map = self.world.resource::<BaseMap>();
             let rules = self.world.resource::<TileRules>();
             let reach = Reach::all(map, rules, from);
             let Some((spot, _)) = build_spot(map, rules, &reach, (x, y), tile, None, &[]) else {
-                return Some(true);
+                return true;
             };
             reach.path_to(spot.0, spot.1).unwrap_or_default()
         };
@@ -3006,7 +3070,7 @@ impl Sim {
             .entity_mut(cat)
             .remove::<Order>()
             .insert((Assignment(bp_e), Path { steps }));
-        Some(true)
+        true
     }
 
     /// Поставить чертежи `tile` на весь прямоугольник — один жест рамкой.
@@ -7003,6 +7067,9 @@ impl Sim {
         if let Some(done) = self.fix_order(unit_id, x, y) {
             return done;
         }
+        if let Some(done) = self.clear_order(unit_id, x, y) {
+            return done;
+        }
         match self.hand_verb(unit_id, x, y) {
             Some(HandVerb::Refuse(_)) => false,
             Some(verb) => self.give_hand(unit_id, x, y, verb),
@@ -7024,6 +7091,10 @@ impl Sim {
         // Руина отвечает работой над собой (§12.379): `examine` · `repair`.
         if let Some((_, examine)) = self.fix_target(x, y) {
             return if examine { "examine" } else { "repair" }.to_string();
+        }
+        // Завал отвечает разбором (§12.395): пойдёт именно этот кот.
+        if self.rubble_at(x, y) {
+            return "dismantle".to_string();
         }
         match self.hand_verb(unit_id, x, y) {
             None => "",

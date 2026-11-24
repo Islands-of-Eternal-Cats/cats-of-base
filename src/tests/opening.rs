@@ -391,3 +391,34 @@ fn the_caravan_leaves_its_cargo_at_the_broken_gate() {
     sim.tick_n(at as usize + 1);
     assert!(sim.item_at(11, 0, part) > 0, "груз каравана лежит на руине");
 }
+
+/// Приказ выбранному коту по завалу (§12.395): второй клик по клетке завала
+/// размечает разбор и отдаёт его **этому** коту — как работа над руиной.
+#[test]
+fn an_ordered_cat_clears_the_rubble_itself() {
+    let mut sim = start();
+    let rubble = sim.tile_index("rubble").expect("завал");
+    assert_eq!(sim.tile(14, 3), rubble, "рядом с котом завал");
+    assert_eq!(sim.hand_tag("excellent", 14, 3), "dismantle");
+    assert_eq!(sim.hand_tag("excellent", 15, 3), "", "пол — обычное «иди туда»");
+    assert!(sim.command_at("excellent", 14, 3), "приказ принят");
+    assert!(sim.has_assignment("excellent"), "разбор взял названный кот");
+    let cleared = (0..3000).any(|_| {
+        sim.tick_n(1);
+        sim.tile(14, 3) != rubble
+    });
+    assert!(cleared, "завал разобран");
+    assert!(sim.scrap_total() > 0, "разбор дал лом");
+}
+
+/// Повторный приказ по уже размеченному разбору его не отменяет, как ластик,
+/// а отдаёт коту (§12.395).
+#[test]
+fn an_order_keeps_a_planned_rubble_clearing() {
+    let mut sim = start();
+    assert!(sim.plan_demolish(14, 3), "разбор размечен кнопкой");
+    assert!(sim.command_at("excellent", 14, 3), "приказ принят");
+    assert!(sim.has_assignment("excellent"), "кот при деле");
+    assert!(sim.command_at("excellent", 14, 3), "второй приказ тоже");
+    assert!(sim.has_assignment("excellent"), "разбор не снят");
+}

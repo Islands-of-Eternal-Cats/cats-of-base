@@ -328,7 +328,8 @@ cargo test whole_room_is_erased_completely -- --nocapture
   обычные чертежи на клетке руины, без своей задачи кота; заводит их одна команда
   `Sim::fix_at` (кнопка «Обследовать» / «Починить» в панели клетки, `fix` в протоколе,
   исполнитель — любой свободный) или **приказ выбранному коту** кликом по руине
-  (`fix_order` в `command_at`, глагол руки `examine` · `repair` — берёт этот кот). Ворот
+  (`fix_order` в `command_at`, глагол руки `examine` · `repair` — берёт этот кот). Завал так же: второй клик выбранным котом — разбор этим котом
+  (`clear_order`, глагол `dismantle`, §12.395). Ворот
   палитры, доступа и зонирования у работы над руиной нет — только слой; размечается она и
   за завалом. Шлюз `internal` — в палитре его нет и после ремонта. Руины `internal` и
   `fixed` (ластику не даются, `Sim::may_dismantle`), дверью не считаются, снесённый шлюз
@@ -2225,7 +2226,7 @@ note_seen → note_reached → check_goals`.
 
 ## Тесты
 
-1108 тестов живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `nearby` · `opening` · `combined` · `jobs` · `demolition` ·
+1111 тестов живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `nearby` · `opening` · `combined` · `jobs` · `demolition` ·
 `hauling` · `tidying` · `skills` · `stats` · `study` · `research` · `needs` · `news` · `food` · `health` · `items` · `layers` · `missions` · `muster` ·
 `captivity` · `fame` · `factions` · `trade` · `terrain` · `timeline` · `gear` · `crafting` · `crowd` · `panel` ·
 `goals` · `hand` · `record` · `relay` · `sampling` · `save` · `seen` · `self_study` · `sites` · `structures` · `things` · `tutoring` · `bins` · `tech_tree` · `wiki`); общие хелперы и сборка мира —

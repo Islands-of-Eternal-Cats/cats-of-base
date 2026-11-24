@@ -3196,6 +3196,11 @@ function renderSnapshot(snap) {
     c.workX = e.work_x ?? -1;
     c.workY = e.work_y ?? -1;
     c.workDemolish = e.job === "demolish";
+    // Обследование руины (§12.379) — тот же чертёж, что стройка, но кот не
+    // стучит, а **разглядывает**: молоток читался ремонтом раньше ремонта.
+    // Ядро зовёт обе работы `build`, поэтому вид узнаёт её по самой клетке:
+    // на ней руина с `examine`, и чертёж на ней — то, во что она обследуется.
+    c.workExamine = c.workX >= 0 && examinesAt(snap, c.workX, c.workY);
     // Учит только дошедший (§12.258): идущий к парте ещё не объясняет.
     // Брифинг за столом брифинга (§12.280) качается тем же `teachUnit`: со
     // стороны это тот же разговор, только слушают все разом.
@@ -3608,6 +3613,20 @@ function drawTool(g, crowbar) {
   return g;
 }
 
+// Лупа обследования (§12.379): ручка продолжает руку, стекло — у кисти.
+// Голубое стекло с бликом — не металл инструмента: это взгляд, а не удар.
+function drawLens(g) {
+  const r = TILE * 0.3;
+  const dark = 0x0b0d12;
+  g.roundRect(-r * 0.07, r * 0.6, r * 0.14, r * 0.42, 1).fill(0x6a4a2a);
+  g.circle(0, r * 1.3, r * 0.34)
+    .fill({ color: 0xa8d8f0, alpha: 0.55 })
+    .stroke({ color: dark, width: 2.4 });
+  g.circle(0, r * 1.3, r * 0.34).stroke({ color: 0xc9a24a, width: 1.2 });
+  g.circle(-r * 0.1, r * 1.2, r * 0.08).fill({ color: 0xffffff, alpha: 0.85 });
+  return g;
+}
+
 // Что видно на силуэте: одежда и приборы на поясе (цветами предметов).
 function wornLook(gear) {
   const items = (gear ?? []).map((i) => meta?.items?.[i]).filter(Boolean);
@@ -3895,8 +3914,9 @@ function createUnit(e) {
   arm.position.set(TILE * 0.3 * 0.81, -TILE * 0.3 * 0.35);
   const hammer = drawTool(new Graphics(), false);
   const crowbar = drawTool(new Graphics(), true);
-  hammer.visible = crowbar.visible = false;
-  arm.addChild(hammer, crowbar);
+  const lens = drawLens(new Graphics());
+  hammer.visible = crowbar.visible = lens.visible = false;
+  arm.addChild(hammer, crowbar, lens);
   drawCat(body, COLORS.unit[e.sprite] ?? COLORS.unitDefault, null, arm);
   body.addChild(arm);
   // Кольцо выбора живёт **на самом узле**, как и кольцо «застрял» ниже
@@ -4023,6 +4043,7 @@ function createUnit(e) {
   c.arm = arm;
   c.hammer = hammer;
   c.crowbar = crowbar;
+  c.lens = lens;
   c.fur = COLORS.unit[e.sprite] ?? COLORS.unitDefault;
   // Что уже нарисовано, помним на самом узле: силуэт пересобирается только
   // когда кот оделся или разделся, а не каждым кадром (тот же довод, что у покадровых
@@ -4203,6 +4224,12 @@ function teachUnit(c, deltaMS) {
 // мягкая синусоида, снос — резкий удар и медленный замах. Трансформ пишется
 // только стучащим и один раз на выходе; бредущий не стучит (он в пути).
 const HAMMER_SPEED_CAP = 5;
+function examinesAt(snap, x, y) {
+  const def = tileDefAt(x, y);
+  if (!def?.examine) return false;
+  const bp = (snap.blueprints ?? []).find((b) => b.x === x && b.y === y);
+  return !!bp && meta.palette[bp.tile]?.id === def.examine;
+}
 function hammerUnit(c, deltaMS) {
   const working = deltaMS > 0 && c.workX >= 0 && !c.wading && !c.down;
   if (!working) {
@@ -4212,10 +4239,12 @@ function hammerUnit(c, deltaMS) {
       c.body.y = c.down ? TILE * 0.1 : 0;
       if (!c.wading) c.body.scale.y = 1;
       c.arm.rotation = 0;
-      c.hammer.visible = c.crowbar.visible = false;
+      c.hammer.visible = c.crowbar.visible = c.lens.visible = false;
     }
     return;
   }
+  if (c.workExamine) return examineUnit(c, deltaMS);
+  c.lens.visible = false;
   // `visible` — не грязный трансформ, писать его каждым кадром дёшево, а кот
   // может перейти со стройки на снос, не переставая стучать.
   c.hammer.visible = !c.workDemolish;
@@ -4259,6 +4288,46 @@ function hammerUnit(c, deltaMS) {
         pan: (at.x / app.screen.width) * 2 - 1,
       });
     }
+  }
+}
+
+// Обследование (§12.379): кот держит лупу перед собой и медленно водит ею над
+// клеткой, подаваясь к ней телом; время от времени в стекле вспыхивает блик,
+// а с руины поднимается искорка «заметил». Ни удара, ни звука — это не работа
+// руками, а взгляд. Темп и потолок скорости — те же, что у стука.
+function examineUnit(c, deltaMS) {
+  c.hammer.visible = c.crowbar.visible = false;
+  c.lens.visible = true;
+  c.hammering = true;
+  const before = c.hamPhase ?? 0;
+  c.hamPhase = before + (deltaMS * Math.min(speed, HAMMER_SPEED_CAP)) / 1400;
+  const t = c.hamPhase % 1;
+  const sweep = Math.sin(2 * Math.PI * t);
+  const lean = 0.6 + 0.4 * Math.sin(4 * Math.PI * t + 1);
+  const cx = (c.workX + 0.5) * TILE;
+  const cy = (c.workY + 0.5) * TILE;
+  const dx = Math.sign(cx - c.x);
+  const dy = Math.sign(cy - c.y);
+  // Рука вытянута вперёд и плавно ходит вверх-вниз: лупа скользит по клетке.
+  c.arm.rotation = -1.55 + 0.35 * sweep;
+  c.body.x = dx * 1.6 * lean;
+  c.body.y = dy * 1.6 * lean + Math.abs(sweep) * 0.4;
+  c.body.scale.y = 1 - 0.04 * lean;
+  // Дважды за проход — на краях, где взгляд задерживается.
+  const half = Math.floor(c.hamPhase * 2);
+  if (half !== Math.floor(before * 2)) {
+    addSpark({
+      kind: "glint",
+      x: cx + (Math.random() - 0.5) * TILE * 0.6,
+      y: cy + (Math.random() - 0.5) * TILE * 0.6,
+      vx: 0,
+      vy: -0.008,
+      g: 0,
+      life: 700,
+      max: 700,
+      size: 2 + Math.random() * 1.2,
+      color: 0xbfe6ff,
+    });
   }
 }
 
@@ -4522,7 +4591,17 @@ function stepSparks(deltaMS) {
     p.x += p.vx * dt;
     p.y += p.vy * dt;
     const f = p.life / p.max;
-    if (p.kind === "dust") {
+    if (p.kind === "glint") {
+      // Блик — четырёхлучевая звёздочка, разгорается и гаснет.
+      const a = Math.sin(Math.PI * f);
+      const s = p.size * (0.6 + 0.6 * a);
+      g.moveTo(p.x - s, p.y)
+        .lineTo(p.x + s, p.y)
+        .moveTo(p.x, p.y - s)
+        .lineTo(p.x, p.y + s)
+        .stroke({ color: p.color, width: 1, alpha: a });
+      g.circle(p.x, p.y, s * 0.3).fill({ color: 0xffffff, alpha: a });
+    } else if (p.kind === "dust") {
       g.circle(p.x, p.y, p.size * (1.8 - f)).fill({
         color: p.color,
         alpha: 0.35 * f,
@@ -8298,6 +8377,8 @@ const HAND_WORDS = {
   // Руина отвечает работой над собой (§12.379): пойдёт именно этот кот.
   examine: "обследовать",
   repair: "починить",
+  // Завал отвечает разбором (§12.395): тот же снос, что у кнопки «Разобрать».
+  dismantle: "разобрать завал",
   site: "отнести на стройку",
   shop: "отнести к станку",
 };
