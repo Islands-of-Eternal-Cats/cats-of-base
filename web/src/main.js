@@ -7859,9 +7859,12 @@ function needBars(e, always) {
   // на один вопрос игрока, а три полных полоски подряд прячут ту одну, которая
   // и объясняет, почему кот ведёт себя странно. В «Личном деле» — всегда
   // (`always`, §12.341): там спрашивают «каков этот кот целиком», и полная
-  // шкала там тоже ответ.
-  if (e.energy_max > 0 && (always || e.energy < e.energy_max)) {
-    const pct = Math.round((e.energy / e.energy_max) * 100);
+  // шкала там тоже ответ. «Просела» меряется **показанным** числом, а не сырым:
+  // сытость тает каждый тик, и 998 из 1000 рисовалось бы полоской «100%» —
+  // полной шкалой, которую правило и прячет.
+  const energyPct = e.energy_max > 0 ? Math.round((e.energy / e.energy_max) * 100) : 100;
+  if (e.energy_max > 0 && (always || energyPct < 100)) {
+    const pct = energyPct;
     const spent = e.energy_critical > 0 && e.energy <= e.energy_critical;
     const note = spent
       ? "на исходе сил: бросит работу"
@@ -7879,8 +7882,9 @@ function needBars(e, always) {
   // Сытость — вторая потребность (§12.36). Цена голода списывается с бодрости,
   // а не со шкалы рядом, поэтому «голоден» надо назвать словом: иначе игрок
   // видит, что коты всё время спят, и не связывает это с пустым складом.
-  if (e.fed_max > 0 && (always || e.fed < e.fed_max)) {
-    const pct = Math.round((e.fed / e.fed_max) * 100);
+  const fedPct = e.fed_max > 0 ? Math.round((e.fed / e.fed_max) * 100) : 100;
+  if (e.fed_max > 0 && (always || fedPct < 100)) {
+    const pct = fedPct;
     const starving = e.fed <= 0;
     const note = starving
       ? "голодает: бодрость горит вдвое"
@@ -7899,8 +7903,9 @@ function needBars(e, always) {
   // просевшая полоска всегда означает «этот кот только что вернулся с плохой
   // вылазки», а порог надо назвать словом: ниже него кота не берут в отряд, и
   // без подписи игрок прочитает молчащую кнопку как поломку.
-  if (e.health_max > 0 && (always || e.health < e.health_max)) {
-    const pct = Math.round((e.health / e.health_max) * 100);
+  const healthPct = e.health_max > 0 ? Math.round((e.health / e.health_max) * 100) : 100;
+  if (e.health_max > 0 && (always || healthPct < 100)) {
+    const pct = healthPct;
     const hurt = e.health <= e.health_hurt;
     const note = hurt
       ? "ранен: не работает и в отряд не идёт"
@@ -11406,6 +11411,9 @@ let siteTrails = [];
 // пришедший на участок извне, — зачистка очага работает на месте, а не ведёт
 // караван.
 let siteApproaches = [];
+// Центр базы на полотне карты штаба: вокруг него кружат коты, работающие рядом
+// с базой (§12.396). Ставит `buildSiteGraph`.
+let siteHome = null;
 
 // Какой участок выбран прямо сейчас: названный игроком или, пока он не называл,
 // самый запущенный очаг. Одно выражение на карту, на кнопку заказа и на
@@ -11576,7 +11584,65 @@ function syncRaidTrips() {
     liveTitle(mark, `${who} — ${RAID_PHASE[m.phase] ?? "сбор"}: ${what}`);
   });
   for (const g of [...layer.children]) if (!seen.has(g.dataset.key)) g.remove();
+  syncNearbyFaces();
 }
+
+// Радиус портрета у базы и радиус его круга (§12.396).
+const NEAR_FACE = 13;
+const NEAR_ORBIT = SITE_R * 2.4;
+
+// Коты, работающие рядом с базой (§12.396): у «Пошарить рядом» и прочих
+// заказов без участка (`nearby`) пути на карте нет, и ушедший кот пропадал
+// бесследно — база стоит, карта пуста. Такой кот кружит портретом вокруг
+// базы, пока он за шлюзом (`away`). Где он, считает ядро (`MissionSnap`);
+// здесь только подача. Узлы живут по коту и правятся на месте (§12.118):
+// пересборка каждым кадром сбивала бы анимацию.
+function syncNearbyFaces() {
+  const layer = raidUi?.mapCol?.querySelector(".map-near");
+  if (!layer) return;
+  const ents = new Map((lastSnap?.entities ?? []).map((e) => [e.id, e]));
+  const out = [];
+  missionsOut.forEach((m) => {
+    if (m.site >= 0 || !m.away) return;
+    const what = (meta?.missions ?? [])[m.def]?.label ?? "";
+    for (const id of m.squad ?? [])
+      out.push({ id, sprite: ents.get(id)?.sprite ?? "", what, phase: m.phase });
+  });
+  // Пауза мира останавливает и круг: кот на карте не работает, пока стоит время.
+  layer.classList.toggle("paused", speed === 0);
+  const seen = new Set();
+  out.forEach((c, k) => {
+    seen.add(c.id);
+    let g = [...layer.children].find((n) => n.dataset.id === c.id);
+    if (!g) {
+      g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("class", "near-orbit");
+      g.dataset.id = c.id;
+      const src = c.sprite
+        ? `${import.meta.env.BASE_URL}portraits/${encodeURIComponent(c.sprite)}.png`
+        : "";
+      g.innerHTML =
+        `<g transform="translate(${NEAR_ORBIT},0)"><g class="near-face">` +
+        `<circle class="near-ring" r="${NEAR_FACE + 2}"/>` +
+        (src
+          ? `<image href="${src}" x="${-NEAR_FACE}" y="${-NEAR_FACE}" width="${NEAR_FACE * 2}" height="${NEAR_FACE * 2}" clip-path="url(#map-face-clip)" preserveAspectRatio="xMidYMid slice"/>`
+          : `<text class="near-initial" y="4">${esc(c.id.slice(0, 1).toUpperCase())}</text>`) +
+        `</g></g>`;
+      layer.appendChild(g);
+    }
+    // Несколько котов расходятся по кругу равными долями: задержка анимации
+    // отрицательная, то есть каждый стартует уже со своего места.
+    const delay = `${(-k * NEAR_PERIOD) / out.length}s`;
+    if (g.style.animationDelay !== delay) {
+      g.style.animationDelay = delay;
+      g.querySelector(".near-face").style.animationDelay = delay;
+    }
+    liveTitle(g, `${c.id} — ${RAID_PHASE[c.phase] ?? "сбор"}: ${c.what}`);
+  });
+  for (const g of [...layer.children]) if (!seen.has(g.dataset.id)) g.remove();
+}
+// Период круга — секунды настенных часов: это подача, а не время мира.
+const NEAR_PERIOD = 14;
 
 // Перекрасить карту под нынешний снимок. Узлы уже стоят (`buildSiteGraph`),
 // меняются только заливка, ступень, метка отряда и подпись под графом.
@@ -17318,6 +17384,7 @@ function buildSiteGraph(holder) {
     ...roadLines[i].slice(1),
   ]);
   const [hx, hy] = P(home);
+  siteHome = [hx, hy];
   const roads = all
     .map((_, i) =>
       roadLines[i].length
@@ -17409,6 +17476,8 @@ function buildSiteGraph(holder) {
       )
       .join("") +
     `<g class="map-trips"></g>` +
+    `<g class="map-near" transform="translate(${hx},${hy})"></g>` +
+    `<defs><clipPath id="map-face-clip"><circle r="${NEAR_FACE}"/></clipPath></defs>` +
     "</svg>";
   fitSiteMap(holder.querySelector(".map-svg"), w, h);
   const marks = [...holder.querySelectorAll(".map-site")];

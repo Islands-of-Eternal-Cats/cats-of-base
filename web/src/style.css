@@ -4136,3 +4136,52 @@ body.rail-wide #screenbar .door-label {
 .dos-needs {
   margin-bottom: 10px;
 }
+
+/* Коты, работающие рядом с базой (§12.396): портрет кружит вокруг базы на
+   карте штаба. Крутится внешняя группа, лицо крутится обратно и остаётся
+   прямым; анимация — по `transform` у узлов без своего атрибута `transform`,
+   поэтому её начало — центр базы и центр лица. */
+.near-orbit {
+  animation: near-orbit 14s linear infinite;
+  cursor: default;
+}
+.near-face {
+  animation:
+    near-orbit 14s linear infinite reverse,
+    near-bob 1.1s ease-in-out infinite alternate;
+}
+.near-ring {
+  fill: var(--panel);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.near-initial {
+  fill: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+.map-near.paused .near-orbit,
+.map-near.paused .near-face {
+  animation-play-state: paused;
+}
+@keyframes near-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* «Работают»: лицо чуть покачивается, как кот на базе с молотком. */
+@keyframes near-bob {
+  from {
+    translate: 0 -1.5px;
+  }
+  to {
+    translate: 0 1.5px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .near-orbit,
+  .near-face {
+    animation: none;
+  }
+}
