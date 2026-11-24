@@ -40,7 +40,7 @@ const WIKI: &[&str] = &[
 
 /// Правила игрока (§12.93). Палитра у них не в рулсете, а в `automation:`, и
 /// ключи те же, что у `AutoRules::gates`.
-const RULE_KEYS: [&str; 4] = ["sales", "crafting", "raids", "study"];
+const RULE_KEYS: [&str; 5] = ["sales", "crafting", "raids", "study", "tidy"];
 
 fn shipped() -> Ruleset {
     serde_yaml::from_str(CORE).expect("рулсет читается")
@@ -300,6 +300,7 @@ fn wiki_owner(rs: &Ruleset, key: &str) -> Option<String> {
                 ("crafting", &a.crafting),
                 ("raids", &a.raids),
                 ("study", &a.study),
+                ("tidy", &a.tidy),
             ] {
                 if tech == id {
                     opens.push(Some(format!("rule:{k}")));
@@ -484,6 +485,7 @@ fn tech_gate(rs: &Ruleset, key: &str) -> Option<BTreeSet<String>> {
                 "sales" => &a.sales,
                 "crafting" => &a.crafting,
                 "study" => &a.study,
+                "tidy" => &a.tidy,
                 _ => &a.raids,
             };
             one(t)

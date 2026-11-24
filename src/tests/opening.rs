@@ -207,8 +207,11 @@ fn the_shipped_ruleset_starts_in_one_rubble_room() {
     for row in [3, 8, 13] {
         cells.extend([(9, row), (10, row), (12, row), (13, row)]);
     }
+    // Под одной клеткой завала лежит малый ящик (§12.404).
+    let hidden = sim.tile_index("rubble_bin").expect("завал над ящиком");
+    assert_eq!(sim.tile(8, 7), hidden, "над входом в левую среднюю — ящик");
     for (x, y) in cells {
-        if (x, y) != (15, 3) {
+        if (x, y) != (15, 3) && (x, y) != (8, 7) {
             assert_eq!(sim.tile(x, y), rubble, "завалено: ({x}, {y})");
         }
     }
@@ -220,7 +223,7 @@ fn the_shipped_ruleset_starts_in_one_rubble_room() {
         .flat_map(|x| (0..h).map(move |y| (x, y)))
         .filter(|&(x, y)| sim.tile(x, y) == rubble)
         .count();
-    assert_eq!(piles, 79);
+    assert_eq!(piles, 78, "и ещё одна клетка — завал над ящиком");
     let ruin = sim.tile_index("broken_gate").expect("сломанный шлюз");
     assert_eq!(sim.tile(11, 0), ruin, "над шахтой — сломанный шлюз");
     assert!(
@@ -425,4 +428,46 @@ fn an_order_keeps_a_planned_rubble_clearing() {
     assert!(sim.has_assignment("excellent"), "кот при деле");
     assert!(sim.command_at("excellent", 14, 3), "второй приказ тоже");
     assert!(sim.has_assignment("excellent"), "разбор не снят");
+}
+
+/// **Под завалом найдётся малый ящик** (§12.404): разбор этой клетки оставляет
+/// не пол, а ящик — пустой, назначаемый с первой минуты и до темы «Малый
+/// ящик» неразбираемый (что нельзя построить, того нельзя и разобрать, §12.372).
+#[test]
+fn the_shipped_ruleset_hides_a_small_bin_under_the_rubble() {
+    let mut sim = start();
+    let rubble = sim.tile_index("rubble").expect("завал");
+    let floor = sim.tile_index("floor").expect("пол");
+    let bin = sim.tile_index("small_bin").expect("малый ящик");
+    // Остальной завал снимаем мимо котов: проверяем находку, а не раскопки.
+    let (w, h) = {
+        let map = sim.world.resource::<BaseMap>();
+        (map.width, map.height)
+    };
+    for x in 0..w {
+        for y in 0..h {
+            if sim.tile(x, y) == rubble {
+                sim.force_tile(x, y, floor);
+            }
+        }
+    }
+    assert!(
+        sim.plan_demolish_rect(8, 7, 1, 1),
+        "завал над ящиком разбирается"
+    );
+    let found = (0..2000).any(|_| {
+        sim.tick_n(1);
+        sim.tile(8, 7) == bin
+    });
+    assert!(found, "под завалом так и не нашёлся ящик");
+
+    assert!(
+        !sim.add_blueprint(8, 7, -1),
+        "найденный ящик до темы разобран ластиком"
+    );
+    let scrap = sim.item_index("scrap").expect("лом");
+    assert!(
+        sim.set_bin(8, 7, scrap, true),
+        "а назначить его можно сразу"
+    );
 }

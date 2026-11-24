@@ -531,6 +531,7 @@ fn a_rule_never_closes() {
 fn the_shipped_ruleset_announces_its_automation() {
     let mut sim = opened(Sim::new(CORE).expect("мир"));
     sim.without_timeline();
+    sim.set_tidy_gate("tidying"); // `opened` снимает ворота уборки (§12.401)
     sim.tick_n(5);
     assert!(
         !sim.news().iter().any(|&(k, ..)| k == NewsKind::Rule),
@@ -551,7 +552,7 @@ fn the_shipped_ruleset_announces_its_automation() {
     rules.sort_unstable();
     assert_eq!(
         rules,
-        vec![0, 1, 2, 3],
+        vec![0, 1, 2, 3, 4],
         "объявлены не все правила: {:?}",
         rules
     );

@@ -555,6 +555,9 @@ pub(crate) struct AutomationDef {
     /// Учёба в простое (§12.314).
     #[serde(default)]
     pub(crate) study: String,
+    /// Автоуборка (§12.401): до неё кучи на склад назначают руками.
+    #[serde(default)]
+    pub(crate) tidy: String,
 }
 
 /// Цель партии: то, ради чего игрок вообще здесь (§12.58).

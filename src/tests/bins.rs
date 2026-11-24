@@ -2,8 +2,8 @@
 //!
 //! Ярусов в синтетической схеме нет: `priority` у всех тайлов нулевой, значит
 //! уборка ведёт себя ровно как до ящиков. Заводит их `set_priority`, а набор —
-//! `set_bin`; пустой набор означает «принимает всё», и второго представления у
-//! этого состояния нет.
+//! `set_bin`; пустой набор означает «не принимает ничего» (§12.402), и второго
+//! представления у этого состояния нет.
 //!
 //! Тайл `1` здесь склад (ярус 0), тайл `2` — ящик (ярус 1): оба переводятся
 //! через `force_tile`, как в `tidying`.
@@ -24,6 +24,14 @@ fn shelves(sim: &mut Sim) {
     sim.force_tile(3, 1, 2); // ящик
 }
 
+/// То же, и ящик назначен под лом (предмет `0`): пустой не берёт ничего
+/// (§12.402).
+fn scrap_shelves(sim: &mut Sim) {
+    sim.set_items(1);
+    shelves(sim);
+    assert!(sim.set_bin(3, 1, 0, true), "ящик назначен под лом");
+}
+
 // --- движение вверх по ярусам ----------------------------------------------
 
 /// Базовый случай: с пола вещь едет в ящик, а не в склад, даже если склад
@@ -31,7 +39,7 @@ fn shelves(sim: &mut Sim) {
 #[test]
 fn loose_scrap_prefers_the_higher_tier() {
     let mut sim = sim_from(&CORRIDOR);
-    shelves(&mut sim);
+    scrap_shelves(&mut sim);
     sim.put_scrap(6, 1, 4);
 
     sim.tick_n(300);
@@ -44,7 +52,7 @@ fn loose_scrap_prefers_the_higher_tier() {
 #[test]
 fn stored_scrap_moves_up_into_a_bin() {
     let mut sim = sim_from(&CORRIDOR);
-    shelves(&mut sim);
+    scrap_shelves(&mut sim);
     sim.put_scrap(9, 1, 4);
 
     sim.tick_n(400);
@@ -57,7 +65,7 @@ fn stored_scrap_moves_up_into_a_bin() {
 #[test]
 fn a_full_bin_stops_pulling() {
     let mut sim = sim_from(&CORRIDOR);
-    shelves(&mut sim);
+    scrap_shelves(&mut sim);
     sim.put_scrap(9, 1, 16);
 
     sim.tick_n(600);
@@ -74,6 +82,9 @@ fn equal_tiers_do_not_swap_goods() {
     sim.set_priority(2, 1);
     sim.force_tile(3, 1, 2);
     sim.force_tile(8, 1, 2);
+    sim.set_items(1);
+    sim.set_bin(3, 1, 0, true);
+    sim.set_bin(8, 1, 0, true);
     sim.put_scrap(3, 1, 4);
 
     sim.tick_n(400);
@@ -100,15 +111,16 @@ fn a_bin_takes_only_what_it_was_told_to() {
     assert_eq!(sim.item_at(9, 1, 0), 3, "он уехал на склад");
 }
 
-/// Смена набора **эвакуирует** прежнее содержимое: свежий ящик принимает всё и
-/// набирается чем попало, а без обратной дороги мусор остался бы в нём навсегда
-/// — материал-то ходит только вверх.
+/// Смена набора **эвакуирует** прежнее содержимое: без обратной дороги старое
+/// осталось бы в ящике навсегда — материал-то ходит только вверх.
 #[test]
 fn retyping_a_bin_evicts_what_it_no_longer_takes() {
     let mut sim = sim_from(&CORRIDOR);
     sim.set_items(2);
     shelves(&mut sim);
+    sim.set_bin(3, 1, 0, true);
     sim.put_item(3, 1, 0, 4);
+    sim.set_bin(3, 1, 0, false);
 
     assert!(
         sim.set_bin(3, 1, 1, true),
@@ -119,10 +131,11 @@ fn retyping_a_bin_evicts_what_it_no_longer_takes() {
     assert_eq!(sim.item_at(9, 1, 0), 4, "и легло на склад");
 }
 
-/// Снятие последнего предмета возвращает «принимает всё»: пустого набора не
-/// существует, иначе у одного состояния было бы два представления.
+/// Снятие последнего предмета возвращает «ничего не назначено» (§12.402):
+/// пустого набора не существует, иначе у одного состояния было бы два
+/// представления, — и ящик снова не берёт ничего.
 #[test]
-fn clearing_the_last_item_means_take_everything_again() {
+fn clearing_the_last_item_means_take_nothing_again() {
     let mut sim = sim_from(&CORRIDOR);
     sim.set_items(2);
     shelves(&mut sim);
@@ -134,7 +147,63 @@ fn clearing_the_last_item_means_take_everything_again() {
 
     sim.put_item(6, 1, 0, 3);
     sim.tick_n(300);
-    assert_eq!(sim.item_at(3, 1, 0), 3, "ящик снова берёт что угодно");
+    assert_eq!(sim.item_at(3, 1, 0), 0, "в пустой ящик ничего не легло");
+    assert_eq!(sim.item_at(9, 1, 0), 3, "лом уехал на склад");
+}
+
+/// **Свежий ящик не берёт ничего** (§12.402): с ярусом выше склада
+/// ненастроенный ящик первым забирал бы лом — в том числе со склада.
+#[test]
+fn an_unassigned_bin_takes_nothing() {
+    let mut sim = sim_from(&CORRIDOR);
+    shelves(&mut sim);
+    sim.put_scrap(6, 1, 3);
+    sim.put_scrap(9, 1, 4);
+
+    sim.tick_n(400);
+    assert_eq!(sim.scrap_at(3, 1), 0, "ящик пуст");
+    assert_eq!(sim.scrap_at(9, 1), 7, "весь лом на складе");
+}
+
+/// **Смена назначения вывозит старое и без «Автоуборки»** (§12.401, §12.402):
+/// это решение игрока, и тем же кликом оно помечает выселенное на склад.
+#[test]
+fn retyping_evicts_even_before_auto_tidying() {
+    let mut sim = sim_from(&CORRIDOR);
+    sim.set_items(2);
+    shelves(&mut sim);
+    sim.set_tidy_gate("tidying"); // автоуборка закрыта темой
+    sim.set_bin(3, 1, 0, true);
+    sim.put_item(3, 1, 0, 4);
+    sim.put_item(6, 1, 0, 2); // ничейная куча на полу — её никто не тронет
+
+    sim.set_bin(3, 1, 1, true);
+    sim.set_bin(3, 1, 0, false);
+    sim.tick_n(400);
+    assert_eq!(sim.item_at(3, 1, 0), 0, "старое из ящика вывезли");
+    assert_eq!(sim.item_at(9, 1, 0), 4, "на склад");
+    assert_eq!(sim.item_at(6, 1, 0), 2, "а непомеченное лежит, где лежало");
+}
+
+/// **Везти некуда — выносят на пол рядом** (§12.402): иначе ящик под новый тип
+/// не освободился бы никогда. Склада нет вовсе.
+#[test]
+fn evicted_goods_with_nowhere_to_go_are_carried_out_beside_the_bin() {
+    let mut sim = sim_from(&CORRIDOR);
+    sim.set_items(2);
+    sim.set_capacity(2, 10);
+    sim.set_priority(2, 1);
+    sim.force_tile(3, 1, 2); // ящик, склада нет
+    sim.set_bin(3, 1, 0, true);
+    sim.put_item(3, 1, 0, 4);
+
+    sim.set_bin(3, 1, 1, true);
+    sim.set_bin(3, 1, 0, false);
+    sim.tick_n(300);
+    assert_eq!(sim.item_at(3, 1, 0), 0, "ящик освободили");
+    let beside = sim.item_at(2, 1, 0) + sim.item_at(4, 1, 0);
+    assert_eq!(beside, 4, "всё лежит на полу рядом с ящиком");
+    assert_eq!(sim.carrying_of("a"), 0, "и в лапах ничего не осталось");
 }
 
 /// Куче, которой некуда деться, кота не посылают. Иначе на базе с полным
@@ -181,6 +250,8 @@ fn two_carriers_cannot_overfill_a_bin_in_a_tick() {
     sim.set_priority(2, 1);
     sim.force_tile(1, 1, 1);
     sim.force_tile(6, 1, 2);
+    sim.set_items(1);
+    sim.set_bin(6, 1, 0, true);
     sim.put_scrap(3, 1, 8);
     sim.put_scrap(9, 1, 8);
     sim.set_carry("a", 8);
@@ -246,7 +317,7 @@ fn a_demolished_bin_forgets_its_setting() {
 #[test]
 fn goods_in_a_bin_still_pay_for_things() {
     let mut sim = sim_from(&CORRIDOR);
-    shelves(&mut sim);
+    scrap_shelves(&mut sim);
     sim.set_cost(3, 6); // тайл `3` стоит шесть лома
     sim.put_scrap(3, 1, 10);
 
@@ -260,7 +331,7 @@ fn goods_in_a_bin_still_pay_for_things() {
 #[test]
 fn moving_between_tiers_conserves_goods() {
     let mut sim = sim_from(&CORRIDOR);
-    shelves(&mut sim);
+    scrap_shelves(&mut sim);
     sim.put_scrap(9, 1, 7);
 
     // Проверять надо **на каждом тике**: конечное состояние замело бы след, а

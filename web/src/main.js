@@ -17,6 +17,7 @@ import {
   drawGlass,
   drawGrid,
   drawOblique,
+  prop as obliqueProp,
   sconceCells,
   surfaceRise,
   wallRise,
@@ -1068,6 +1069,14 @@ bpLayer.addChild(sparkGfx);
 // рассказывает, откуда он взялся. Узел постоянный (§12.84), под котами.
 const portalGfx = new Graphics();
 bpLayer.addChild(portalGfx);
+// Завал под порталом (§12.403): кот выпадает не на пустой пятачок, а на груду
+// камней, которая рассыпается, когда кольцо раскрылось. Только картинка — в
+// ядре клетка пол с нулевого тика. Свой узел, рисуется один раз на старте и
+// гаснет прозрачностью. **Над кольцом**, а не под ним: кольцо непрозрачно и
+// шире клетки, и под ним завала не было бы видно вовсе — а так портал
+// светится из-под груды по краям, пока её не разнесёт.
+const portalRubbleGfx = new Graphics();
+bpLayer.addChild(portalRubbleGfx);
 const dealGfx = new Graphics();
 dealLayer.addChild(dealGfx);
 
@@ -1280,7 +1289,13 @@ let postLot = 0;
 // Открыта ли автоматика такого рода (§12.93): ворота названы технологиями в
 // рулсете, а изучены они или нет — считает ядро. Ярлыки самих тем приезжают
 // один раз в `meta.auto_gates`, потому что имя темы это контент.
-let autoOpen = { sales: true, crafting: true, raids: true, study: true };
+let autoOpen = {
+  sales: true,
+  crafting: true,
+  raids: true,
+  study: true,
+  tidy: true,
+};
 
 // Как правило зовётся на экране. Подача, а не механика, поэтому живёт в виде
 // (§12.46): ядро о словах не знает, оно возит ключ.
@@ -1289,6 +1304,7 @@ const AUTO_LABEL = {
   sales: "сбыт излишков",
   raids: "автовылазки",
   study: "учёба в простое",
+  tidy: "автоуборка",
 };
 
 // За какой дверью правилом пользуются (§12.202): порог сбыта и порог запаса —
@@ -1301,6 +1317,9 @@ const RULE_DOOR = {
   crafting: "stock",
   raids: "raid",
   study: "dossier",
+  // Автоуборка (§12.401) — тумблер «Убирать сам» в разделе «Правила» тулбара:
+  // окна у неё нет, дверь — сам раздел.
+  tidy: "rules",
 };
 
 // Ключ правила по индексу палитры. ⚠️ **Порядок приезжает из ядра**
@@ -1438,6 +1457,7 @@ worker.onmessage = (e) => {
     portalArmed = true;
     portal = null;
     portalGfx.clear();
+    portalRubbleGfx.clear();
     skillLevelsSeen = null;
     wikiOpenSeen = null;
     wikiQueue = [];
@@ -1857,6 +1877,9 @@ function drawFurniture(g, id, x, y, tint, n) {
       alpha: 0.35,
     });
   switch (id) {
+    // Завал над найденным ящиком (§12.404) выглядит обычным завалом: находка
+    // видна, только когда его разобрали.
+    case "rubble_bin":
     case "rubble": {
       // Завал (§12.367): груда камней на всю клетку — непроходимо, но видно,
       // что это не стена, а то, что можно разобрать. Раскладка камней своя у
@@ -3382,11 +3405,17 @@ function renderSnapshot(snap) {
     crafting: !!snap.auto_crafting,
     raids: !!snap.auto_raids,
     study: !!snap.auto_study,
+    tidy: !!snap.auto_tidy_open,
   };
   // Правило живёт в ядре и сохраняется в снимке, поэтому вид его **читает**,
   // а не помнит (§12.96): от него зависит, есть ли у кучи кнопка «на склад».
   autoTidy = snap.auto_tidy ?? true;
-  if (tidyBtn) tidyBtn.classList.toggle("on", autoTidy);
+  if (tidyBtn) {
+    tidyBtn.classList.toggle("on", autoTidy);
+    // До «Автоуборки» тумблера нет вовсе (§12.401, §12.126): кнопка, которая
+    // ничего не включает, — отказ без причины, а кучи до темы метят руками.
+    tidyBtn.hidden = !autoOpen.tidy;
+  }
   postFree = !!snap.post_free;
   postLot = snap.post_lot ?? 0;
   shops = snap.shops ?? 0;
@@ -4409,7 +4438,12 @@ function puffChanged(prev, next) {
 // поднятой из сохранения партии портала нет.
 // Кот **вываливается** из портала: падает, кувыркаясь на бок, лежит, пока
 // кольцо схлопывается за ним, и только потом встаёт и отряхивается.
-const PORTAL_OPEN = 900; // кольцо раскрылось — кот вываливается
+// Пауза перед порталом (§12.403): партия начинается тишиной над заваленной
+// комнатой, и только потом в груде загорается кольцо. Отсчёт идёт с минуса,
+// поэтому остальные отметки ниже не сдвигаются.
+const PORTAL_DELAY = 1500;
+const PORTAL_OPEN = 900; // кольцо раскрылось — кот вываливается, завал рассыпается
+const PORTAL_CLEAR = 1150; // от завала под порталом не осталось ничего
 const PORTAL_LAND = 1250; // упал на бок
 const PORTAL_SHUT = 1500; // кольцо начинает схлопываться
 const PORTAL_GONE = 2200; // кольца нет
@@ -4426,13 +4460,45 @@ function startPortal(snap) {
     id: e.id,
     x: (e.x + 0.5) * TILE,
     y: (e.y + 0.5) * TILE,
-    t: 0,
+    t: -PORTAL_DELAY,
     out: false,
     landed: false,
     gone: false,
     // Бок, на который упадёт, — случайный, как у спящего (это вид).
     side: Math.random() < 0.5 ? -1 : 1,
   };
+  // Завал на клетке портала (§12.403): тот же рисунок, что у настоящего
+  // завала вокруг, — плоский или коробками 3/4.
+  const g = portalRubbleGfx;
+  g.clear();
+  g.alpha = 1;
+  const n = cellNoise(e.x, e.y);
+  if (view34) {
+    obliqueProp(g, "rubble", e.x, e.y, 0, n, { T: TILE, shade, tileDefAt });
+  } else {
+    drawFurniture(g, "rubble", e.x, e.y, 0, n);
+  }
+}
+// Завал разлетается крошкой и оседает пылью (§12.403).
+function portalCrumble(x, y) {
+  const stones = [0x6b6052, 0x7d7262, 0x5a5145, 0x8a7f6c];
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2 + Math.random() * 0.4;
+    const v = 0.04 + Math.random() * 0.05;
+    addSpark({
+      kind: "chip",
+      x: x + (Math.random() - 0.5) * TILE * 0.5,
+      y: y + (Math.random() - 0.5) * TILE * 0.5,
+      vx: Math.cos(a) * v,
+      vy: Math.sin(a) * v - 0.04,
+      g: 0.0004,
+      life: 650,
+      max: 650,
+      size: 2 + Math.random() * 2.5,
+      color: stones[i % 4],
+    });
+  }
+  portalDust(x, y);
 }
 // Сколько кота уже видно: до раскрытия кольца — нисколько, потом проявляется.
 function portalVeil(id) {
@@ -4513,8 +4579,14 @@ function stepPortal(deltaMS) {
   if (!p.out && p.t >= PORTAL_OPEN) {
     p.out = true;
     portalBurst(p.x, p.y, 18, 0.06);
+    portalCrumble(p.x, p.y);
     play("portal");
   }
+  // Завал гаснет за четверть секунды после раскрытия (§12.403).
+  portalRubbleGfx.alpha =
+    p.t < PORTAL_OPEN
+      ? 1
+      : Math.max(0, 1 - (p.t - PORTAL_OPEN) / (PORTAL_CLEAR - PORTAL_OPEN));
   if (!p.landed && p.t >= PORTAL_LAND) {
     p.landed = true;
     portalDust(p.x, p.y);
@@ -4528,6 +4600,7 @@ function stepPortal(deltaMS) {
   g.clear();
   if (p.t >= PORTAL_END) {
     portal = null;
+    portalRubbleGfx.clear();
     if (c) {
       c.alpha = c.down ? 0.55 : 1;
       c.body.rotation = 0;
@@ -5108,7 +5181,9 @@ function renderCellPanel(snap) {
     // отработала бы ровно один тик и вернулась обратно: не отказ, а качели,
     // которые игрок прочтёт как поломку. Остаётся факт строкой.
     const marked = piles.some((s) => s.marked);
-    const auto = def?.capacity > 0 || autoTidy;
+    // Уборка идёт сама, только когда тема изучена (§12.401): до неё кнопка
+    // пометки стоит у каждой кучи вне склада — это и есть ручная уборка.
+    const auto = def?.capacity > 0 || (autoTidy && autoOpen.tidy);
     // Почему куча не едет — словом (§12.53, §12.303): считает ядро (`pile_why`).
     const pileWhy =
       lastHand?.key === handAimKey() ? PILE_WHY[lastHand.why] : null;
@@ -5205,7 +5280,8 @@ function renderCellPanel(snap) {
   // котором на старте партии ничего не говорит. Цена решения — что вернёт
   // разбор — стоит на кнопке фишками (§12.80). Размеченный снос отвечает
   // полоской площадки выше, поэтому кнопка пропадает вместе с ним.
-  if (def?.id === "rubble" && !bp) {
+  // Завал над ящиком (§12.404) разбирается той же кнопкой.
+  if ((def?.id === "rubble" || def?.id === "rubble_bin") && !bp) {
     parts.push(
       `<button class="tool rubble-clear" data-key="dismantle@${x}, ${y}"` +
         ` data-x="${x}" data-y="${y}">Разобрать ${def.cost ? `→ ${costChips(def.cost)}` : ""}</button>`,
@@ -6888,11 +6964,11 @@ function lecternCell(snap, x, y) {
 function binCell(snap, x, y) {
   const accepts =
     (snap.bins ?? []).find((b) => b.x === x && b.y === y)?.accepts ?? [];
-  // Пустой набор — это «принимает всё», и говорится это словом: пустое место
-  // читалось бы как «не принимает ничего», то есть как поломка (§12.53).
+  // Пустой набор с §12.402 — «не принимает ничего», и говорится это словом:
+  // пустой ящик рядом с кучей деталей иначе читался бы поломкой (§12.53).
   const what = accepts.length
     ? `держим: ${accepts.map((i) => esc(itemLabel(i))).join(", ")}`
-    : "принимает всё: не выбрано, что держать";
+    : "ничего не назначено — ящик пустует";
   return [
     '<div class="cat-skill">' +
       `<div class="cat-sub">${what}</div>` +
@@ -8403,7 +8479,7 @@ const HAND_REFUSALS = {
   asleep: "Кот спит и приказ не примет",
 };
 const PILE_WHY = {
-  untidy: "Лежит: уборка выключена",
+  untidy: "Лежит: не помечено на склад",
   nostore: "Лежит: нет склада",
   noroom: "Лежит: на складах нет места для этого",
   waiting: "Ждёт свободного кота",
@@ -12392,7 +12468,14 @@ function openNewsTarget(kind, def) {
   // здесь не строка, а колонка, и вести к одной из сорока не к чему.
   else if (kind === "rule") {
     const door = RULE_DOOR[autoKind(def)];
-    if (door === "raid") openRaidWindow();
+    // Тумблер живёт в тулбаре, а не за дверью (§12.401): раскрываем раздел,
+    // и новость гаснет тем же кликом — окна, на закрытии которого она гасла
+    // бы, у неё нет.
+    if (door === "rules") {
+      readNews("rule", [def]);
+      closeOtherWindows();
+      openOnly("Правила");
+    } else if (door === "raid") openRaidWindow();
     else if (door === "dossier") openDossier();
     else openStockWindow();
   } else openSciWindow();
@@ -13799,8 +13882,8 @@ function syncBinWindow() {
   setHtml(
     binHintEl,
     accepts.size
-      ? "остальное коты увезут отсюда"
-      : "принимает всё: пока ничего не выбрано",
+      ? "остальное коты увезут отсюда, а некуда — вынесут рядом"
+      : "ничего не назначено — ящик ничего не принимает",
   );
 }
 
@@ -15481,10 +15564,15 @@ function wikiOwnGate(key) {
         !tileEverBuilt(snap, (p) => p.repair === id)
       )
         return false;
+      // Постройка, закрытая темой, но уже стоявшая на карте, — находка
+      // (малый ящик из-под завала, §12.404): статья о вещи, которую игрок
+      // держит в руках, открывается вместе с ней, а не с темой.
       return (
         def >= 0 &&
         !HIDDEN_TILES.has(id) &&
-        (snap.tiles_open ?? [])[def] !== false
+        ((snap.tiles_open ?? [])[def] !== false ||
+          (!!meta?.palette?.[def]?.tech &&
+            tileEverBuilt(snap, (p) => p.id === id)))
       );
     case "item": {
       // Личная вещь (§12.256) ресурсом не бывает и «виденной» не считается —
@@ -15551,7 +15639,9 @@ function wikiOwnGate(key) {
       );
     }
     case "rule":
-      return !!snap[`auto_${id}`];
+      // `auto_tidy` занято самим тумблером (§12.96), поэтому ворота уборки
+      // едут полем `auto_tidy_open` (§12.401).
+      return !!snap[id === "tidy" ? "auto_tidy_open" : `auto_${id}`];
     case "lore":
       return loreOpen(id, snap);
     default:

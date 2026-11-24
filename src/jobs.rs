@@ -548,6 +548,8 @@ pub(crate) fn assign_jobs(
     rules: Res<TileRules>,
     bins: Res<Bins>,
     auto_tidy: Res<AutoTidy>,
+    gates: Res<AutoRules>,
+    techs: Res<Techs>,
     mut commands: Commands,
     mut blueprints: Query<(Entity, &mut Blueprint)>,
     piles: Query<(&Position, &Stack)>,
@@ -586,7 +588,13 @@ pub(crate) fn assign_jobs(
         .iter()
         .map(|(p, s)| ((p.x, p.y), s.item, s.count))
         .collect();
-    let cluttered = site_clutter(&map, &rules, &bins, auto_tidy.0, &piled);
+    let cluttered = site_clutter(
+        &map,
+        &rules,
+        &bins,
+        gates.tidies(&auto_tidy, &techs),
+        &piled,
+    );
     let front = (!doomed.is_empty()).then(|| {
         let positions: Vec<(i32, i32)> = cats.iter().map(|(p, _)| (p.x, p.y)).collect();
         DemolitionFront::new(&map, &rules, &doomed, &positions)

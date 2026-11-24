@@ -560,8 +560,8 @@ function wallFace(g, x, y, w, h, cx, cy, tint, d) {
   }
 }
 
-/// Мебель одной клетки в 3/4.
-function prop(g, id, x, y, tint, n, d) {
+/// Мебель одной клетки в 3/4. Наружу — ради завала под порталом (§12.403).
+export function prop(g, id, x, y, tint, n, d) {
   const { T, shade, tileDefAt } = d;
   const px = x * T;
   const py = y * T;
@@ -581,6 +581,7 @@ function prop(g, id, x, y, tint, n, d) {
     return { x: x0, y: y0 - hh, w, d: dd };
   };
   switch (id) {
+    case "rubble_bin": // завал над найденным ящиком (§12.404)
     case "rubble": {
       // Завал (§12.367): груда камней коробками разной высоты — ниже стены,
       // выше мебели; раскладка своя у каждой клетки (`n`).

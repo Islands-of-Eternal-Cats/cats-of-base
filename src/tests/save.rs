@@ -274,6 +274,9 @@ fn a_saved_game_continues_identically() {
 
     let json = live.save().expect("снимок");
     let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
+    // Правила в снимок не идут (§12.45): ворота, снятые `opened`, снимаем и
+    // у загруженного — автоуборка за темой (§12.401).
+    loaded.open_rules();
     assert_eq!(
         state_of(&loaded),
         before,

@@ -1239,27 +1239,39 @@ fn each_automation_gate_answers_for_itself() {
     let (mut sim, _) = sim_with_market();
     sim.set_auto_gates("logistics", "planning", "callsigns");
     sim.set_study_gate("curriculum");
+    sim.set_tidy_gate("tidying");
     assert_eq!(
         sim.auto_gates_open(),
-        (false, false, false, false),
+        (false, false, false, false, false),
         "закрыто всё"
     );
 
     sim.set_tech("planning");
     assert_eq!(
         sim.auto_gates_open(),
-        (false, true, false, false),
+        (false, true, false, false, false),
         "изучили «Автопроизводство» — открылось только производство",
     );
 
     sim.set_tech("logistics");
-    assert_eq!(sim.auto_gates_open(), (true, true, false, false), "и сбыт");
+    assert_eq!(
+        sim.auto_gates_open(),
+        (true, true, false, false, false),
+        "и сбыт"
+    );
 
     sim.set_tech("curriculum");
     assert_eq!(
         sim.auto_gates_open(),
-        (true, true, false, true),
+        (true, true, false, true, false),
         "и учёба в простое (§12.314)",
+    );
+
+    sim.set_tech("tidying");
+    assert_eq!(
+        sim.auto_gates_open(),
+        (true, true, false, true, true),
+        "и автоуборка (§12.401)",
     );
 }
 

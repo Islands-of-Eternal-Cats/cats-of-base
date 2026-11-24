@@ -827,10 +827,12 @@ fn the_shipped_ruleset_chains_its_palette_forward() {
 /// запертая навсегда (§12.93).
 #[test]
 fn the_shipped_ruleset_can_reach_its_automation() {
-    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
+    sim.set_tidy_gate("tidying"); // `opened` снимает ворота уборки (§12.401)
     let cap = sim.taught_cap("science");
     let gates = sim.auto_gates();
-    assert_eq!(gates.len(), 4, "ворота названы у всех четырёх правил");
+    assert_eq!(gates.len(), 5, "ворота названы у всех пяти правил");
 
     for gate in gates {
         let topic = sim

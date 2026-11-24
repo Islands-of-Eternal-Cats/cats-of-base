@@ -1368,12 +1368,12 @@ impl Sim {
     }
 
     /// Открыта ли автоматика — по правилу на каждое: `(сбыт, производство,
-    /// вылазки, учёба)`, §12.93, §12.314.
+    /// вылазки, учёба, уборка)`, §12.93, §12.314, §12.401.
     ///
     /// Одно место на снимок и на тесты: снапшот на хосте не собрать, а три
     /// почти одинаковых флага рядом — приглашение перепутать их местами, и
     /// заметить это можно было бы только по молча не работающей строке.
-    pub(crate) fn auto_gates_open(&self) -> (bool, bool, bool, bool) {
+    pub(crate) fn auto_gates_open(&self) -> (bool, bool, bool, bool, bool) {
         let gates = self.world.resource::<AutoRules>();
         let techs = self.world.resource::<Techs>();
         (
@@ -1381,6 +1381,15 @@ impl Sim {
             gates.crafting_open(techs),
             gates.raids_open(techs),
             gates.study_open(techs),
+            gates.tidy_open(techs),
+        )
+    }
+
+    /// Убирают ли коты сами прямо сейчас — тумблер и ворота (§12.401).
+    pub(crate) fn tidies(&self) -> bool {
+        self.world.resource::<AutoRules>().tidies(
+            self.world.resource::<AutoTidy>(),
+            self.world.resource::<Techs>(),
         )
     }
 
@@ -2424,6 +2433,7 @@ impl Sim {
             crafting: rs.automation.crafting.clone(),
             raids: rs.automation.raids.clone(),
             study: rs.automation.study.clone(),
+            tidy: rs.automation.tidy.clone(),
         });
         world.insert_resource(Trace::default());
         world.insert_resource(NeedRules {
@@ -3479,9 +3489,9 @@ impl Sim {
     ///
     /// **Ящик — обычный тайл с ненулевым `priority`**, и в этом всё правило:
     /// материал ходит только вверх по ярусам, а набор говорит, какой именно
-    /// материал сюда пускают. Записи нет — клетка принимает всё, поэтому первый
-    /// включённый предмет **сужает**, а снятие последнего возвращает «принимает
-    /// всё»: два представления одного состояния однажды разъехались бы.
+    /// материал сюда пускают. Записи нет — ящик не принимает ничего (§12.402):
+    /// что в нём держать, решает игрок, а снятие последнего предмета
+    /// возвращает ящик в это состояние.
     ///
     /// Ворота одни — **у клетки должен быть ярус**. Настроить склад нельзя
     /// намеренно: он и так вместительнее (20 против 10), и адресный склад побил
@@ -3506,6 +3516,20 @@ impl Sim {
             return false;
         }
         self.world.resource_mut::<Bins>().set(x, y, item, on);
+        // Сменили назначение — то, чего ящик больше не принимает, помечено на
+        // вывоз тем же кликом (§12.402): это решение игрока, и ждать
+        // «Автоуборки» ему незачем. Дальше всё делает обычная уборка — везёт
+        // туда, где примут, а некуда — выносит на пол рядом (`unload_spot`).
+        let mut q = self.world.query::<(Entity, &Position, &Stack)>();
+        let bins = self.world.resource::<Bins>();
+        let evicted: Vec<Entity> = q
+            .iter(&self.world)
+            .filter(|(_, p, s)| (p.x, p.y) == (x, y) && !bins.accepts(true, x, y, s.item))
+            .map(|(e, ..)| e)
+            .collect();
+        for e in evicted {
+            self.world.entity_mut(e).insert(ToStore);
+        }
         true
     }
 
@@ -7198,7 +7222,8 @@ impl Sim {
         if rules.capacity_of(map.tile_at(x, y)) <= 0 {
             return None;
         }
-        if !self.world.resource::<Bins>().accepts(x, y, item) {
+        let tiered = rules.priority_of(map.tile_at(x, y)) > 0;
+        if !self.world.resource::<Bins>().accepts(tiered, x, y, item) {
             return Some(HandVerb::Refuse("refuses"));
         }
         let mut stacks = self.world.query::<(&Position, &Stack)>();
@@ -7308,7 +7333,7 @@ impl Sim {
         let tier = rules.priority_of(tile);
         for (item, top) in best {
             let misplaced = rules.capacity_of(tile) <= 0
-                || !bins.accepts(x, y, item)
+                || !bins.accepts(tier > 0, x, y, item)
                 || top.is_some_and(|t| t > tier);
             if !misplaced {
                 continue;
@@ -7317,11 +7342,14 @@ impl Sim {
                 .iter()
                 .any(|&(at, i, _, m)| at == (x, y) && i == item && m);
             let any_store = map.cells.iter().any(|&c| rules.capacity_of(c) > 0);
-            return if !marked && !self.world.resource::<AutoTidy>().0 {
+            // Выселенное из ящика (§12.402) уезжает и без места на складе: его
+            // выносят на пол рядом.
+            let evicted = tier > 0 && !bins.accepts(true, x, y, item);
+            return if !marked && !self.tidies() {
                 "untidy"
             } else if !any_store {
                 "nostore"
-            } else if top.is_none() {
+            } else if top.is_none() && !evicted {
                 "noroom"
             } else {
                 "waiting"
@@ -8096,7 +8124,7 @@ impl Sim {
                 self.world.resource::<BaseMap>(),
                 self.world.resource::<TileRules>(),
                 self.world.resource::<Bins>(),
-                self.world.resource::<AutoTidy>().0,
+                self.tidies(),
                 &piled,
             );
             let mut q = self.world.query::<&Blueprint>();
@@ -9110,6 +9138,7 @@ impl Sim {
             auto_crafting: auto_open.1,
             auto_raids: auto_open.2,
             auto_study: auto_open.3,
+            auto_tidy_open: auto_open.4,
             auto_tidy: self.world.resource::<AutoTidy>().0,
             recruits,
             research,

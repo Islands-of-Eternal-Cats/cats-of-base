@@ -627,10 +627,13 @@ pub(crate) fn assign_hauls(
 /// ⚠️ Здесь же **уборка за снесённым ящиком**: запись набора на клетке, которая
 /// перестала быть ящиком, выбрасывается. Прецедент дословный — `run_auto_raids`
 /// (§12.67): «у быстрого выхода обязана быть уборка».
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn mark_loose_scrap(
     map: Res<BaseMap>,
     rules: Res<TileRules>,
     auto: Res<AutoTidy>,
+    gates: Res<AutoRules>,
+    techs: Res<Techs>,
     mut bins: ResMut<Bins>,
     mut commands: Commands,
     stacks: Query<(Entity, &Position, &Stack, Option<&ToStore>)>,
@@ -648,12 +651,13 @@ pub(crate) fn mark_loose_scrap(
     items.sort_unstable();
     items.dedup();
     let best = best_tiers(&map, &rules, &bins, &stock, &items);
+    let tidies = gates.tidies(&auto, &techs);
 
     for (e, pos, stack, mark) in &stacks {
         let tile = map.tile_at(pos.x, pos.y);
         let tier = rules.priority_of(tile);
         let misplaced = rules.capacity_of(tile) <= 0
-            || !bins.accepts(pos.x, pos.y, stack.item)
+            || !bins.accepts(tier > 0, pos.x, pos.y, stack.item)
             || best
                 .iter()
                 .find(|&&(item, _)| item == stack.item)
@@ -662,7 +666,7 @@ pub(crate) fn mark_loose_scrap(
             (false, true) => {
                 commands.entity(e).remove::<ToStore>();
             }
-            (true, false) if auto.0 => {
+            (true, false) if tidies => {
                 commands.entity(e).insert(ToStore);
             }
             _ => {}
@@ -792,8 +796,14 @@ pub(crate) fn assign_tidy(
     }
 
     // Склада нет или он забит — уборки не будет вовсе. Без этой проверки коты
-    // ходили бы к кучам и возвращались ни с чем, тик за тиком.
-    if !any_store_room(map, &rules, &stock) {
+    // ходили бы к кучам и возвращались ни с чем, тик за тиком. Исключение —
+    // выселенное из ящика (§12.402): его выносят и без места на складе.
+    let has_evicted = marks.iter().any(|(e, p)| {
+        stacks
+            .get(e)
+            .is_ok_and(|(_, _, s)| evicted(map, &rules, &bins, (p.x, p.y), s.item))
+    });
+    if !any_store_room(map, &rules, &stock) && !has_evicted {
         return;
     }
 
@@ -853,7 +863,9 @@ pub(crate) fn assign_tidy(
         .map(|bp| (bp.x, bp.y))
         .collect();
 
-    let mut open: Vec<(Entity, (i32, i32), i32, u8)> = marks
+    // Пятое поле — «выносить на пол» (§12.402): выселенное из ящика, которому
+    // нигде нет места. Такая ходка места на складе не занимает.
+    let mut open: Vec<(Entity, (i32, i32), i32, u8, bool)> = marks
         .iter()
         .filter_map(|(e, p)| {
             let (_, _, stack) = stacks.get(e).ok()?;
@@ -861,11 +873,12 @@ pub(crate) fn assign_tidy(
                 .iter()
                 .find(|&&(item, _)| item == stack.item)
                 .is_some_and(|&(_, top)| top.is_some());
+            let unload = !welcome && evicted(map, &rules, &bins, (p.x, p.y), stack.item);
             let left = stack.count - claimed(&promised, e);
             let first =
                 rules.is_trade_post(map.tile_at(p.x, p.y)) || built_on.contains(&(p.x, p.y));
             let rank = u8::from(!first);
-            (welcome && left > 0).then_some((e, (p.x, p.y), left, rank))
+            ((welcome || unload) && left > 0).then_some((e, (p.x, p.y), left, rank, unload))
         })
         .collect();
     // Порядок обхода ECS в поведение протекать не должен (§11): при равном
@@ -875,14 +888,16 @@ pub(crate) fn assign_tidy(
     empty.sort_unstable_by_key(|&(id, ..)| id);
     open.sort_unstable_by_key(|&(e, (x, y), ..)| (y, x, e.index()));
 
-    while !empty.is_empty() && !open.is_empty() && room > 0 {
+    while !empty.is_empty() && !open.is_empty() {
         let chosen = empty
             .iter()
             .enumerate()
             .flat_map(|(ci, (_, _, _, reach))| {
                 open.iter()
                     .enumerate()
-                    .filter_map(move |(oi, &(_, xy, _, rank))| {
+                    // Место на складе кончилось — остаётся только вынос.
+                    .filter(move |&(_, &(.., unload))| unload || room > 0)
+                    .filter_map(move |(oi, &(_, xy, _, rank, _))| {
                         // Стеллаж непроходим (§12.142): цена — шаги до подхода,
                         // и идёт кот туда же, а не на саму клетку кучи.
                         work_spot(map, tiles, reach, xy, &[])
@@ -895,10 +910,16 @@ pub(crate) fn assign_tidy(
         };
 
         let (_, cat_e, carry, reach) = empty.remove(ci);
-        let (pile_e, _, left, _) = open[oi];
-        let trip = portion(carry, left.min(room));
+        let (pile_e, _, left, _, unload) = open[oi];
+        let trip = if unload {
+            portion(carry, left)
+        } else {
+            portion(carry, left.min(room))
+        };
         open[oi].2 -= trip;
-        room -= trip;
+        if !unload {
+            room -= trip;
+        }
         if open[oi].2 <= 0 {
             open.remove(oi);
         }
@@ -1462,6 +1483,38 @@ pub(crate) fn work_hauls(
                     let Some(((cell, spot), _)) =
                         nearest_store(&map, &rules, &bins, &reach, &stock, item)
                     else {
+                        // Выселенное из ящика, которому нигде нет места, кот
+                        // выносит на пол рядом (§12.402): иначе ящик под новый
+                        // тип не освободился бы никогда.
+                        let worked = worked_cells(&map, &rules, (pos.x, pos.y));
+                        let out = evicted(&map, &rules, &bins, from, item)
+                            .then(|| unload_spot(&map, &rules, from, &worked))
+                            .flatten();
+                        if let Some(out) = out {
+                            let want = portion(carry, i32::MAX);
+                            let taken = take_from_pile(
+                                &mut commands,
+                                &mut stacks,
+                                &mut things,
+                                cat_e,
+                                pile_e,
+                                &worked,
+                                want,
+                            );
+                            if let Some((item, taken)) = taken {
+                                note(&mut stock, from, -taken);
+                                spill(&mut commands, &mut stacks, out, item, taken);
+                                shift(
+                                    &mut things,
+                                    Place::Paws(cat_e),
+                                    Place::Floor(out.0, out.1),
+                                    item,
+                                    taken,
+                                    Pick::Spent,
+                                );
+                                note(&mut stock, out, taken);
+                            }
+                        }
                         commands.entity(cat_e).remove::<Haul>();
                         continue;
                     };
@@ -1796,7 +1849,8 @@ pub(crate) fn free_space(
     at: (i32, i32),
     item: usize,
 ) -> i32 {
-    if !bins.accepts(at.0, at.1, item) {
+    let tiered = rules.priority_of(map.tile_at(at.0, at.1)) > 0;
+    if !bins.accepts(tiered, at.0, at.1, item) {
         return 0;
     }
     map.index(at.0, at.1)
@@ -1876,6 +1930,40 @@ fn nearest_store(
         }
     }
     best
+}
+
+/// Лежит ли куча в ящике, который её больше не принимает (§12.402): такое
+/// уборка вывозит, даже когда везти некуда, — выносом на пол рядом.
+pub(crate) fn evicted(
+    map: &BaseMap,
+    rules: &TileRules,
+    bins: &Bins,
+    at: (i32, i32),
+    item: usize,
+) -> bool {
+    rules.priority_of(map.tile_at(at.0, at.1)) > 0 && !bins.accepts(true, at.0, at.1, item)
+}
+
+/// Куда вынести выселенное из ящика, когда его нигде не примут (§12.402):
+/// клетка пола рядом с котом, **не хранилище** (туда вынесенное тут же
+/// поехало бы обратно) и не ячейка поста (куча там держала бы торговый слот,
+/// §12.98). Ближайшая к ящику, при равенстве — по клетке (§11).
+fn unload_spot(
+    map: &BaseMap,
+    rules: &TileRules,
+    from: (i32, i32),
+    worked: &[(i32, i32)],
+) -> Option<(i32, i32)> {
+    worked
+        .iter()
+        .copied()
+        .filter(|&c| c != from)
+        .filter(|&(x, y)| {
+            let tile = map.tile_at(x, y);
+            map.walkable(rules, x, y) && rules.capacity_of(tile) <= 0 && !rules.is_trade_post(tile)
+        })
+        // Ближе к ящику — рядом с ним, а не где-то у кота за спиной.
+        .min_by_key(|&(x, y)| ((x - from.0).abs().max((y - from.1).abs()), y, x))
 }
 
 /// Есть ли на базе хоть одно место под груз. Дешёвая проверка без обхода: без

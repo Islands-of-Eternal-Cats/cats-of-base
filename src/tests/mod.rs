@@ -1461,6 +1461,16 @@ impl Sim {
         self.world.resource_mut::<AutoRules>().study = tech.to_string();
     }
 
+    /// Ворота автоуборки (§12.401) — так же отдельно от трёх старых.
+    fn set_tidy_gate(&mut self, tech: &str) {
+        self.world.resource_mut::<AutoRules>().tidy = tech.to_string();
+    }
+
+    /// Убирают ли коты сами прямо сейчас — тумблер и ворота (§12.401).
+    fn tidies_now(&self) -> bool {
+        self.tidies()
+    }
+
     /// Проступили ли детали события — то же, что уходит в снапшот (§12.28).
     fn note_revealed(&self, event: usize) -> bool {
         let tick = self.world.resource::<SimTime>().tick;
@@ -1872,6 +1882,9 @@ impl Sim {
             rule.on = None;
             rule.internal = false;
         }
+        // Автоуборка за темой (§12.401): прежние тесты механик писались под
+        // базу, где коты свозят кучи сами с нулевого тика.
+        self.world.resource_mut::<AutoRules>().tidy.clear();
     }
 
     ///
