@@ -2364,6 +2364,13 @@ body.rail-wide #screenbar .door-label {
   font-size: 12px;
   margin-top: 2px;
 }
+/* У идущей вылазки собранное стоит в той же строке добычи вторым набором
+   фишек (§12.399): `margin-left: auto` у обоих делил бы свободное место
+   пополам, и второй набор встал бы посреди строки. */
+.raidwin-loot .cost + .cost {
+  margin-left: 0;
+  padding-left: 0;
+}
 /* Образцы, которые принесёт отряд (§12.264), — своей строкой и акцентом:
    ради них с прибором и ходят, и в общей добыче фишка терялась. */
 .raidwin-gather {
@@ -2376,7 +2383,8 @@ body.rail-wide #screenbar .door-label {
   color: #7fd6a0;
   font-weight: 600;
 }
-.raidwin-gather i {
+.raidwin-gather i,
+.raidwin-loot > i {
   color: var(--muted);
   font-style: normal;
   font-weight: 400;

@@ -18752,27 +18752,27 @@ function missionLootRow(def, share, samples, counts, gather, onlyGot = false) {
   // и невиданными: строка появляется, только когда отряд их правда соберёт, —
   // то есть прибор уже в руках (§12.131 цел: до Антенны её нет вовсе).
   const rows = [];
+  // У идущей вылазки (`onlyGot`) собранное едет в ту же строку «добыча»
+  // (§12.399): решение принято, и делить привезённое на «добычу» и «вернутся
+  // с» уже не к чему звать. Прогноз заказа держит образцы своей строкой.
+  let together = "";
   if (samples && gathered.length) {
     const chips = gathered
       .map(([id, n]) => [id, countOf(id, n), n])
       .filter(([, c]) => c > 0);
     const short = gathered.some(([id, n]) => countOf(id, n) < cut(n));
-    if (chips.length) {
-      rows.push(
-        `<div class="raidwin-gather">вернутся с ${costChips(
-          new Map(chips.map(([id, c]) => [id, c])),
-        )}` +
-          // Недобор — долей сбора в скобках при числе (§12.267; считает ядро,
-          // `gathers`), а «7 из 10» с причиной — в подсказке (§12.53).
-          (short
-            ? ` <i data-tip="${chips.reduce((a, [, c]) => a + c, 0)} из ${gathered.reduce(
-                (a, [, n]) => a + cut(n),
-                0,
-              )} — прибор сбора не у каждого в отряде">(${gather ?? 0} %)</i>`
-            : "") +
-          "</div>",
-      );
-    }
+    // Недобор — долей сбора в скобках при числе (§12.267; считает ядро,
+    // `gathers`), а «7 из 10» с причиной — в подсказке (§12.53).
+    const note = short
+      ? ` <i data-tip="${chips.reduce((a, [, c]) => a + c, 0)} из ${gathered.reduce(
+          (a, [, n]) => a + cut(n),
+          0,
+        )} — прибор сбора не у каждого в отряде">(${gather ?? 0} %)</i>`
+      : "";
+    const gchips = costChips(new Map(chips.map(([id, c]) => [id, c])));
+    if (chips.length && onlyGot) together = gchips + note;
+    else if (chips.length)
+      rows.push(`<div class="raidwin-gather">вернутся с ${gchips}${note}</div>`);
   }
   const lost = samples || onlyGot ? [] : gathered.filter(([id]) => seenId(id));
   // Не достанется — зачёркнутой фишкой в той же строке добычи, а причина — в
@@ -18780,8 +18780,10 @@ function missionLootRow(def, share, samples, counts, gather, onlyGot = false) {
   const miss = lost.length
     ? `<span class="sample-lost" data-tip="в отряде нет прибора сбора">${costChips(new Map(lost), true)}</span>`
     : "";
-  if (loot || miss) {
-    rows.unshift(`<div class="raidwin-loot">добыча ${loot}${miss}</div>`);
+  if (loot || miss || together) {
+    rows.unshift(
+      `<div class="raidwin-loot">добыча ${loot}${loot && together ? " " : ""}${together}${miss}</div>`,
+    );
   }
   return rows.join("");
 }
