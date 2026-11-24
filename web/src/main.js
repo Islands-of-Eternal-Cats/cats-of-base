@@ -5092,7 +5092,7 @@ function renderCellPanel(snap) {
       .map(
         (s) =>
           `${itemGlyph(s.item)}` +
-          `${esc(itemLabel(s.item))} ${s.count}${pieceState(s)}`,
+          `${esc(itemLabel(s.item))} ${s.count}`,
       )
       .join(" · ");
     parts.push(`<div class="cat-sub">${chips}</div>`);
@@ -14239,18 +14239,6 @@ function skillNeedWhy(def) {
     return `${s?.label || id} ${n}`;
   });
   return `Не умеет им пользоваться: нужна ${parts.join(", ")}`;
-}
-
-// Состояние вещей кучи (§12.317): у каждой штуки свои заряды, и «Аптечка 3»
-// не говорит, что одна из трёх почти пуста. Порядок приходит из ядра — от
-// свежей к потраченной. У ресурса списков нет.
-// Выходы (`wears`) в панели клетки пока не пишем (§12.398): на складе
-// комбинезонов десятки, и строка «6/6/6/…» на всю панель не отвечает ни на
-// какой вопрос. Ядро их по-прежнему везёт — вернуть одной строкой.
-function pieceState(s) {
-  const parts = [];
-  if ((s.charges ?? []).length) parts.push(`заряды ${s.charges.join("/")}`);
-  return parts.length ? ` (${parts.join(", ")})` : "";
 }
 
 // Сколько выходов осталось надетой вещи; ноль — не изнашивается.
