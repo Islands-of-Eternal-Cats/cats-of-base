@@ -130,6 +130,10 @@ fn state_of(sim: &Sim) -> String {
             (e.contains::<Squad>(), "job:squad"),
             (e.contains::<Away>(), "away"),
             (e.contains::<Captive>(), "captive"),
+            (
+                e.get::<Captive>().and_then(|c| c.site) == Some(0),
+                "held_at:0",
+            ),
         ] {
             if has {
                 p.push(name.into());
@@ -899,5 +903,26 @@ fn a_loaded_game_remembers_its_best_scientist() {
     assert!(
         loaded.topic_mastered(topic),
         "загруженная партия забыла учёного"
+    );
+}
+
+/// Участок, где оставили пленного (§12.397), переживает загрузку: по нему карта
+/// штаба держит портрет у участка, и без него пленный после загрузки пропал бы
+/// с карты, хотя в мире его по-прежнему ждут.
+#[test]
+fn a_captive_keeps_its_site_through_a_save() {
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
+    let cat = live.entity_of("sp2");
+    live.world
+        .entity_mut(cat)
+        .insert((Captive { site: Some(3) }, Away));
+
+    let json = live.save().expect("снимок");
+    let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
+    let cat = loaded.entity_of("sp2");
+    assert_eq!(
+        loaded.world.get::<Captive>(cat).and_then(|c| c.site),
+        Some(3),
+        "загруженный пленный забыл, где его держат",
     );
 }

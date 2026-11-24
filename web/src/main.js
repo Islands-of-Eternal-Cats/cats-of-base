@@ -11521,14 +11521,18 @@ function pointAlong(trail, f) {
   return trail[0];
 }
 
-// Значки ушедших отрядов на карте штаба (§12.292): кружок с номером отряда на
-// пути от базы к участку и пунктир самого пути. Где стоять, считает ядро
-// (`MissionSnap::way`, тем же разложением срока, что и стадия, — инвариант 14);
-// здесь только длина ломаной. Узлы живут по отряду и правятся на месте, как
-// всё в штабе (§12.118): пересборка съедала бы клик по соседнему кружку.
+// Значки ушедших отрядов на карте штаба (§12.292, §12.397): пунктир пути и
+// на нём **стопка портретов** отряда там, где он сейчас. Где стоять, считает
+// ядро (`MissionSnap::way`, тем же разложением срока, что и стадия, —
+// инвариант 14); здесь только длина ломаной. Узлы живут по отряду и правятся
+// на месте, как всё в штабе (§12.118): пересборка съедала бы клик по соседу и
+// сбивала бы анимацию.
 function syncRaidTrips() {
   const layer = raidUi?.mapCol?.querySelector(".map-trips");
   if (!layer) return;
+  // Пауза мира останавливает всё живое на карте разом: кот на карте не идёт и
+  // не работает, пока стоит время.
+  layer.ownerSVGElement?.classList.toggle("paused", speed === 0);
   const seen = new Set();
   missionsOut.forEach((m) => {
     // Вдоль дороги участка идёт только **его собственный** заказ — тот, чью
@@ -11547,36 +11551,40 @@ function syncRaidTrips() {
       g.setAttribute("class", "map-trip");
       g.dataset.key = key;
       g.innerHTML =
-        `<polyline class="map-trip-path"/>` + `<g class="map-trip-mark"></g>`;
+        `<polyline class="map-trip-path"/>` +
+        `<polyline class="map-trip-radio"/>` +
+        `<g class="map-trip-mark"></g>`;
       layer.appendChild(g);
     }
     const path = trail
       .map((p) => p.map((v) => v.toFixed(1)).join(","))
       .join(" ");
-    const line = g.querySelector(".map-trip-path");
-    if (line.getAttribute("points") !== path) line.setAttribute("points", path);
-    // Плашка на каждый отряд вылазки и на свободных котов (§12.366); пунктир
-    // пути — цветом ведущего.
+    for (const line of g.querySelectorAll("polyline"))
+      if (line.getAttribute("points") !== path)
+        line.setAttribute("points", path);
+    // Связь (§12.277): пока радист за рацией, по пути от базы бегут импульсы.
+    // Режет она только дорогу, поэтому на работе импульсов нет.
+    const radio = g.querySelector(".map-trip-radio");
+    const live = m.manned && (m.phase === "travel" || m.phase === "back");
+    if (radio.style.display !== (live ? "" : "none"))
+      radio.style.display = live ? "" : "none";
     const tags = tripTags(m);
+    g.style.setProperty("--squad", tags[0]?.tint ?? FREE_TINT);
     const mark = g.querySelector(".map-trip-mark");
-    const html = tagsSvg(tags);
+    const html = tripStackSvg(m, tags);
     if (mark._html !== html) {
       mark._html = html;
       mark.innerHTML = html;
-      g.style.setProperty("--squad", tags[0]?.tint ?? FREE_TINT);
     }
     const [x, y] = pointAlong(trail, (m.way ?? 0) / 1000);
     const at = `translate(${x.toFixed(1)},${y.toFixed(1)})`;
     if (mark.getAttribute("transform") !== at)
       mark.setAttribute("transform", at);
-    // Дошедший до точки отряд значком на пути не рисуется: он стоит в кружке,
-    // где уже есть плашка «сюда назначен», и две плашки с одним номером
-    // читались бы двумя отрядами. У участка-дороги конец пути — не кружок,
-    // там значок остаётся.
-    // Отряд ещё на базе (собирается или только вышел) не рисуется тоже: где он,
-    // и так ясно, а цель уже названа плашкой у кружка и пунктиром пути.
-    const there =
-      m.way >= 1000 && !(walks && (meta?.sites?.[m.site]?.road ?? []).length);
+    // На работе отряд стоит кругом у участка (`syncOrbits`), а не стопкой на
+    // пути; у участка-дороги конец пути — не кружок, там стопка остаётся.
+    // Отряд ещё на базе (собирается) не рисуется: где он, и так ясно, а цель
+    // названа плашкой у кружка и пунктиром пути.
+    const there = m.phase === "work" && !walksRoad(m);
     const show = there || !(m.way > 0) ? "none" : "";
     if (mark.style.display !== show) mark.style.display = show;
     const what = (meta?.missions ?? [])[m.def]?.label ?? "";
@@ -11584,65 +11592,247 @@ function syncRaidTrips() {
     liveTitle(mark, `${who} — ${RAID_PHASE[m.phase] ?? "сбор"}: ${what}`);
   });
   for (const g of [...layer.children]) if (!seen.has(g.dataset.key)) g.remove();
-  syncNearbyFaces();
+  syncOrbits();
+  syncHeld();
+  syncFlashes();
 }
 
-// Радиус портрета у базы и радиус его круга (§12.396).
+// Заказ идёт вдоль дороги участка и работает на ней, а не в кружке (§12.292).
+function walksRoad(m) {
+  const site = meta?.sites?.[m.site];
+  return (
+    (meta?.missions ?? [])[m.def]?.site === site?.id &&
+    (site?.road ?? []).length > 0
+  );
+}
+
+// Портрет кота на карте (§12.396, §12.397): круг в рамке. Картинка обрезается
+// одним `clipPath` в долях рамки, поэтому годится любого размера.
+function faceSvg(id, r, cls = "") {
+  const e = (lastSnap?.entities ?? []).find((o) => o.id === id);
+  const src = e?.sprite
+    ? `${import.meta.env.BASE_URL}portraits/${encodeURIComponent(e.sprite)}.png`
+    : "";
+  const hurt = wounded.has(id) ? " hurt" : "";
+  return (
+    `<g class="face${hurt} ${cls}"><circle class="face-ring" r="${r + 2}"/>` +
+    (src
+      ? `<image href="${src}" x="${-r}" y="${-r}" width="${r * 2}" height="${r * 2}" clip-path="url(#map-face-clip)" preserveAspectRatio="xMidYMid slice"/>`
+      : `<text class="face-initial" y="4">${esc(id.slice(0, 1).toUpperCase())}</text>`) +
+    `</g>`
+  );
+}
+
+// Стопка портретов отряда в дороге (§12.397): проводник первым, за ним ещё
+// двое внахлёст, остальные — «+N». Номер отряда — плашкой в углу: он нужен,
+// когда в поле несколько отрядов. На обратной дороге сбоку едет глиф добычи —
+// «в лапах», а не над головой (§12.109), и только если её несут.
+const STACK_R = 11;
+function tripStackSvg(m, tags) {
+  const ids = [...(m.squad ?? [])].sort(
+    (a, b) => (b === m.guide) - (a === m.guide),
+  );
+  const shown = ids.slice(0, 3);
+  const more = ids.length - shown.length;
+  const step = STACK_R * 1.25;
+  const n = shown.length + (more > 0 ? 1 : 0);
+  const x0 = (-(n - 1) * step) / 2;
+  const faces = shown
+    .map(
+      (id, k) =>
+        `<g transform="translate(${(x0 + k * step).toFixed(1)},0)">${faceSvg(id, STACK_R)}</g>`,
+    )
+    .join("");
+  const plus =
+    more > 0
+      ? `<g transform="translate(${(x0 + shown.length * step).toFixed(1)},0)"><circle class="face-ring" r="${STACK_R + 2}"/><text class="face-more" y="4">+${more}</text></g>`
+      : "";
+  const right = x0 + (n - 1) * step + STACK_R;
+  const badge = `<g transform="translate(${(right + 2).toFixed(1)},${-STACK_R - 3}) scale(0.75)">${tagsSvg(tags)}</g>`;
+  const item = m.phase === "back" && !m.failed && m.share > 0 ? m.loot?.[0]?.[0] : null;
+  const it = item != null ? (meta?.items ?? [])[item] : null;
+  const loot =
+    it && ITEM_GLYPHS[it.id]
+      ? `<use class="trip-loot" href="#g-item-${it.id}" x="${(right + 3).toFixed(1)}" y="-3" width="15" height="15" style="color:${it.color};fill:currentColor"/>`
+      : "";
+  const walk = m.phase === "travel" || m.phase === "back" ? " walking" : "";
+  return `<g class="trip-stack${walk}">${faces}${plus}${loot}</g>${badge}`;
+}
+
+// Радиус портрета в круге и радиусы круга и дуги работы (§12.396, §12.397).
+// У базы шестигранник крупнее, поэтому и круг шире.
 const NEAR_FACE = 13;
-const NEAR_ORBIT = SITE_R * 2.4;
-
-// Коты, работающие рядом с базой (§12.396): у «Пошарить рядом» и прочих
-// заказов без участка (`nearby`) пути на карте нет, и ушедший кот пропадал
-// бесследно — база стоит, карта пуста. Такой кот кружит портретом вокруг
-// базы, пока он за шлюзом (`away`). Где он, считает ядро (`MissionSnap`);
-// здесь только подача. Узлы живут по коту и правятся на месте (§12.118):
-// пересборка каждым кадром сбивала бы анимацию.
-function syncNearbyFaces() {
-  const layer = raidUi?.mapCol?.querySelector(".map-near");
-  if (!layer) return;
-  const ents = new Map((lastSnap?.entities ?? []).map((e) => [e.id, e]));
-  const out = [];
-  missionsOut.forEach((m) => {
-    if (m.site >= 0 || !m.away) return;
-    const what = (meta?.missions ?? [])[m.def]?.label ?? "";
-    for (const id of m.squad ?? [])
-      out.push({ id, sprite: ents.get(id)?.sprite ?? "", what, phase: m.phase });
-  });
-  // Пауза мира останавливает и круг: кот на карте не работает, пока стоит время.
-  layer.classList.toggle("paused", speed === 0);
-  const seen = new Set();
-  out.forEach((c, k) => {
-    seen.add(c.id);
-    let g = [...layer.children].find((n) => n.dataset.id === c.id);
-    if (!g) {
-      g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-      g.setAttribute("class", "near-orbit");
-      g.dataset.id = c.id;
-      const src = c.sprite
-        ? `${import.meta.env.BASE_URL}portraits/${encodeURIComponent(c.sprite)}.png`
-        : "";
-      g.innerHTML =
-        `<g transform="translate(${NEAR_ORBIT},0)"><g class="near-face">` +
-        `<circle class="near-ring" r="${NEAR_FACE + 2}"/>` +
-        (src
-          ? `<image href="${src}" x="${-NEAR_FACE}" y="${-NEAR_FACE}" width="${NEAR_FACE * 2}" height="${NEAR_FACE * 2}" clip-path="url(#map-face-clip)" preserveAspectRatio="xMidYMid slice"/>`
-          : `<text class="near-initial" y="4">${esc(c.id.slice(0, 1).toUpperCase())}</text>`) +
-        `</g></g>`;
-      layer.appendChild(g);
-    }
-    // Несколько котов расходятся по кругу равными долями: задержка анимации
-    // отрицательная, то есть каждый стартует уже со своего места.
-    const delay = `${(-k * NEAR_PERIOD) / out.length}s`;
-    if (g.style.animationDelay !== delay) {
-      g.style.animationDelay = delay;
-      g.querySelector(".near-face").style.animationDelay = delay;
-    }
-    liveTitle(g, `${c.id} — ${RAID_PHASE[c.phase] ?? "сбор"}: ${c.what}`);
-  });
-  for (const g of [...layer.children]) if (!seen.has(g.dataset.id)) g.remove();
-}
+const ORBIT_AT = { home: SITE_R * 2.9, site: SITE_R * 2.4 };
+const ARC_AT = { home: SITE_R * 2.05, site: SITE_R * 1.55 };
 // Период круга — секунды настенных часов: это подача, а не время мира.
 const NEAR_PERIOD = 14;
+
+// Коты, работающие на месте (§12.396, §12.397), — кругом вокруг того, где
+// работают: у базы (заказ без участка, `nearby`) или у участка. Под ними дуга
+// цвета отряда заполняется по доле работы (`MissionSnap::work` — из ядра,
+// инвариант 14). Все коты одного места встают в **один** круг равными долями —
+// пять кругов у одного кружка были бы кашей. Узлы живут по месту и по коту и
+// правятся на месте (§12.118): пересборка сбивала бы анимацию.
+function syncOrbits() {
+  const layer = raidUi?.mapCol?.querySelector(".map-orbits");
+  if (!layer || !siteHome) return;
+  const spots = new Map();
+  missionsOut.forEach((m) => {
+    if (!m.away || m.phase !== "work") return;
+    let key, at, kind;
+    if (m.site < 0) {
+      [key, at, kind] = ["home", siteHome, "home"];
+    } else {
+      if (walksRoad(m)) return; // на дороге работают стопкой (`syncRaidTrips`)
+      const trail = siteApproaches[m.site];
+      if (!trail) return;
+      [key, at, kind] = [`s${m.site}`, trail[trail.length - 1], "site"];
+    }
+    if (!spots.has(key)) spots.set(key, { at, kind, trips: [] });
+    spots.get(key).trips.push(m);
+  });
+  const seen = new Set();
+  for (const [key, spot] of spots) {
+    seen.add(key);
+    let c = [...layer.children].find((n) => n.dataset.c === key);
+    if (!c) {
+      c = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      c.setAttribute("class", "orbit-spot");
+      c.dataset.c = key;
+      c.innerHTML = `<g class="orbit-arcs"></g><g class="orbit-cats"></g>`;
+      layer.appendChild(c);
+    }
+    const at = `translate(${spot.at[0].toFixed(1)},${spot.at[1].toFixed(1)})`;
+    if (c.getAttribute("transform") !== at) c.setAttribute("transform", at);
+    const orbit = ORBIT_AT[spot.kind];
+    // Дуги — по вылазке, вложенными кольцами: две вылазки у одного участка
+    // идут каждая своим сроком.
+    const arcs = c.querySelector(".orbit-arcs");
+    const ahtml = spot.trips
+      .map((m, k) => {
+        const r = ARC_AT[spot.kind] - k * 4;
+        const len = 2 * Math.PI * r;
+        const tint = tripTags(m)[0]?.tint ?? FREE_TINT;
+        const done = (len * Math.max(0, Math.min(1000, m.work ?? 0))) / 1000;
+        return (
+          `<circle class="orbit-track" r="${r}"/>` +
+          `<circle class="orbit-arc" r="${r}" transform="rotate(-90)" style="--squad:${tint}" ` +
+          `stroke-dasharray="${done.toFixed(1)} ${len.toFixed(1)}"/>`
+        );
+      })
+      .join("");
+    if (arcs._html !== ahtml) {
+      arcs._html = ahtml;
+      arcs.innerHTML = ahtml;
+    }
+    const cats = c.querySelector(".orbit-cats");
+    const list = spot.trips.flatMap((m) =>
+      (m.squad ?? []).map((id) => ({ id, m })),
+    );
+    const mine = new Set();
+    list.forEach(({ id, m }, k) => {
+      mine.add(id);
+      let g = [...cats.children].find((n) => n.dataset.id === id);
+      if (!g) {
+        g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        g.setAttribute("class", "near-orbit");
+        g.dataset.id = id;
+        g.innerHTML =
+          `<g transform="translate(${orbit},0)"><g class="near-face">` +
+          faceSvg(id, NEAR_FACE) +
+          `</g></g>`;
+        cats.appendChild(g);
+      }
+      g.querySelector(".face")?.classList.toggle("hurt", wounded.has(id));
+      g.style.setProperty("--squad", tripTags(m)[0]?.tint ?? FREE_TINT);
+      // Несколько котов расходятся по кругу равными долями: задержка анимации
+      // отрицательная, то есть каждый стартует уже со своего места.
+      const delay = `${(-k * NEAR_PERIOD) / list.length}s`;
+      if (g.style.animationDelay !== delay) {
+        g.style.animationDelay = delay;
+        g.querySelector(".near-face").style.animationDelay = delay;
+      }
+      const what = (meta?.missions ?? [])[m.def]?.label ?? "";
+      liveTitle(g, `${id} — ${RAID_PHASE[m.phase] ?? "сбор"}: ${what}`);
+    });
+    for (const g of [...cats.children])
+      if (!mine.has(g.dataset.id)) g.remove();
+  }
+  for (const c of [...layer.children]) if (!seen.has(c.dataset.c)) c.remove();
+}
+
+// Пленные (§12.397) — тусклым неподвижным портретом у участка, где их
+// оставили (`EntitySnap::held_at`, из ядра). Карта говорит «он там, и за ним
+// можно сходить» — и только это: причины плена игра не называет (§12.40).
+function syncHeld() {
+  const layer = raidUi?.mapCol?.querySelector(".map-held");
+  if (!layer) return;
+  const bySite = new Map();
+  for (const e of lastSnap?.entities ?? []) {
+    if (!e.captive || !(e.held_at >= 0)) continue;
+    if (!bySite.has(e.held_at)) bySite.set(e.held_at, []);
+    bySite.get(e.held_at).push(e.id);
+  }
+  const html = [...bySite]
+    .map(([site, ids]) => {
+      const trail = siteApproaches[site];
+      if (!trail) return "";
+      const [x, y] = trail[trail.length - 1];
+      return ids
+        .map((id, k) => {
+          // Снаружи круга работающих (`ORBIT_AT.site`) и **по ту сторону
+          // участка от базы**: со стороны базы к нему подходит путь отряда.
+          // Второй и дальше — рядом, поперёк этого направления.
+          const [hx, hy] = siteHome ?? [0, 0];
+          const len = Math.hypot(x - hx, y - hy) || 1;
+          const [dx, dy] = [(x - hx) / len, (y - hy) / len];
+          const off = ORBIT_AT.site + NEAR_FACE + 4;
+          const side = (k - (ids.length - 1) / 2) * NEAR_FACE * 1.9;
+          const fx = x + dx * off - dy * side;
+          const fy = y + dy * off + dx * side;
+          return (
+            `<g class="held-cat" data-tip="${esc(`${id} — в плену. За ним можно сходить: «За своим» в штабе`)}" ` +
+            `transform="translate(${fx.toFixed(1)},${fy.toFixed(1)})">${faceSvg(id, NEAR_FACE * 0.85, "held")}</g>`
+          );
+        })
+        .join("");
+    })
+    .join("");
+  if (layer._html !== html) {
+    layer._html = html;
+    layer.innerHTML = html;
+  }
+}
+
+// Вспышки на смене стадии (§12.397): отряд вышел за шлюз, дошёл до места,
+// кончил работу. Это звонок, а не фон: одно кольцо на событие, и оно гаснет
+// само. Прежняя стадия помнится на штабе (`raidUi.phases`), поэтому окно,
+// открытое посреди вылазки, ничего не вспыхивает задним числом.
+function syncFlashes() {
+  const layer = raidUi?.mapCol?.querySelector(".map-flashes");
+  if (!layer || !siteHome) return;
+  const was = (raidUi.phases ??= new Map());
+  const now = new Map();
+  for (const m of missionsOut) {
+    const key = `${m.def}@${m.x},${m.y}`;
+    const phase = m.away ? m.phase : "";
+    now.set(key, phase);
+    if (!was.has(key) || was.get(key) === phase) continue;
+    const prev = was.get(key);
+    const end =
+      m.site >= 0 ? siteApproaches[m.site]?.at(-1) ?? siteHome : siteHome;
+    const at = prev === "" || phase === "" ? siteHome : end;
+    const ring = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    ring.setAttribute("class", "map-flash");
+    ring.setAttribute("cx", at[0].toFixed(1));
+    ring.setAttribute("cy", at[1].toFixed(1));
+    ring.setAttribute("r", String(SITE_R));
+    ring.style.setProperty("--squad", tripTags(m)[0]?.tint ?? FREE_TINT);
+    ring.addEventListener("animationend", () => ring.remove());
+    layer.appendChild(ring);
+  }
+  raidUi.phases = now;
+}
 
 // Перекрасить карту под нынешний снимок. Узлы уже стоят (`buildSiteGraph`),
 // меняются только заливка, ступень, метка отряда и подпись под графом.
@@ -11663,7 +11853,9 @@ function syncRaidMap() {
   // несколько вылазок разом, и общая вылазка нескольких отрядов.
   const going = new Map();
   missionsOut.forEach((m) => {
-    if (m.site >= 0 && m.phase !== "back") {
+    // На работе отряд стоит у участка кругом портретов (§12.397), и плашка
+    // «назначен» рядом с ним говорила бы второй раз то же самое.
+    if (m.site >= 0 && m.phase !== "back" && m.phase !== "work") {
       if (!going.has(m.site)) going.set(m.site, []);
       going
         .get(m.site)
@@ -17475,9 +17667,11 @@ function buildSiteGraph(holder) {
           "</g>",
       )
       .join("") +
+    `<g class="map-held"></g>` +
+    `<g class="map-orbits"></g>` +
     `<g class="map-trips"></g>` +
-    `<g class="map-near" transform="translate(${hx},${hy})"></g>` +
-    `<defs><clipPath id="map-face-clip"><circle r="${NEAR_FACE}"/></clipPath></defs>` +
+    `<g class="map-flashes"></g>` +
+    `<defs><clipPath id="map-face-clip" clipPathUnits="objectBoundingBox"><circle cx="0.5" cy="0.5" r="0.5"/></clipPath></defs>` +
     "</svg>";
   fitSiteMap(holder.querySelector(".map-svg"), w, h);
   const marks = [...holder.querySelectorAll(".map-site")];

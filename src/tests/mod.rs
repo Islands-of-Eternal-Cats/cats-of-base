@@ -2911,7 +2911,9 @@ impl Sim {
     fn set_captive(&mut self, unit: &str, on: bool) {
         let cat = self.entity_of(unit);
         if on {
-            self.world.entity_mut(cat).insert((Captive, Away));
+            self.world
+                .entity_mut(cat)
+                .insert((Captive { site: None }, Away));
         } else {
             self.world.entity_mut(cat).remove::<(Captive, Away)>();
         }

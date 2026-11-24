@@ -39,7 +39,7 @@ use crate::map::{BaseMap, rect_cells};
 use crate::missions::{
     Crew, crew_danger, crew_force, crew_traits, duration, exit_cells, faction_is_met, gather_squad,
     guide_cut, guide_of, guide_value, nearest_exit, node_cells, node_count, numbered_as, outcome,
-    phase, squad_label, squad_name_gate, sway, tidy_squad_name, travel, way,
+    phase, squad_label, squad_name_gate, sway, tidy_squad_name, travel, way, work_done,
 };
 use crate::movement::note_clutter;
 use crate::movement::{Busy, is_stuck};
@@ -7883,6 +7883,7 @@ impl Sim {
                     // обязан быть объясним: «ушёл на вылазку» видно в панели
                     // миссии, а «остался там» — только здесь (§12.40).
                     captive: captive.is_some(),
+                    held_at: captive.and_then(|c| c.site).map_or(-1, |s| s as i32),
                     // Куда уже послан (§12.86): панель клетки этим отличает
                     // «пойдут» от «уже идёт».
                     order_x: order.map_or(-1, |o| o.x),
@@ -8371,6 +8372,11 @@ impl Sim {
                     // Где отряд на карте (§12.292) — тем же разложением срока.
                     way: match (rule, mine().any(|&(_, _, away, ..)| away)) {
                         (Some(_), true) => way(road, span, m.left),
+                        _ => 0,
+                    },
+                    // Докуда сделана работа (§12.397) — тем же разложением.
+                    work: match (rule, mine().any(|&(_, _, away, ..)| away)) {
+                        (Some(_), true) => work_done(road, span, m.left),
                         _ => 0,
                     },
                     // Ждать отряд может только на базе: за шлюзом не спят.

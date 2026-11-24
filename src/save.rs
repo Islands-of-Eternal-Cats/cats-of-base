@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 54;
+pub(crate) const FORMAT: u32 = 55;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -532,6 +532,9 @@ pub(crate) struct EntityDto {
     pub(crate) away: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) captive: bool,
+    /// Где держат пленного (§12.397); `None` — заказ был без участка.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) held_at: Option<usize>,
 
     // Объекты мира.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -883,6 +886,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
 
                 away: e.contains::<Away>(),
                 captive: e.contains::<Captive>(),
+                held_at: e.get::<Captive>().and_then(|c| c.site),
 
                 blueprint: e.get::<Blueprint>().map(|b| BlueprintDto {
                     x: b.x,
@@ -1437,7 +1441,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
             e.insert(Away);
         }
         if dto.captive {
-            e.insert(Captive);
+            e.insert(Captive { site: dto.held_at });
         }
 
         if let Some(b) = &dto.blueprint {

@@ -1753,3 +1753,26 @@ fn a_mission_without_a_road_still_brings_its_loot() {
         "заказ засчитан"
     );
 }
+
+/// Доля работы (§12.397) — тем же разложением срока, что и стадия: ноль, пока
+/// идут к месту, растёт только на работе и стоит на тысяче, когда стадия уже
+/// «возвращаются» (инвариант 14).
+#[test]
+fn work_done_follows_the_phase() {
+    use crate::missions::{Phase, phase, work_done};
+    let (travel, span) = (40, 140);
+    for left in (0..=span).rev() {
+        let w = work_done(travel, span, left);
+        match phase(travel, span, left) {
+            Phase::Travel => assert_eq!(w, 0, "в дороге работы нет, left={left}"),
+            Phase::Work => assert!((0..1000).contains(&w), "работа идёт, left={left}"),
+            Phase::Back => assert_eq!(w, 1000, "работа кончена, left={left}"),
+        }
+    }
+    assert!(
+        work_done(travel, span, 70) > work_done(travel, span, 100),
+        "растёт"
+    );
+    // Без работы на месте дуга полна с конца дороги туда.
+    assert_eq!(work_done(40, 40, 0), 1000);
+}

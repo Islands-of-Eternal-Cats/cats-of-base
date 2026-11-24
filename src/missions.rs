@@ -615,6 +615,21 @@ pub(crate) fn way(travel: i32, span: i32, left: i32) -> i32 {
     }
 }
 
+/// Докуда сделана работа на месте, в тысячных (§12.397): 0 — пока идут к
+/// месту, 1000 — с конца работы. Границы — те же, что у `phase`, поэтому дуга
+/// на карте не заполнится раньше, чем стадия скажет «возвращаются»
+/// (инвариант 14).
+pub(crate) fn work_done(travel: i32, span: i32, left: i32) -> i32 {
+    let start = travel / 2;
+    let end = span - back_ticks(travel, span);
+    let gone = span - left;
+    match end - start {
+        len if len > 0 => ((gone - start) * 1000 / len).clamp(0, 1000),
+        _ if gone >= end => 1000,
+        _ => 0,
+    }
+}
+
 /// Сколько вылазка должна была снять с каждого кота **к этому тику** (§12.369):
 /// пара (бодрость, здоровье).
 ///
@@ -1340,7 +1355,10 @@ pub(crate) fn run_missions(
                 // здесь же — домой идут без него, и на возвращении его уже нет
                 // в составе.
                 if taken_captive {
-                    commands.entity(cat_e).remove::<Squad>().insert(Captive);
+                    commands
+                        .entity(cat_e)
+                        .remove::<Squad>()
+                        .insert(Captive { site: mission.site });
                 }
                 // Плата за вылазку — котовремя: та же валюта, в которой
                 // измеряется и сама отправка отряда. Копилась она по тикам

@@ -4137,10 +4137,39 @@ body.rail-wide #screenbar .door-label {
   margin-bottom: 10px;
 }
 
-/* Коты, работающие рядом с базой (§12.396): портрет кружит вокруг базы на
-   карте штаба. Крутится внешняя группа, лицо крутится обратно и остаётся
-   прямым; анимация — по `transform` у узлов без своего атрибута `transform`,
-   поэтому её начало — центр базы и центр лица. */
+/* Коты на карте штаба (§12.396, §12.397): портрет в рамке цвета отряда.
+   Крутится внешняя группа круга, лицо крутится обратно и остаётся прямым;
+   анимация — по `transform` у узлов без своего атрибута `transform`, поэтому
+   её начало — центр места и центр лица. */
+.face-ring {
+  fill: var(--panel);
+  stroke: var(--squad, var(--accent));
+  stroke-width: 2;
+}
+.face.hurt .face-ring {
+  stroke: #e05a4f;
+  stroke-width: 2.5;
+}
+.face-initial,
+.face-more {
+  fill: var(--squad, var(--accent));
+  font-size: 11px;
+  font-weight: 700;
+  text-anchor: middle;
+  pointer-events: none;
+}
+/* Пленный — тусклый, бесцветный, в пунктирной рамке: он там и ждёт. */
+.face.held {
+  opacity: 0.55;
+  filter: grayscale(1);
+}
+.face.held .face-ring {
+  stroke: var(--muted, #8a93a3);
+  stroke-dasharray: 3 3;
+}
+.held-cat {
+  cursor: default;
+}
 .near-orbit {
   animation: near-orbit 14s linear infinite;
   cursor: default;
@@ -4150,20 +4179,49 @@ body.rail-wide #screenbar .door-label {
     near-orbit 14s linear infinite reverse,
     near-bob 1.1s ease-in-out infinite alternate;
 }
-.near-ring {
-  fill: var(--panel);
-  stroke: var(--accent);
-  stroke-width: 2;
+/* Дуга работы: бледная дорожка и заполнение цветом отряда. */
+.orbit-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.08);
+  stroke-width: 3;
 }
-.near-initial {
-  fill: var(--accent);
-  font-size: 13px;
-  font-weight: 700;
-  text-anchor: middle;
+.orbit-arc {
+  fill: none;
+  stroke: var(--squad, var(--accent));
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.3s linear;
 }
-.map-near.paused .near-orbit,
-.map-near.paused .near-face {
-  animation-play-state: paused;
+/* Отряд в дороге покачивается шагом. */
+.trip-stack.walking {
+  animation: trip-walk 0.45s ease-in-out infinite alternate;
+}
+.map-trip-mark {
+  cursor: default;
+}
+/* Связь (§12.277): импульсы бегут от базы по пути отряда. */
+.map-trip-radio {
+  fill: none;
+  stroke: var(--squad, var(--accent));
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 1 17;
+  opacity: 0.9;
+  pointer-events: none;
+  animation: radio-pulse 0.9s linear infinite;
+}
+/* Вспышка на смене стадии: одно кольцо, гаснет само. */
+.map-flash {
+  fill: none;
+  stroke: var(--squad, var(--accent));
+  stroke-width: 3;
+  pointer-events: none;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: map-flash 0.9s ease-out forwards;
+}
+.map-svg.paused * {
+  animation-play-state: paused !important;
 }
 @keyframes near-orbit {
   to {
@@ -4179,9 +4237,34 @@ body.rail-wide #screenbar .door-label {
     translate: 0 1.5px;
   }
 }
+@keyframes trip-walk {
+  from {
+    translate: 0 -1.5px;
+  }
+  to {
+    translate: 0 1px;
+  }
+}
+@keyframes radio-pulse {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+@keyframes map-flash {
+  from {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .near-orbit,
-  .near-face {
+  .near-face,
+  .trip-stack,
+  .map-trip-radio {
     animation: none;
   }
 }
