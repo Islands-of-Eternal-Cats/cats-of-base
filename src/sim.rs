@@ -33,7 +33,9 @@ use bevy_ecs::system::RunSystemOnce;
 use crate::components::*;
 use crate::gear::OutfitPlan;
 use crate::goals::{WorldFacts, built_counts, progress_of};
-use crate::hauling::{HAND_HOLD, best_tiers, free_space, plan_spend, stock_grid, stored_counts};
+use crate::hauling::{
+    HAND_HOLD, best_tiers, bin_pulls, free_space, plan_spend, stock_grid, stored_counts,
+};
 use crate::jobs::{BUILD_WORK, Plan, build_spot, may_build, site_clutter, work_spot};
 use crate::map::{BaseMap, rect_cells};
 use crate::missions::{
@@ -1897,6 +1899,7 @@ impl Sim {
                     reached: tile_index_of(&t.reached).map(|t| t as i16),
                     examine: tile_index_of(&t.examine).map(|t| t as i16),
                     repair: tile_index_of(&t.repair).map(|t| t as i16),
+                    skill: skill_index(&t.skill),
                     fixed: t.fixed,
                     internal: t.internal,
                     quiet: t.quiet,
@@ -3381,9 +3384,21 @@ impl Sim {
 
         // Остальная рамка — прежним правилом: сперва отмена, и только если
         // снимать было нечего, планируем снос.
-        let cells: Vec<(i32, i32)> = rect_cells(x, y, w, h)
-            .filter(|c| !done.contains(c))
-            .collect();
+        //
+        // Выход наверх (`surface`: шлюз и его руины) рамка не трогает вовсе
+        // (§12.411): без него нет ни вылазок, ни новых котов, и сносят его
+        // только кликом по одной клетке — осознанно, а не заодно с завалом.
+        let single = w.abs() <= 1 && h.abs() <= 1;
+        let cells: Vec<(i32, i32)> = {
+            let (map, rules) = (
+                self.world.resource::<BaseMap>(),
+                self.world.resource::<TileRules>(),
+            );
+            rect_cells(x, y, w, h)
+                .filter(|c| !done.contains(c))
+                .filter(|&(cx, cy)| single || !rules.is_surface(map.tile_at(cx, cy)))
+                .collect()
+        };
         let mut cancelled = false;
         for &(cx, cy) in &cells {
             cancelled |= self.cancel_blueprint(cx, cy);
@@ -3402,7 +3417,19 @@ impl Sim {
                 self.world.resource::<BaseMap>(),
                 self.world.resource::<TileRules>(),
             );
-            let level = |&(cx, cy): &(i32, i32)| rules.level(map.tile_at(cx, cy));
+            // Завал (`internal` и `solid`, §12.372) — всегда верхний слой,
+            // сколько бы под ним ни лежало (§12.408): завал над найденным ящиком
+            // (§12.404) на уровень выше голого завала, и рамка по всей базе
+            // брала только его. Только завал (§12.411): шлюз тоже `internal`,
+            // но он постройка, а не обломки.
+            let level = |&(cx, cy): &(i32, i32)| {
+                let t = map.tile_at(cx, cy);
+                if t >= 0 && rules.is_internal(t) && rules.is_solid(t) {
+                    usize::MAX
+                } else {
+                    rules.level(t)
+                }
+            };
             let top = cells.iter().map(level).max().unwrap_or(0);
             cells.iter().copied().filter(|c| level(c) == top).collect()
         };
@@ -7352,7 +7379,7 @@ impl Sim {
             // Выселенное из ящика (§12.402) уезжает и без места на складе: его
             // выносят на пол рядом.
             let evicted = tier > 0 && !bins.accepts(true, x, y, item);
-            return if !marked && !self.tidies() {
+            return if !marked && !self.tidies() && !bin_pulls(tier, top) {
                 "untidy"
             } else if !any_store {
                 "nostore"

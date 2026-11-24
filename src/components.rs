@@ -1983,6 +1983,8 @@ pub(crate) struct TileRule {
     pub(crate) examine: Option<i16>,
     /// Что встаёт на руину ремонтом (§12.379); `None` — нечего.
     pub(crate) repair: Option<i16>,
+    /// Навык работы, ставящей этот тайл (§12.410); `None` — «Стройка».
+    pub(crate) skill: Option<usize>,
     /// Поверх какого тайла ставится этот (§12.238); `None` — на основание.
     /// Индекс строго меньше собственного, как у `after`.
     pub(crate) on: Option<i16>,
@@ -2176,6 +2178,12 @@ impl TileRules {
     /// слои включаются основанием (§12.237).
     pub(crate) fn has_surface(&self) -> bool {
         self.0.iter().any(|r| r.surface)
+    }
+
+    /// Навык работы, ставящей `tile` (§12.410); `None` — общий «Стройки».
+    /// Снос (`tile < 0`) своего навыка не имеет.
+    pub(crate) fn skill_of(&self, tile: i16) -> Option<usize> {
+        self.of(tile).and_then(|r| r.skill)
     }
 
     /// Внутренность объекта: ставится только штампом (§12.163).

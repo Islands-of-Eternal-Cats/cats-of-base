@@ -388,9 +388,12 @@ fn an_ordered_cat_examines_the_ruin_itself() {
 /// не теряет его: подарок не наказывает за то, что шлюз ещё сломан.
 #[test]
 fn the_caravan_leaves_its_cargo_at_the_broken_gate() {
+    // Каравана в боевом рулсете сейчас нет (§12.409) — событие заводится
+    // тестом: механизм груза на руине жив и ждёт возвращения каравана.
     let mut sim = Sim::new(CORE).expect("рулсет");
     let part = sim.item_index("part").expect("деталь");
-    let at = sim.world.resource::<crate::components::TimelineRules>().0[0].at;
+    let at = 600;
+    sim.set_event(at, &[], &[(part, 4)], 0, 0);
     sim.tick_n(at as usize + 1);
     assert!(sim.item_at(11, 0, part) > 0, "груз каравана лежит на руине");
 }
@@ -470,4 +473,83 @@ fn the_shipped_ruleset_hides_a_small_bin_under_the_rubble() {
         sim.set_bin(8, 7, scrap, true),
         "а назначить его можно сразу"
     );
+}
+
+/// Рамка «Разобрать» по всей стартовой базе метит **весь** завал (§12.408),
+/// а не одну клетку над ящиком, которая на слой выше прочих.
+#[test]
+fn the_shipped_ruleset_erases_all_rubble_with_one_rect() {
+    let mut sim = start();
+    let rubble = sim.tile_index("rubble").expect("завал");
+    let (w, h) = {
+        let map = sim.world.resource::<BaseMap>();
+        (map.width, map.height)
+    };
+    assert!(sim.plan_demolish_rect(0, 0, w, h), "рамка что-то разметила");
+    let missed: Vec<(i32, i32)> = (0..w)
+        .flat_map(|x| (0..h).map(move |y| (x, y)))
+        .filter(|&(x, y)| sim.tile(x, y) == rubble && sim.planned_tile(x, y) != Some(-1))
+        .collect();
+    assert!(missed.is_empty(), "завал без пометки: {missed:?}");
+    assert_eq!(sim.planned_tile(8, 7), Some(-1), "и завал над ящиком тоже");
+}
+
+/// Обследование руины растит «Науку», а не «Стройку» (§12.410): навык у
+/// ставящегося тайла (`skill` у «Сломанного шлюза»), а прокоп — по-прежнему
+/// «Стройка».
+#[test]
+fn examining_the_ruin_trains_science() {
+    let mut sim = start();
+    let science = sim.skill_index("science").expect("наука");
+    let build = sim.skill_index("build").expect("стройка");
+    assert!(sim.fix_at(11, 0));
+    dig_to_ruin(&mut sim);
+    let (sci0, build0) = (
+        sim.xp_of("excellent", science),
+        sim.xp_of("excellent", build),
+    );
+    assert!(build0 > 0, "прокоп растил стройку");
+    assert!(
+        until_tile(&mut sim, 11, 0, "gate_ruin", 3000),
+        "обследовали"
+    );
+    assert!(
+        sim.xp_of("excellent", science) > sci0,
+        "обследование растит науку"
+    );
+    assert_eq!(sim.xp_of("excellent", build), build0, "а стройку — нет");
+}
+
+/// Без `skill` у тайла чертёж растит «Стройку», как всегда (§12.410).
+#[test]
+fn a_tile_without_a_skill_trains_building() {
+    let mut sim = start();
+    let science = sim.skill_index("science").expect("наука");
+    let build = sim.skill_index("build").expect("стройка");
+    dig_to_ruin(&mut sim);
+    assert!(sim.xp_of("excellent", build) > 0, "прокоп — стройка");
+    assert_eq!(sim.xp_of("excellent", science), 0, "науки за прокоп нет");
+}
+
+/// Рамка «Разобрать» по всей базе шлюз не сносит (§12.411): выход наверх
+/// снимают только кликом по одной клетке. Завал рядом рамка берёт как обычно.
+#[test]
+fn a_rect_eraser_leaves_the_gate_alone() {
+    let mut sim = start();
+    dig(&mut sim);
+    let rubble = sim.tile_index("rubble").expect("завал");
+    let (w, h) = {
+        let map = sim.world.resource::<BaseMap>();
+        (map.width, map.height)
+    };
+    assert!(sim.plan_demolish_rect(0, 0, w, h), "рамка что-то разметила");
+    assert_eq!(sim.planned_tile(11, 0), None, "шлюз рамкой не тронут");
+    let left_rubble = (0..w)
+        .flat_map(|x| (0..h).map(move |y| (x, y)))
+        .find(|&(x, y)| sim.tile(x, y) == rubble);
+    if let Some((x, y)) = left_rubble {
+        assert_eq!(sim.planned_tile(x, y), Some(-1), "завал рамкой размечен");
+    }
+    assert!(sim.plan_demolish(11, 0), "одной клеткой — сносится");
+    assert_eq!(sim.planned_tile(11, 0), Some(-1));
 }

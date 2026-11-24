@@ -111,6 +111,23 @@ fn the_eraser_takes_the_top_layer_of_the_rect() {
     assert_eq!(sim.planned_tile(4, 1), None, "и справа тоже");
 }
 
+/// Завал над ящиком (§12.404) на слой выше голого завала, но рамка берёт оба
+/// (§12.408): завал — всегда верх, иначе рамка по всей базе брала одну клетку.
+#[test]
+fn the_eraser_takes_every_rubble_whatever_lies_under_it() {
+    let mut sim = upgradable();
+    sim.set_internal(WALL as i16, true);
+    sim.set_internal(2, true);
+    sim.set_solid(WALL as i16, true);
+    sim.set_solid(2, true);
+    sim.force_tile(2, 1, WALL as i16);
+    sim.force_tile(3, 1, 2);
+    assert!(sim.plan_demolish_rect(2, 1, 3, 1));
+    assert_eq!(sim.planned_tile(2, 1), Some(-1), "голый завал — в снос");
+    assert_eq!(sim.planned_tile(3, 1), Some(-1), "завал над ящиком — тоже");
+    assert_eq!(sim.planned_tile(4, 1), None, "пол не тронут");
+}
+
 // --- чистый пол -----------------------------------------------------------------
 
 /// Постройка ждёт, пока уборка унесёт кучу с площадки, и встаёт на чистый пол.

@@ -656,22 +656,37 @@ pub(crate) fn mark_loose_scrap(
     for (e, pos, stack, mark) in &stacks {
         let tile = map.tile_at(pos.x, pos.y);
         let tier = rules.priority_of(tile);
+        let top = best
+            .iter()
+            .find(|&&(item, _)| item == stack.item)
+            .and_then(|&(_, top)| top);
         let misplaced = rules.capacity_of(tile) <= 0
             || !bins.accepts(tier > 0, pos.x, pos.y, stack.item)
-            || best
-                .iter()
-                .find(|&&(item, _)| item == stack.item)
-                .is_some_and(|&(_, top)| top.is_some_and(|t| t > tier));
+            || top.is_some_and(|t| t > tier);
         match (misplaced, mark.is_some()) {
             (false, true) => {
                 commands.entity(e).remove::<ToStore>();
             }
-            (true, false) if tidies => {
+            (true, false) if tidies || bin_pulls(tier, top) => {
                 commands.entity(e).insert(ToStore);
             }
             _ => {}
         }
     }
+}
+
+/// **Назначенный ящик тянет своё и без «Автоуборки»** (§12.413).
+///
+/// Назначение — решение игрока «держать это здесь», и оно постоянное, а не
+/// разовое: детали приходят с каждой вылазки. Ярус выше нуля принимает только
+/// назначенное (§12.402), поэтому «есть ярус выше этой клетки и выше нуля»
+/// и значит «этот предмет позвал ящик», без нового состояния. Влезет ли —
+/// уже учтено в `best_tiers`. Одно выражение на пометку (`mark_loose_scrap`)
+/// и причину у кучи (`Sim::pile_why`).
+///
+/// `top` — высший ярус, где этому предмету есть место (`best_tiers`).
+pub(crate) fn bin_pulls(tier: i32, top: Option<i32>) -> bool {
+    top.is_some_and(|t| t > tier.max(0))
 }
 
 /// Раздаёт уборку: гружёные коты несут груз на склад, пустые идут за помеченными

@@ -272,6 +272,7 @@ fn sim_from(rows: &[&str]) -> Sim {
             reached: String::new(),
             examine: String::new(),
             repair: String::new(),
+            skill: String::new(),
             fixed: false,
         }],
         // Штампов у схемы нет (§12.160): объекты ставит только `set_structure`,

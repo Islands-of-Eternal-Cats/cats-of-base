@@ -710,9 +710,12 @@ pub(crate) fn work_jobs(
 
         let in_range = (pos.x - bp.x).abs() + (pos.y - bp.y).abs() <= 1;
         if in_range {
-            let level = build_skill.map_or(0, |s| level_of(&skill_rules, skills, s));
+            // Навык — у ставящегося тайла (§12.410): обследование руины растит
+            // «Науку», а не «Стройку». Не назван — общий навык стройки.
+            let work_skill = rules.skill_of(bp.tile).or(build_skill);
+            let level = work_skill.map_or(0, |s| level_of(&skill_rules, skills, s));
             bp.progress += WORK_RATE + level;
-            if let Some(skill) = build_skill {
+            if let Some(skill) = work_skill {
                 commands.entity(cat_e).insert(Worked(skill));
             }
             if bp.progress >= BUILD_WORK {

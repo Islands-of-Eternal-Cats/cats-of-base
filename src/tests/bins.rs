@@ -185,6 +185,28 @@ fn retyping_evicts_even_before_auto_tidying() {
     assert_eq!(sim.item_at(6, 1, 0), 2, "а непомеченное лежит, где лежало");
 }
 
+/// **Назначенный ящик тянет своё и без «Автоуборки»** (§12.413): с пола и со
+/// склада, по ёмкости. Чужое при этом лежит, где лежало, — уборка до темы
+/// по-прежнему ручная.
+#[test]
+fn an_assigned_bin_pulls_its_goods_before_auto_tidying() {
+    let mut sim = sim_from(&CORRIDOR);
+    sim.set_items(2);
+    shelves(&mut sim);
+    sim.set_tidy_gate("tidying"); // автоуборка закрыта темой
+    sim.set_bin(3, 1, 1, true); // ящик под «детали» (предмет 1)
+    sim.put_item(6, 1, 1, 3); // детали на полу
+    sim.put_item(9, 1, 1, 9); // и на складе
+    sim.put_item(7, 1, 0, 2); // лом на полу — его не звал никто
+
+    sim.tick_n(800);
+    assert_eq!(sim.item_at(3, 1, 1), 10, "ящик набран деталями до краёв");
+    assert_eq!(sim.item_at(6, 1, 1), 0, "с пола увезли");
+    assert_eq!(sim.item_at(9, 1, 1), 2, "остаток лежит на складе");
+    assert_eq!(sim.item_at(7, 1, 0), 2, "лом лежит, где лежал");
+    assert_eq!(sim.pile_why(7, 1), "untidy", "и причина у него прежняя");
+}
+
 /// **Везти некуда — выносят на пол рядом** (§12.402): иначе ящик под новый тип
 /// не освободился бы никогда. Склада нет вовсе.
 #[test]

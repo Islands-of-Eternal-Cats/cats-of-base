@@ -229,8 +229,8 @@ fn marking_empty_floor_does_nothing() {
 /// «2 лома + деталь». Цена из одного предмета не поймала бы возврат набором.
 /// Рамка — ход из северной комнаты в верхний ряд (§12.348).
 ///
-/// Жест один: шлюз лежит на пустоте, как пол (§12.348), — уровень у них общий,
-/// и ластик снимает оба разом (§12.237).
+/// Жестов два: рамка выход наверх не трогает (§12.411), поэтому шлюз
+/// сносится кликом по своей клетке, а пол хода — своим.
 #[test]
 fn the_shipped_ruleset_tidies_demolition_scrap() {
     let yaml = include_str!("../../assets/rulesets/core.yaml");
@@ -239,10 +239,8 @@ fn the_shipped_ruleset_tidies_demolition_scrap() {
     sim.add_storage(); // увозить некуда, пока склада нет (§12.215)
     let before = sim.scrap_total();
 
-    assert!(
-        sim.plan_demolish_rect(5, 0, 1, 2),
-        "жест сносит ход со шлюзом"
-    );
+    assert!(sim.plan_demolish(5, 0), "клик сносит шлюз");
+    assert!(sim.plan_demolish(5, 1), "и пол хода под ним");
     sim.tick_n(3000);
 
     assert_eq!(sim.tile(5, 0), -1, "под шлюзом пустота, а не пол");

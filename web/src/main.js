@@ -564,12 +564,9 @@ onPanelClick(raidWinEl, ".squad-edit", (b) => {
 // отряда: `enlist` сам снимает прежнюю приписку, §12.61); «−» — исключить.
 onPanelClick(raidWinEl, ".crew-add", (b) => {
   if (b.classList.contains("off")) return;
-  sendAction({
-    type: "enlist",
-    id: b.dataset.id,
-    x: Number(b.dataset.x),
-    y: Number(b.dataset.y),
-  });
+  const [x, y] = [Number(b.dataset.x), Number(b.dataset.y)];
+  sendAction({ type: "enlist", id: b.dataset.id, x, y });
+  focusOnJoin(b.dataset.id, x, y);
 });
 onPanelClick(raidWinEl, ".crew-out", (b) => {
   if (b.classList.contains("off")) return;
@@ -726,9 +723,11 @@ function crewDragEnd(drop) {
         // `post_relay` сам снимает кота из бойцов и сменяет прежнего радиста.
         const [x, y] = where.slice(6).split(",").map(Number);
         sendAction({ type: "postRelay", id: d.id, x, y });
+        focusOnJoin(d.id, x, y);
       } else {
         const [x, y] = where.split(",").map(Number);
         sendAction({ type: "enlist", id: d.id, x, y });
+        focusOnJoin(d.id, x, y);
       }
     }
   }
@@ -17260,16 +17259,46 @@ function soloFreeCat() {
 function soloFreeSquad() {
   const home = nodes.filter((n) => !n.busy);
   if (home.length !== 1) return null;
-  const loose = (lastSnap?.entities ?? []).some(
+  return anyLooseCat() ? null : `${home[0].x},${home[0].y}`;
+}
+// Каким `soloFreeSquad` был в прошлый раз — по той же причине, что `soloSeen`.
+let soloSquadSeen = null;
+// Кот ушёл в отряд (§12.412): `{id, x, y, tick}` — чего ждём от ядра. Когда
+// кот встал в состав или радистом и свободных на базе не осталось, этот
+// отряд выбирается: отмечать больше некого, а идти теперь ему. Команда могла
+// не пройти — тогда ожидание гаснет само через пару секунд мира.
+let joinFocus = null;
+function focusOnJoin(id, x, y) {
+  joinFocus = { id, x, y, tick: lastSnap?.tick ?? 0 };
+}
+// Есть ли на базе кот без отряда — то же выражение, что в `soloFreeSquad`.
+function anyLooseCat() {
+  return (lastSnap?.entities ?? []).some(
     (e) =>
       !e.away &&
       !(e.crew_x >= 0) &&
       !(e.post_x >= 0 && nodeAt(e.post_x, e.post_y)),
   );
-  return loose ? null : `${home[0].x},${home[0].y}`;
 }
-// Каким `soloFreeSquad` был в прошлый раз — по той же причине, что `soloSeen`.
-let soloSquadSeen = null;
+function applyJoinFocus() {
+  const f = joinFocus;
+  if (!f || !lastSnap) return;
+  const e = (lastSnap.entities ?? []).find((u) => u.id === f.id);
+  const joined =
+    e &&
+    ((e.crew_x === f.x && e.crew_y === f.y) ||
+      (e.post_x === f.x && e.post_y === f.y));
+  if (!joined) {
+    if ((lastSnap.tick ?? 0) > f.tick + 30) joinFocus = null;
+    return;
+  }
+  joinFocus = null;
+  if (anyLooseCat() || !nodeAt(f.x, f.y)) return;
+  raidWinAt = { x: f.x, y: f.y };
+  raidHome = false;
+  nearbyPick.clear();
+  syncNearbyPick();
+}
 // Каким `soloFreeCat` был в прошлый раз: автовыбор срабатывает на **смене**
 // (окно открылось, кот вернулся с вылазки), а не каждым кадром, — иначе
 // снятую игроком отметку тут же ставило бы обратно.
@@ -17973,6 +18002,7 @@ function renderRaidWindow() {
       syncNearbyPick();
     }
   }
+  applyJoinFocus();
   const squad = soloFreeSquad();
   if (squad !== soloSquadSeen) {
     soloSquadSeen = squad;
