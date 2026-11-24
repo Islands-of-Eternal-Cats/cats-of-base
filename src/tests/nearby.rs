@@ -392,3 +392,50 @@ fn the_forecast_follows_the_picked_cats() {
     sim.set_nearby_pick(vec!["a".into()]);
     assert_eq!(sim.outskirts_snap().crew, vec!["a".to_string()]);
 }
+
+/// Круг словами (§12.406): пока идут `yields`, круга в снимке нет, а дошёл
+/// заказ до пола — «обычно» то, что в большинстве порций, «иногда» прочее.
+#[test]
+fn the_floor_round_is_told_as_usual_and_sometimes() {
+    let mut sim = sim_from(&["#######", "#.....#", "#..a.b#", "#.....#", "#######"]);
+    sim.set_exit(EXIT, true);
+    sim.force_tile(GATE.0, GATE.1, EXIT);
+    let def = sim.set_mission(1, 20, &[]);
+    sim.set_squad_range(def, 1, 3);
+    sim.set_nearby(def);
+    sim.set_yields(
+        def,
+        &[&[(0, 3)]],
+        &[&[(0, 1)], &[(0, 1)], &[(0, 2)], &[(1, 1)]],
+    );
+    assert!(
+        sim.raid_gates(def).circle.is_empty(),
+        "до круга порция названа как есть"
+    );
+    assert!(sim.scavenge(def, vec!["a".into()], -1));
+    assert!(finishes(&mut sim, def, 300));
+    assert_eq!(
+        sim.raid_gates(def).circle,
+        vec![(0, 2, true), (1, 1, false)],
+        "лом обычно (наибольшая порция), деталь иногда"
+    );
+}
+
+/// На боевом рулсете у «Пошарить рядом» деталь — «иногда», лом — «обычно»:
+/// ради этой строки решение §12.406 и принято.
+#[test]
+fn the_shipped_ruleset_says_parts_come_sometimes() {
+    let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
+    let part = sim.item_index("part").expect("деталь");
+    let scrap = sim.item_index("scrap").expect("лом");
+    let scavenge = sim.mission_index("scavenge").expect("«Пошарить рядом»");
+    let mix = sim.world.resource::<MissionRules>().0[scavenge].floor_mix();
+    assert!(
+        mix.iter().any(|&(i, _, usual)| i == scrap && usual),
+        "лом обычно: {mix:?}"
+    );
+    assert!(
+        mix.iter().any(|&(i, _, usual)| i == part && !usual),
+        "деталь иногда: {mix:?}"
+    );
+}

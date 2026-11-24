@@ -86,7 +86,7 @@ cargo test whole_room_is_erased_completely -- --nocapture
   (`raided`, в `MissionRule::unlocked`), а кот-находка (`found` у `units:`, `FoundRules`) приходит к
   шлюзу, когда его заказ выполнен и вернулся — `Sim::spawn_found` после цепочки, кот собирается тем же
   `spawn_cat`; заказ «Пошарить рядом» (`nearby`) — с §12.363 и отрядам, вылазок сколько угодно, но котов в них вместе не больше `squad_max` (`Sim::nearby_room` → `RaidSnap::room`); добыча убывает
-  по `RaidTally` до круга `floor`, плена нет, §12.349; `after` у заказа — тайл, **когда-либо стоявший** на базе (`BaseMap::ever`): Свалку открывает стол брифинга, ворота в `MissionRule::unlocked`; набор отряда, **рассадка за местом сбора и уход через ближайший шлюз** —
+  по `RaidTally` до круга `floor`, плена нет, §12.349; дошедший до круга заказ пишет добычу словами «обычно ▤ 1 иногда ⚙ 1» (`MissionRule::floor_mix` → `RaidSnap::circle`, §12.406); `after` у заказа — тайл, **когда-либо стоявший** на базе (`BaseMap::ever`): Свалку открывает стол брифинга, ворота в `MissionRule::unlocked`; набор отряда, **рассадка за местом сбора и уход через ближайший шлюз** —
   §12.279, возвращение с добычей, плен и вылазка за своим; там же репутация заказчика и пострадавшего — §12.43, **срок из дороги и работы,
   проводник и вилка состава** — §12.70) ·
   `gear` (снаряжение: приписка на кота, за которой кот идёт сам, личные вещи и износ — §12.268;
@@ -473,7 +473,7 @@ cargo test whole_room_is_erased_completely -- --nocapture
   пишется вовсе — на исход она не влияет.
   ⚠️ **Заказ, закрытый репутацией, карточкой не стоит — вместо него строка на
   фракцию внизу колонки** (§12.246, `trustLines`): «Полиция: 1 заказ — нужна репутация
-  30, у вас 20». В счёт на кружке он не идёт (`shownRaid` — одно выражение на счёт,
+  30, у вас 20» — только на своём участке (§12.405, тот же `here`, что у карточек). В счёт на кружке он не идёт (`shownRaid` — одно выражение на счёт,
   клик и колонку); исключение — заказ с поставленным правилом, он остаётся карточкой.
   Ворота — `untrustedRaid` = `RaidSnap::unlocked && !welcome && !met`, те же, что у
   строки причины. **`met` — память ядра** (`RaidsMet`, монотонная, как `Seen`; отмечает
@@ -2231,7 +2231,7 @@ note_seen → note_reached → check_goals`.
 
 ## Тесты
 
-1118 тестов живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `nearby` · `opening` · `combined` · `jobs` · `demolition` ·
+1120 тестов живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `nearby` · `opening` · `combined` · `jobs` · `demolition` ·
 `hauling` · `tidying` · `skills` · `stats` · `study` · `research` · `needs` · `news` · `food` · `health` · `items` · `layers` · `missions` · `muster` ·
 `captivity` · `fame` · `factions` · `trade` · `terrain` · `timeline` · `gear` · `crafting` · `crowd` · `panel` ·
 `goals` · `hand` · `record` · `relay` · `sampling` · `save` · `seen` · `self_study` · `sites` · `structures` · `things` · `tutoring` · `bins` · `tech_tree` · `wiki`); общие хелперы и сборка мира —

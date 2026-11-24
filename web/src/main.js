@@ -17774,8 +17774,9 @@ function buildSiteGraph(holder) {
   const homeMark = holder.querySelector(".map-home");
   if (homeMark && (meta?.missions ?? []).some((m) => m.nearby)) {
     homeMark.classList.add("pick");
+    // Выбор отряда клик не снимает (§12.407): База — место, а не «без
+    // отряда» (§12.355), и «Пошарить рядом» с §12.363 ходят и отряды.
     homeMark.onmousedown = () => {
-      raidHome = true;
       mapHome = true;
       mapPick = -1;
       renderRaidWindow();
@@ -17929,11 +17930,13 @@ function renderEmptyRaidWindow() {
 // Строка на фракцию про невиданные заказы, закрытые её недоверием (§12.246): сколько их и
 // какой порог. Порог — первая недостающая фракция из `needs`, та же, что
 // называет `trustGap`; у заказа с двумя порогами вторая ждёт своей очереди.
-function trustLines(node) {
+// Режется участком, как карточки (§12.405): `here` — то же выражение колонки.
+function trustLines(node, here) {
   const factions = meta?.factions ?? [];
   const byFaction = new Map();
   (meta?.missions ?? []).forEach((def, i) => {
-    if (hiddenRaid(i) || !untrustedRaid(i) || node.auto === i) return;
+    if (hiddenRaid(i) || !untrustedRaid(i) || node.auto === i || !here(i))
+      return;
     const needs = def.needs;
     const entries =
       needs instanceof Map ? [...needs.entries()] : Object.entries(needs ?? {});
@@ -18792,10 +18795,11 @@ function syncRaidCards(raid, node) {
   // Заказы, закрытые репутацией и не виданные открытыми, — **строкой на
   // фракцию** внизу колонки, без карточек (§12.246): пока репутации нет, ни
   // добыча, ни срок ни в каком решении не участвуют, а нужны три вещи — что
-  // работа есть, у кого и насколько не хватает. Виданный остаётся карточкой. Про участок строка не знает намеренно: репутация —
-  // про сторону, а не про место, и колонка по участку её не режет. Прятать
+  // работа есть, у кого и насколько не хватает. Виданный остаётся карточкой.
+  // С §12.405 строка режется участком тем же `here`, что карточки: стоя под
+  // «Пошарить рядом» у Базы, она читалась как условие этого заказа. Прятать
   // совсем нельзя: репутация падает (§12.43), и заказы исчезали бы молча.
-  if (!(raid && !node.nearby)) want.push(["trust", trustLines(node)]);
+  if (!(raid && !node.nearby)) want.push(["trust", trustLines(node, here)]);
   // Заказ правила поднимается **над группами**, а не встаёт в «Остальное».
   if (ruled) {
     const at = want.indexOf(ruled);
@@ -18875,6 +18879,32 @@ function missionCostFacts(def, share) {
 function missionLootRow(def, share, samples, counts, gather, onlyGot = false) {
   if (def.rescue) {
     return '<div class="cat-sub">возвращает пленного, а не добычу</div>';
+  }
+  // Круг пола словами (§12.406): дошёл заказ до круга — не «▤ 1», а «обычно
+  // ▤ 1 иногда ⚙ 1». Какая порция следующая, не говорим намеренно: игроку
+  // нужно знать, что детали тут бывают, а не расписание. Делит ядро
+  // (`RaidSnap::circle`); образцов в круге нет, прибор тут ни при чём.
+  const circle = raids[(meta?.missions ?? []).indexOf(def)]?.circle ?? [];
+  if (circle.length) {
+    const cut1 = (n) =>
+      share > 0 && share < 100 ? Math.floor((n * share) / 100) : n;
+    const part = (usual) => {
+      const m = new Map(
+        circle
+          .filter(([, , u]) => u === usual)
+          .map(([i, n]) => [(meta?.items ?? [])[i]?.id, cut1(n)]),
+      );
+      return m.size ? costChips(m, true) : "";
+    };
+    const usual = part(true);
+    const rare = part(false);
+    // Слова едут вместе с фишками справа (`.loot-mix`): «обычно», оставшееся
+    // слева у «добыча», читалось отдельно от того, к чему относится.
+    const said = [
+      usual ? `${rare ? "<i>обычно</i> " : ""}${usual}` : "",
+      rare ? `<i>иногда</i> ${rare}` : "",
+    ].filter(Boolean);
+    return `<div class="raidwin-loot">добыча <span class="loot-mix">${said.join(" ")}</span></div>`;
   }
   // Убывающая добыча (§12.349): `loot` у заказа пуст, порцию этого выхода
   // называет ядро (`loot_for`) — числами `counts`.

@@ -2394,6 +2394,18 @@ body.rail-wide #screenbar .door-label {
   margin-left: 0;
   padding-left: 0;
 }
+/* Круг пола словами (§12.406): «обычно ▤ 1 иногда ⚙ 1» — одной группой
+   справа, как фишки обычной добычи. */
+.raidwin-loot .loot-mix {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.raidwin-loot .loot-mix .cost {
+  margin-left: 0;
+  padding-left: 0;
+}
 /* Образцы, которые принесёт отряд (§12.264), — своей строкой и акцентом:
    ради них с прибором и ходят, и в общей добыче фишка терялась. */
 .raidwin-gather {

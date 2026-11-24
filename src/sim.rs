@@ -382,6 +382,13 @@ impl Sim {
                 .yields
                 .len()
                 .saturating_sub(self.world.resource::<RaidTally>().of(def)),
+            // Круг словами — только когда до него дошли (§12.406): пока идут
+            // `yields`, порция названа как есть и убывает на глазах.
+            circle: if self.world.resource::<RaidTally>().of(def) >= rule.yields.len() {
+                rule.floor_mix()
+            } else {
+                Vec::new()
+            },
             room: self.nearby_room(def),
         }
     }

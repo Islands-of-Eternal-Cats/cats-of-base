@@ -2659,6 +2659,35 @@ impl MissionRule {
         &self.floor[(n - self.yields.len()) % self.floor.len()]
     }
 
+    /// Круг пола словами «обычно» и «иногда» (§12.406): каждый предмет круга
+    /// `floor` с наибольшим числом за порцию и признаком «обычный» — встречается
+    /// больше чем в половине порций. Сперва обычные, внутри — по палитре.
+    ///
+    /// Какая порция ляжет следующей, игроку не говорят намеренно: круг ровный,
+    /// и счёт до детали звучал бы расписанием, а «обычно ▤ 1 иногда ⚙ 1»
+    /// отвечает на вопрос, который у игрока есть, — бывают ли тут детали.
+    /// Случайности это не обещает (§12.23 цел).
+    pub(crate) fn floor_mix(&self) -> Vec<(usize, i32, bool)> {
+        let mut seen: Vec<(usize, i32, usize)> = Vec::new();
+        for portion in &self.floor {
+            for &(i, n) in portion {
+                match seen.iter_mut().find(|(k, ..)| *k == i) {
+                    Some(e) => {
+                        e.1 = e.1.max(n);
+                        e.2 += 1;
+                    }
+                    None => seen.push((i, n, 1)),
+                }
+            }
+        }
+        let mut out: Vec<(usize, i32, bool)> = seen
+            .into_iter()
+            .map(|(i, n, times)| (i, n, times * 2 > self.floor.len()))
+            .collect();
+        out.sort_by_key(|&(i, _, usual)| (!usual, i));
+        out
+    }
+
     /// Всё, что заказ вообще умеет принести, — для вопросов «кто привезёт
     /// этот предмет» (§12.263), а не для добычи конкретного выхода.
     pub(crate) fn loot_items(&self) -> Vec<usize> {
