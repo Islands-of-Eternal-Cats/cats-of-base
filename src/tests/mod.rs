@@ -275,6 +275,7 @@ fn sim_from(rows: &[&str]) -> Sim {
             reached: String::new(),
             examine: String::new(),
             repair: String::new(),
+            repair_cost: BTreeMap::new(),
             skill: String::new(),
             fixed: false,
         }],
@@ -1880,6 +1881,14 @@ impl Sim {
                 if rule.raided == Some(inspect) {
                     rule.raided = None;
                 }
+            }
+        }
+        // Склад и лежанку с §12.424 открывает находка (`after` на себя,
+        // §12.425): прежняя застройка их не содержит, а тесты механик строят
+        // их сразу.
+        for id in ["bed", "storage"] {
+            if let Some(t) = self.tile_index(id) {
+                self.world.resource_mut::<TileRules>().0[t as usize].after = None;
             }
         }
         // Шлюз на прежней застройке — без руины под ним (§12.376): ставится в

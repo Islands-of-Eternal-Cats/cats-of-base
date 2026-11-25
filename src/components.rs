@@ -2025,6 +2025,8 @@ pub(crate) struct TileRule {
     pub(crate) examine: Option<i16>,
     /// Что встаёт на руину ремонтом (§12.379); `None` — нечего.
     pub(crate) repair: Option<i16>,
+    /// Цена ремонта (§12.425); пусто — цена тайла, который встаёт.
+    pub(crate) repair_cost: Vec<(usize, i32)>,
     /// Навык работы, ставящей этот тайл (§12.410); `None` — «Стройка».
     pub(crate) skill: Option<usize>,
     /// Поверх какого тайла ставится этот (§12.238); `None` — на основание.
@@ -2061,6 +2063,19 @@ impl TileRules {
     /// Из чего строится тайл; пусто — бесплатно.
     pub(crate) fn cost_of(&self, tile: i16) -> &[(usize, i32)] {
         self.of(tile).map_or(&[], |r| &r.cost)
+    }
+
+    /// Что стоит поставить `tile` поверх `below` (§12.425): ремонт руины — её
+    /// `repair_cost`, если он назван, иначе цена тайла. Одно выражение на
+    /// подвоз, раздачу стройки, отказ «нечем чинить» и полоску площадки;
+    /// снос по-прежнему возвращает **цену тайла** (`cost_of`) — починенная
+    /// лежанка разбирается в лом и деталь, и одна лишняя деталь — принятая
+    /// цена простоты (§12.425).
+    pub(crate) fn site_cost(&self, below: i16, tile: i16) -> &[(usize, i32)] {
+        match self.of(below) {
+            Some(r) if r.repair == Some(tile) && !r.repair_cost.is_empty() => &r.repair_cost,
+            _ => self.cost_of(tile),
+        }
     }
 
     /// Что лежит под тайлом (§12.415); пусто — ничего.
@@ -2390,9 +2405,13 @@ pub(crate) fn craft_supplied(rules: &CraftRules, order: &Craft) -> bool {
     })
 }
 
-pub(crate) fn missing(rules: &TileRules, bp: &Blueprint) -> Vec<(usize, i32)> {
+pub(crate) fn missing(
+    rules: &TileRules,
+    map: &crate::map::BaseMap,
+    bp: &Blueprint,
+) -> Vec<(usize, i32)> {
     rules
-        .cost_of(bp.tile)
+        .site_cost(map.tile_at(bp.x, bp.y), bp.tile)
         .iter()
         .filter_map(|&(item, need)| {
             let have = delivered_of(&bp.delivered, item);

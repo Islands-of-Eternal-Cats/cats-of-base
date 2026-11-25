@@ -320,8 +320,15 @@ fn the_shipped_ruleset_starts_in_one_rubble_room() {
         dusty,
         "посреди левой верхней — завал над столом"
     );
+    // В комнатке портала — завалы над сломанной лежанкой и старым складом
+    // (§12.423).
+    let bed = sim.tile_index("rubble_bed").expect("завал над лежанкой");
+    let store = sim.tile_index("rubble_storage").expect("завал над складом");
+    assert_eq!(sim.tile(16, 2), bed, "в углу комнатки портала — лежанка");
+    assert_eq!(sim.tile(14, 4), store, "в другом углу — склад");
+    let finds = [(15, 3), (8, 7), (7, 3), (16, 2), (14, 4)];
     for (x, y) in cells {
-        if (x, y) != (15, 3) && (x, y) != (8, 7) && (x, y) != (7, 3) {
+        if !finds.contains(&(x, y)) {
             assert_eq!(sim.tile(x, y), rubble, "завалено: ({x}, {y})");
         }
     }
@@ -334,8 +341,8 @@ fn the_shipped_ruleset_starts_in_one_rubble_room() {
         .filter(|&(x, y)| sim.tile(x, y) == rubble)
         .count();
     assert_eq!(
-        piles, 77,
-        "ещё одна клетка — завал над ящиком, одна — пыльный стол"
+        piles, 75,
+        "ещё четыре клетки — завалы над ящиком, столом, лежанкой и складом"
     );
     let ruin = sim.tile_index("rubble_gate").expect("завал над шлюзом");
     assert_eq!(sim.tile(11, 0), ruin, "над шахтой — завал над шлюзом");
@@ -354,7 +361,8 @@ fn the_shipped_ruleset_starts_in_one_rubble_room() {
 }
 
 /// На старте не строится ничего (§12.372): шлюз открывает прокоп до руины
-/// (§12.376), а пол, склад и лежанка — выполненный «Осмотреть вход».
+/// (§12.376), пол — выполненный «Осмотреть вход», а склад и лежанку с
+/// §12.424 — находка: склад откопан, сломанная лежанка починена.
 #[test]
 fn the_shipped_ruleset_builds_nothing_before_the_entrance_is_inspected() {
     let mut sim = start();
@@ -374,10 +382,132 @@ fn the_shipped_ruleset_builds_nothing_before_the_entrance_is_inspected() {
     dig(&mut sim);
     assert!(sim.scavenge(inspect, vec!["excellent".into()], -1));
     assert!(done(&mut sim, inspect, 3000), "вход осмотрен");
-    for id in ["floor", "storage", "bed"] {
+    let open_of = |sim: &mut Sim, id: &str| {
         let t = sim.tile_index(id).expect("тайл в палитре");
-        assert!(sim.tile_is_open(t as usize), "`{id}` не открылся осмотром");
+        sim.tile_is_open(t as usize)
+    };
+    assert!(open_of(&mut sim, "floor"), "пол не открылся осмотром");
+    for id in ["storage", "bed"] {
+        assert!(
+            !open_of(&mut sim, id),
+            "`{id}` открылся осмотром, без находки"
+        );
     }
+
+    assert!(
+        sim.plan_demolish_rect(14, 2, 3, 3),
+        "комнатка портала размечена"
+    );
+    assert!(
+        until_tile(&mut sim, 14, 4, "storage", 3000),
+        "склад откопан"
+    );
+    assert!(open_of(&mut sim, "storage"), "склад не открылся находкой");
+    assert!(!open_of(&mut sim, "bed"), "лежанка открылась до починки");
+    assert!(
+        until_tile(&mut sim, 16, 2, "broken_bed", 3000),
+        "сломанная лежанка откопана"
+    );
+    assert!(sim.fix_at(16, 2), "лежанка размечена на ремонт");
+    assert!(until_tile(&mut sim, 16, 2, "bed", 3000), "лежанка починена");
+    assert!(open_of(&mut sim, "bed"), "лежанка не открылась починкой");
+}
+
+/// Деталь, потраченная до шлюза, возвращается сносом (§12.424): лежанка в
+/// палитре с починки старой, и единственную деталь дебюта можно поставить в
+/// новую раньше шлюза. Тупика нет — снос возвращает цену, — а отказ у шлюза
+/// говорит об этом словом: `built`, а не голое `lacks`.
+#[test]
+fn the_shipped_ruleset_returns_the_part_spent_before_the_gate() {
+    let mut sim = start();
+    assert!(
+        sim.plan_demolish_rect(14, 2, 3, 3),
+        "комнатка портала размечена"
+    );
+    assert!(
+        until_tile(&mut sim, 16, 2, "broken_bed", 3000),
+        "сломанная лежанка откопана"
+    );
+    assert!(sim.fix_at(16, 2), "лежанка размечена на ремонт");
+    assert!(until_tile(&mut sim, 16, 2, "bed", 3000), "лежанка починена");
+    dig_to_ruin(&mut sim);
+    dig_to_bin(&mut sim);
+    assert!(sim.plan_demolish(11, 0), "завал над шлюзом размечен");
+    assert!(
+        until_tile(&mut sim, 11, 0, "gate_ruin", 3000),
+        "под завалом нашли сломанный шлюз"
+    );
+    let part = sim.item_index("part").expect("деталь");
+    assert!(
+        (0..6000).any(|_| {
+            sim.tick_n(1);
+            sim.item_total(part) > 0
+        }),
+        "деталь из ящика достали"
+    );
+
+    // Сторож обратимости (§12.424): всё, что до шлюза открыто в палитре и
+    // просит деталь, сносимо — снос возвращает цену, и деталь не теряется.
+    // Неснимаемая постройка с деталью до выхода заперла бы партию: детали
+    // взять больше негде («Пошарить рядом» ждёт выхода).
+    let n = sim.world.resource::<TileRules>().0.len();
+    let mut sinks = Vec::new();
+    for t in 0..n {
+        let (spends, fixed) = {
+            let rules = sim.world.resource::<TileRules>();
+            let spends = !rules.is_internal(t as i16)
+                && rules.cost_of(t as i16).iter().any(|&(i, _)| i == part);
+            (spends, rules.is_fixed(t as i16))
+        };
+        if spends && fixed && sim.tile_is_open(t) {
+            sinks.push(t);
+        }
+    }
+    assert!(
+        sinks.is_empty(),
+        "до шлюза деталь уходит безвозвратно в {sinks:?}"
+    );
+
+    // Деталь — в новую лежанку, мимо шлюза.
+    let bed = sim.tile_index("bed").expect("лежанка");
+    assert!(
+        until_tile(&mut sim, 16, 4, "floor", 6000),
+        "угол комнатки портала откопан"
+    );
+    assert!(
+        sim.add_blueprint(16, 4, i32::from(bed)),
+        "лежанка в палитре после починки старой"
+    );
+    assert!(
+        until_tile(&mut sim, 16, 4, "bed", 6000),
+        "новую лежанку построили"
+    );
+    assert_eq!(sim.item_total(part), 0, "деталь ушла в лежанку");
+    assert_eq!(
+        sim.fix_why(11, 0),
+        "built",
+        "отказ говорит, что деталь в постройке"
+    );
+    assert_eq!(sim.hand_tag("excellent", 11, 0), "built");
+    assert!(!sim.fix_at(11, 0), "без детали ремонт не размечается");
+
+    // Снос возвращает деталь, и шлюз чинится.
+    assert!(sim.add_blueprint(16, 4, -1), "лежанку сносят");
+    assert!(
+        (0..6000).any(|_| {
+            sim.tick_n(1);
+            sim.fix_why(11, 0).is_empty()
+        }),
+        "снос вернул деталь на ремонт"
+    );
+    assert!(sim.fix_at(11, 0), "шлюз размечен на ремонт");
+    assert!(
+        (0..6000).any(|_| {
+            sim.tick_n(1);
+            sim.exit_open()
+        }),
+        "шлюз починен"
+    );
 }
 
 /// Что нельзя построить, того нельзя и разобрать (§12.372): на старте ластик
@@ -456,9 +586,9 @@ fn the_shipped_ruleset_uncovers_then_repairs_the_broken_gate() {
     assert_eq!(sim.tile(11, 0), garage);
     sim.tick_n(300);
     assert_eq!(
-        sim.item_at(8, 7, part),
-        2,
-        "на шлюз ушла ровно одна деталь из трёх"
+        sim.item_total(part),
+        0,
+        "на шлюз ушла единственная деталь из ящика"
     );
     assert!(!sim.fix_at(11, 0), "целый шлюз чинить нечего");
     assert!(
@@ -594,19 +724,19 @@ fn the_shipped_ruleset_hides_a_small_bin_under_the_rubble() {
     });
     assert!(found, "под завалом так и не нашёлся ящик");
 
-    // Ящик найден не пустым (§12.415): три детали внутри (§12.417), и
+    // Ящик найден не пустым (§12.415): деталь внутри (§12.417, §12.423), и
     // назначен он на них — без назначения коты вынесли бы находку на пол
     // (§12.402).
     let part = sim.item_index("part").expect("деталь");
     sim.tick_n(1);
-    assert_eq!(sim.item_at(8, 7, part), 3, "в найденном ящике три детали");
+    assert_eq!(sim.item_at(8, 7, part), 1, "в найденном ящике деталь");
     assert_eq!(sim.bin_of(8, 7), vec![part], "ящик назначен на детали");
     assert!(sim.seen(part), "находка знакомит базу с деталью");
     sim.tick_n(300);
     assert_eq!(
         sim.item_at(8, 7, part),
-        3,
-        "детали из ящика никто не выносит"
+        1,
+        "деталь из ящика никто не выносит"
     );
 
     assert!(
@@ -710,4 +840,79 @@ fn a_rect_eraser_leaves_the_gate_alone() {
     }
     assert!(!sim.plan_demolish(11, 0), "одной клеткой — сносится");
     assert_eq!(sim.planned_tile(11, 0), None);
+}
+
+/// Под завалом в комнатке портала — сломанная лежанка (§12.423): первая
+/// починка партии, раньше шлюза, и платят за неё ломом, который даёт сам
+/// раскоп (`repair_cost`, §12.425). Починенная — обычная лежанка, и снос
+/// возвращает её цену целиком, деталь включительно: одна лишняя деталь —
+/// принятая цена простоты.
+#[test]
+fn the_shipped_ruleset_repairs_the_broken_bed_with_scrap() {
+    let mut sim = start();
+    assert!(
+        sim.plan_demolish_rect(15, 2, 2, 1),
+        "подход и завал над лежанкой размечены"
+    );
+    assert!(
+        until_tile(&mut sim, 16, 2, "broken_bed", 3000),
+        "под завалом нашли сломанную лежанку"
+    );
+    let broken = sim.tile_index("broken_bed").expect("сломанная лежанка");
+    assert_eq!(
+        sim.world.resource::<TileRules>().rest_of(broken),
+        0,
+        "на сломанной не выспаться"
+    );
+
+    // Лом от раскопа уже на базе, а детали нет: ремонт её и не просит.
+    let part = sim.item_index("part").expect("деталь");
+    assert_eq!(sim.item_total(part), 0, "детали на базе нет");
+    assert_eq!(sim.fix_why(16, 2), "", "лома на ремонт хватает");
+    assert_eq!(sim.hand_tag("excellent", 16, 2), "repair");
+    assert!(sim.fix_at(16, 2), "лежанка размечена на ремонт");
+    assert!(
+        until_tile(&mut sim, 16, 2, "bed", 3000),
+        "починили — стала обычной лежанкой"
+    );
+
+    assert!(sim.add_blueprint(16, 2, -1), "лежанку можно снести");
+    assert!(
+        until_tile(&mut sim, 16, 2, "floor", 3000),
+        "снос оставляет пол"
+    );
+    assert!(
+        (0..300).any(|_| {
+            sim.tick_n(1);
+            sim.item_total(part) == 1
+        }),
+        "снос вернул цену лежанки, деталь включительно"
+    );
+}
+
+/// Склад под завалом (§12.423, §12.425) не чинится: откопали — и коты сами
+/// понесли в него лом с раскопа, урок §12.216 делом. Это обычный склад.
+#[test]
+fn the_shipped_ruleset_finds_a_storage_that_fills_itself() {
+    let mut sim = start();
+    assert!(
+        sim.plan_demolish_rect(14, 3, 1, 2),
+        "подход и завал над складом размечены"
+    );
+    assert!(
+        until_tile(&mut sim, 14, 4, "storage", 3000),
+        "под завалом нашёлся склад"
+    );
+    assert!(
+        sim.plan_demolish_rect(15, 2, 1, 1),
+        "ещё клетка раскопа — ещё лом"
+    );
+    let scrap = sim.item_index("scrap").expect("лом");
+    assert!(
+        (0..3000).any(|_| {
+            sim.tick_n(1);
+            sim.item_at(14, 4, scrap) > 0
+        }),
+        "лом с раскопа доехал на склад сам"
+    );
 }

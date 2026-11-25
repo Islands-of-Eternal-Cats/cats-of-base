@@ -256,7 +256,7 @@ pub(crate) fn assign_hauls(
     let mut needy: Vec<Needy> = blueprints
         .iter()
         .filter_map(|(e, bp)| {
-            let mut miss = missing(&rules, bp);
+            let mut miss = missing(&rules, &map, bp);
             less_incoming(&mut miss, &brought(e));
             let committed = bp.delivered.iter().any(|&(_, n)| n > 0) || !brought(e).is_empty();
             (!miss.is_empty()).then_some(Needy {
@@ -770,7 +770,7 @@ pub(crate) fn assign_tidy(
     // Гружёные поэтому разбираются **до** проверки места на складе ниже.
     let wanted: Vec<usize> = sites
         .iter()
-        .flat_map(|bp| missing(&rules, bp))
+        .flat_map(|bp| missing(&rules, map, bp))
         .map(|(item, _)| item)
         .collect();
     let mut empty: Vec<(&str, Entity, Option<&Carry>, Reach)> = Vec::new();
@@ -1047,7 +1047,7 @@ pub(crate) fn work_hauls(
                 if path.is_some() {
                     continue; // ещё в дороге
                 }
-                let miss = missing(&rules, &bp);
+                let miss = missing(&rules, &map, &bp);
 
                 let Some(load) = load else {
                     // Пришёл к куче: берём тот тип, которого площадке не хватает,

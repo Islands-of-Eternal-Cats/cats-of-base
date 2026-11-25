@@ -1892,8 +1892,11 @@ impl Sim {
                     // тайла (`internal`) своих ворот в очереди палитры нет, так
                     // что цикла через него не сложить. Индексы при этом растут
                     // только в конец, и выше починенный стол не встать.
+                    // Сам себя тайл называть вправе (§12.425): «такой хоть раз
+                    // стоял» — значит его починили или откопали, и палитра
+                    // открывается находкой (лежанка, склад).
                     after: tile_index_of(&t.after)
-                        .filter(|&prev| prev < def || rs.tiles[prev].internal)
+                        .filter(|&prev| prev <= def || rs.tiles[prev].internal)
                         .map(|prev| prev as i16),
                     raided: (!t.raided.is_empty())
                         .then(|| rs.missions.iter().position(|m| m.id == t.raided))
@@ -1909,6 +1912,11 @@ impl Sim {
                         .collect(),
                     examine: tile_index_of(&t.examine).map(|t| t as i16),
                     repair: tile_index_of(&t.repair).map(|t| t as i16),
+                    repair_cost: t
+                        .repair_cost
+                        .iter()
+                        .filter_map(|(id, &n)| item_index(id).map(|i| (i, n)))
+                        .collect(),
                     skill: skill_index(&t.skill),
                     fixed: t.fixed,
                     internal: t.internal,
@@ -3005,7 +3013,12 @@ impl Sim {
         let Some((t, false)) = self.fix_target(x, y) else {
             return Vec::new();
         };
-        let cost = self.world.resource::<TileRules>().cost_of(t).to_vec();
+        let below = self.world.resource::<BaseMap>().tile_at(x, y);
+        let cost = self
+            .world
+            .resource::<TileRules>()
+            .site_cost(below, t)
+            .to_vec();
         if cost.is_empty() {
             return cost;
         }
@@ -3028,14 +3041,54 @@ impl Sim {
     }
 
     /// Почему руину в клетке не починить (§12.419), тегом для панели клетки:
-    /// `lacks` — у базы нет материала на ремонт. Пусто — можно (или клетка не
-    /// руина, или ремонт уже размечен).
+    /// `lacks` — у базы нет материала на ремонт; `built` (§12.424) — нет, но
+    /// недостающее стоит в постройке на карте, и снос её вернёт (снос
+    /// возвращает цену, `work_jobs`). Пусто — можно (или клетка не руина, или
+    /// ремонт уже размечен).
+    ///
+    /// `built` — это не отказ мягче, а отказ с дорогой назад: единственную
+    /// деталь дебюта можно поставить в склад раньше шлюза, и «нет материала»
+    /// без слова о складе было бы причиной наполовину (§12.53).
     pub fn fix_why(&mut self, x: i32, y: i32) -> String {
-        if self.blueprint_at(x, y).is_some() || self.fix_lacks(x, y).is_empty() {
+        if self.blueprint_at(x, y).is_some() {
+            return String::new();
+        }
+        let lacks = self.fix_lacks(x, y);
+        if lacks.is_empty() {
             String::new()
+        } else if self.held_in_buildings(&lacks) {
+            "built".to_string()
         } else {
             "lacks".to_string()
         }
+    }
+
+    /// Вернёт ли снос стоящих построек хоть что-то из недостающего (§12.424):
+    /// клетка, которую можно разобрать (`may_dismantle` — те же ворота, что у
+    /// ластика), и в цене её тайла есть нужный предмет.
+    fn held_in_buildings(&mut self, lacks: &[(usize, i32)]) -> bool {
+        let (w, h) = {
+            let map = self.world.resource::<BaseMap>();
+            (map.width, map.height)
+        };
+        for y in 0..h {
+            for x in 0..w {
+                let tile = self.world.resource::<BaseMap>().tile_at(x, y);
+                if tile < 0 {
+                    continue;
+                }
+                let holds = self
+                    .world
+                    .resource::<TileRules>()
+                    .cost_of(tile)
+                    .iter()
+                    .any(|&(item, _)| lacks.iter().any(|&(l, _)| l == item));
+                if holds && self.may_dismantle(x, y) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Чертёж работы над руиной: уже размеченный или новый (§12.379).
@@ -3050,11 +3103,12 @@ impl Sim {
         // **новой** постройки, а не работы над старой. Спросить их значило бы
         // отказать «?» за шахтой, ещё заваленной, — без причины, которую
         // игрок мог бы понять (§12.53): работа просто ждёт, пока до руины
-        // докопаются, как любой чертёж. Слой спрашиваем: он про то, что во что
-        // превращается, и это свойство рулсета, а не места.
-        let below = self.world.resource::<BaseMap>().tile_at(x, y);
-        if !self.world.resource::<TileRules>().rests_on(below, t) || !self.spawn_blueprint(x, y, t)
-        {
+        // докопаются, как любой чертёж. Слой тоже не спрашиваем (§12.425): что
+        // во что превращается, руина уже сказала сама (`examine` · `repair`), а
+        // `on` у тайла про **стройку** — сломанная лежанка чинится в обычную,
+        // которую строят на полу, и с `on: broken_bed` её нельзя было бы
+        // поставить из палитры.
+        if !self.spawn_blueprint(x, y, t) {
             return None;
         }
         self.blueprint_at(x, y)
@@ -3145,9 +3199,13 @@ impl Sim {
     ) -> bool {
         let Some((tile, supplied, other)) = ({
             let rules = self.world.resource::<TileRules>();
-            self.world
-                .get::<Blueprint>(bp_e)
-                .map(|bp| (bp.tile, missing(rules, bp).is_empty(), bp.assignee))
+            self.world.get::<Blueprint>(bp_e).map(|bp| {
+                (
+                    bp.tile,
+                    missing(rules, self.world.resource::<BaseMap>(), bp).is_empty(),
+                    bp.assignee,
+                )
+            })
         }) else {
             return false;
         };
@@ -7262,8 +7320,9 @@ impl Sim {
         // Ремонт без материала на базе — отказ (§12.419): тем же `fix_why`,
         // что гасит кнопку «Починить».
         if let Some((_, examine)) = self.fix_target(x, y) {
-            if !self.fix_why(x, y).is_empty() {
-                return "lacks".to_string();
+            let why = self.fix_why(x, y);
+            if !why.is_empty() {
+                return why;
             }
             return if examine { "examine" } else { "repair" }.to_string();
         }
@@ -7362,7 +7421,14 @@ impl Sim {
             .map(|(e, bp)| {
                 (
                     e,
-                    need_has(&missing(self.world.resource::<TileRules>(), bp), item),
+                    need_has(
+                        &missing(
+                            self.world.resource::<TileRules>(),
+                            self.world.resource::<BaseMap>(),
+                            bp,
+                        ),
+                        item,
+                    ),
                 )
             });
         if let Some((e, needed)) = site {
@@ -8330,13 +8396,23 @@ impl Sim {
                     total: BUILD_WORK,
                     // Полоска подвоза показывает набор целиком: сколько всего
                     // штук нужно и сколько уже лежит на площадке.
-                    need: rules.cost_of(bp.tile).iter().map(|&(_, n)| n).sum(),
+                    need: rules
+                        .site_cost(
+                            self.world.resource::<BaseMap>().tile_at(bp.x, bp.y),
+                            bp.tile,
+                        )
+                        .iter()
+                        .map(|&(_, n)| n)
+                        .sum(),
                     delivered: bp.delivered.iter().map(|&(_, n)| n).sum(),
                     // А панель клетки называет недостачу поимённо: цена
                     // упорядочена по имени предмета (инвариант 12), значит и
                     // список детерминирован.
                     missing: rules
-                        .cost_of(bp.tile)
+                        .site_cost(
+                            self.world.resource::<BaseMap>().tile_at(bp.x, bp.y),
+                            bp.tile,
+                        )
                         .iter()
                         .filter_map(|&(item, n)| {
                             let got = bp

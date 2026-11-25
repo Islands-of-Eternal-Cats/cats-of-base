@@ -374,13 +374,31 @@ fn open_at_start(rs: &Ruleset, key: &str) -> bool {
     let Some((kind, id)) = key.split_once(':') else {
         return false;
     };
+    // Находки стартовой застройки (§12.424): что встаёт из неё разбором
+    // (`on`) и починкой (`repair`), появляется в первые минуты партии — так
+    // же, как ворота `raided` осмотра входа, которых сторож не считает вовсе.
+    // `after` на такую находку поэтому не закрывает статью.
+    let mut found: BTreeSet<&str> = rs.build.iter().map(|b| b.tile.as_str()).collect();
+    loop {
+        let more: Vec<&str> = rs
+            .tiles
+            .iter()
+            .filter(|t| found.contains(t.id.as_str()))
+            .flat_map(|t| [t.on.as_str(), t.repair.as_str()])
+            .filter(|t| !t.is_empty() && !found.contains(t))
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        found.extend(more);
+    }
     let tile_free = |t: &str| {
         rs.tiles.iter().any(|x| {
             x.id == t
                 && x.tech.is_empty()
                 && x.sighted.is_empty()
                 && x.mastered.is_empty()
-                && x.after.is_empty()
+                && (x.after.is_empty() || found.contains(x.after.as_str()))
         })
     };
     match kind {

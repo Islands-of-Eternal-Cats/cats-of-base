@@ -17,6 +17,7 @@ import {
   drawGlass,
   drawGrid,
   drawOblique,
+  LOOKS_LIKE,
   prop as obliqueProp,
   sconceCells,
   surfaceRise,
@@ -1776,7 +1777,8 @@ const tileGlyphCache = new Map();
 function tileGlyphContext(i) {
   if (tileGlyphCache.has(i)) return tileGlyphCache.get(i);
   const def = (meta?.palette ?? [])[i];
-  const d = def && TILE_GLYPHS[def.id];
+  // Находка (§12.423) говорит о себе тем же глифом, что вещь из палитры.
+  const d = def && TILE_GLYPHS[LOOKS_LIKE[def.id] ?? def.id];
   let ctx = null;
   if (d) {
     // Рулсет — контент, и кривой контур в нём не должен ронять карту: тайл
@@ -1910,6 +1912,7 @@ function shade(c, t) {
 /// Мебель одной клетки. `id` — тайл рулсета; неизвестному ничего не рисуем,
 /// комната остаётся тонированным полом.
 function drawFurniture(g, id, x, y, tint, n) {
+  id = LOOKS_LIKE[id] ?? id;
   const T = TILE;
   const px = x * T;
   const py = y * T;
@@ -1947,6 +1950,29 @@ function drawFurniture(g, id, x, y, tint, n) {
           alpha: 0.12,
         });
       }
+      break;
+    }
+    case "broken_bed": {
+      // Сломанная лежанка (§12.423): голая рама без матраса — доски поперёк и
+      // клок тряпья в углу.
+      const m = T * 0.14;
+      shadowUnder(m, m, T - 2 * m, T - 2 * m);
+      g.roundRect(px + m, py + m, T - 2 * m, T - 2 * m, 3).fill(0x5a4030);
+      for (let i = 1; i < 4; i++) {
+        g.rect(px + m + 1, py + m + ((T - 2 * m) * i) / 4, T - 2 * m - 2, 1).fill(
+          0x2e2218,
+        );
+      }
+      g.moveTo(px + T * 0.5, py + T * 0.58)
+        .lineTo(px + T - m - 1, py + T * 0.52)
+        .lineTo(px + T - m - 2, py + T - m - 1)
+        .lineTo(px + T * 0.6, py + T - m - 2)
+        .closePath()
+        .fill(shade(tint, 0.1));
+      g.roundRect(px + m, py + m, T - 2 * m, T - 2 * m, 3).stroke({
+        color: dark,
+        width: 1,
+      });
       break;
     }
     case "bed": {
@@ -5356,20 +5382,27 @@ function renderCellPanel(snap) {
   const fix = def && (def.examine || def.repair);
   if (fix && !bp) {
     const target = meta.palette.find((p) => p.id === fix);
+    // Цена ремонта (§12.425): своя у руины (`repair_cost`), иначе цена тайла,
+    // который встаёт, — тем же правилом, что `TileRules::site_cost` в ядре.
+    const price = def.repair_cost?.size ? def.repair_cost : target?.cost;
     const label = def.examine
       ? "Обследовать"
-      : `Починить: ${esc(target?.label || fix)} ${costChips(target?.cost)}`;
+      : `Починить: ${esc(target?.label || fix)} ${costChips(price)}`;
     // Нечем чинить (§12.419): решает ядро (`fix_why`), вид гасит кнопку
     // классом и называет причину словом (§12.53) — `disabled` нельзя.
-    const lacks =
-      !def.examine &&
-      lastHand?.key === handAimKey() &&
-      lastHand.fix === "lacks";
-    const why = "нет материала: " + costChips(target?.cost);
+    // `built` (§12.424): материала нет, но он стоит в постройке, и снос его
+    // вернёт — причина с дорогой назад.
+    const fixWhy =
+      !def.examine && lastHand?.key === handAimKey() ? lastHand.fix : "";
+    const lacks = fixWhy === "lacks" || fixWhy === "built";
+    const why =
+      "нет материала: " +
+      costChips(price) +
+      (fixWhy === "built" ? " — он в постройке, снос вернёт" : "");
     parts.push(
       `<div class="cat-sub">${def.examine ? "что с этим делать, пока неясно" : lacks ? why : "понятно, как чинить"}</div>`,
       `<button class="tool ruin-fix${lacks ? " off" : ""}" data-key="fix@${x}, ${y}"` +
-        ` data-x="${x}" data-y="${y}"${lacks ? ` data-tip="Не починить: на базе нет материала"` : ""}>${label}</button>`,
+        ` data-x="${x}" data-y="${y}"${lacks ? ` data-tip="${HAND_REFUSALS[fixWhy]}"` : ""}>${label}</button>`,
     );
   }
 
@@ -8590,6 +8623,8 @@ const HAND_REFUSALS = {
   asleep: "Кот спит и приказ не примет",
   // Ремонт без материала на базе (§12.419): тот же `fix_why`, что гасит кнопку.
   lacks: "Не починить: нет материала",
+  // Материал стоит в постройке (§12.424): снос возвращает цену.
+  built: "Не починить: материал в постройке — разберите её, и он вернётся",
 };
 const PILE_WHY = {
   untidy: "Лежит: не помечено на склад",

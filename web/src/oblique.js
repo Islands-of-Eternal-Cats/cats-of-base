@@ -32,6 +32,14 @@ const THICK = 0.28;
 /// «что это за комната» сам, оттенок только поддерживает его.
 const TINT = 0.22;
 
+/// Тайлы-двойники (§12.423): завал с находкой выглядит как обычный завал.
+/// Своего рисунка у них нет, и второй копии рисунка заводить незачем: один
+/// словарь на оба вида (плоский и 3/4).
+export const LOOKS_LIKE = {
+  rubble_bed: "rubble",
+  rubble_storage: "rubble",
+};
+
 /// Материал пола по роли клетки. Неизвестное — бетон, как пол коридора.
 const MATERIAL = {
   floor: "concrete",
@@ -39,6 +47,7 @@ const MATERIAL = {
   rack: "concrete",
   bin: "concrete",
   bed: "wood",
+  broken_bed: "wood",
   nest: "wood",
   lab: "tile",
   bench: "tile",
@@ -98,7 +107,8 @@ export function drawOblique(d) {
     for (let x = 0; x < W; x++) {
       const v = at(x, y);
       if (v < 0) continue;
-      const id = palette[v]?.id;
+      const raw = palette[v]?.id;
+      const id = LOOKS_LIKE[raw] ?? raw;
       const mat = MATERIAL[id] ?? "concrete";
       floorCell(
         ground,
@@ -564,6 +574,7 @@ function wallFace(g, x, y, w, h, cx, cy, tint, d) {
 
 /// Мебель одной клетки в 3/4. Наружу — ради завала под порталом (§12.403).
 export function prop(g, id, x, y, tint, n, d) {
+  id = LOOKS_LIKE[id] ?? id;
   const { T, shade, tileDefAt } = d;
   const px = x * T;
   const py = y * T;
@@ -598,6 +609,23 @@ export function prop(g, id, x, y, tint, n, d) {
         const ry = 0.1 + rnd() * (0.8 - w);
         box(rx, ry, w, w, 0.12 + rnd() * 0.28, stones[i % 4]);
       }
+      break;
+    }
+    case "broken_bed": {
+      // Сломанная лежанка (§12.423): та же рама, но подстилка сорвана —
+      // голые доски и клок тряпья в углу.
+      const frame = 0x5a4030;
+      box(0.12, 0.08, 0.76, 0.08, 0.3, shade(frame, 0.05));
+      const t = box(0.14, 0.14, 0.72, 0.74, 0.12, frame);
+      for (let i = 1; i < 4; i++) {
+        g.rect(t.x + 1, t.y + (t.d * i) / 4, t.w - 2, 1).fill(shade(frame, -0.4));
+      }
+      g.moveTo(t.x + t.w * 0.5, t.y + t.d * 0.6)
+        .lineTo(t.x + t.w - 2, t.y + t.d * 0.55)
+        .lineTo(t.x + t.w - 3, t.y + t.d - 2)
+        .lineTo(t.x + t.w * 0.62, t.y + t.d - 3)
+        .closePath()
+        .fill(shade(tint, 0.1));
       break;
     }
     case "bed":

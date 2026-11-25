@@ -624,7 +624,7 @@ pub(crate) fn assign_jobs(
                 bp.assignee = None;
                 commands.entity(cat).remove::<(Assignment, Path, Stride)>();
             }
-        } else if !waiting && !littered && missing(&rules, &bp).is_empty() {
+        } else if !waiting && !littered && missing(&rules, &map, &bp).is_empty() {
             open.push((bp_e, (bp.x, bp.y), bp.tile));
         }
     }
