@@ -3049,9 +3049,31 @@ impl Sim {
     /// `built` — это не отказ мягче, а отказ с дорогой назад: единственную
     /// деталь дебюта можно поставить в склад раньше шлюза, и «нет материала»
     /// без слова о складе было бы причиной наполовину (§12.53).
+    ///
+    /// Раньше обоих — **знакомство** (§12.426): `unseen` — база не видела ни
+    /// одного предмета из цены ремонта (кнопки нет вовсе: чем чинить, пока
+    /// неясно), `unknown` — видела не все (кнопка погашена, незнакомое — «??»).
+    /// Шкала та же, что у строки склада, `Seen` (§12.131): цена руины — тоже
+    /// находка, и называть деталь раньше, чем её принесли, — спойлер.
     pub fn fix_why(&mut self, x: i32, y: i32) -> String {
         if self.blueprint_at(x, y).is_some() {
             return String::new();
+        }
+        if let Some((t, false)) = self.fix_target(x, y) {
+            let below = self.world.resource::<BaseMap>().tile_at(x, y);
+            let cost = self
+                .world
+                .resource::<TileRules>()
+                .site_cost(below, t)
+                .to_vec();
+            let seen = self.world.resource::<Seen>();
+            let known = cost.iter().filter(|&&(i, _)| seen.saw(i)).count();
+            if !cost.is_empty() && known == 0 {
+                return "unseen".to_string();
+            }
+            if known < cost.len() {
+                return "unknown".to_string();
+            }
         }
         let lacks = self.fix_lacks(x, y);
         if lacks.is_empty() {
@@ -7684,6 +7706,29 @@ impl Sim {
     /// База разведана (§12.422): выполнен заказ `outskirts.raided`. Пока нет,
     /// вид рисует её на карте штаба силуэтом «?» — первая вылазка («Осмотреть
     /// вход снаружи») иначе не меняла на карте ничего. Монотонно: журнал `Raids`.
+    /// Руины, с которыми ничего нельзя сделать (§12.427): ремонт, цену которого
+    /// база ещё не видела целиком (`unseen` и, с §12.428, `unknown`), — тем же
+    /// `fix_why`, каким панель прячет и гасит «Починить». Индексы клеток
+    /// row-major.
+    pub(crate) fn ruins_mute(&mut self) -> Vec<u32> {
+        let (w, h) = {
+            let map = self.world.resource::<BaseMap>();
+            (map.width, map.height)
+        };
+        let mut out = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let tile = self.world.resource::<BaseMap>().tile_at(x, y);
+                if self.world.resource::<TileRules>().repair_of(tile).is_some()
+                    && matches!(self.fix_why(x, y).as_str(), "unseen" | "unknown")
+                {
+                    out.push((y * w + x) as u32);
+                }
+            }
+        }
+        out
+    }
+
     pub(crate) fn home_met(&self) -> bool {
         let id = &self.outskirts.raided;
         if id.is_empty() {
@@ -8979,6 +9024,7 @@ impl Sim {
         let exits = self.exit_cells_of().len() as i32;
         let exit_open = self.exit_open();
         let home_met = self.home_met();
+        let ruins_mute = self.ruins_mute();
         // Отряды поимённо: с §12.152 у каждого гаража свой состав, и панель
         // обязана называть его словом — иначе кнопка вылазки берёт отряд ниоткуда.
         let nodes: Vec<NodeSnap> = {
@@ -9373,6 +9419,7 @@ impl Sim {
             exits,
             exit_open,
             home_met,
+            ruins_mute,
             nodes,
             nearby,
             free: free_ids,

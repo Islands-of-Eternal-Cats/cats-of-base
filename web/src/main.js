@@ -1927,7 +1927,6 @@ function drawFurniture(g, id, x, y, tint, n) {
     // видна, только когда его разобрали.
     case "rubble_bin":
     case "rubble_table":
-    case "rubble_gate":
     case "rubble": {
       // Завал (§12.367): груда камней на всю клетку — непроходимо, но видно,
       // что это не стена, а то, что можно разобрать. Раскладка камней своя у
@@ -5332,7 +5331,7 @@ function renderCellPanel(snap) {
       bp.tile < 0
         ? "Разбор"
         : def?.examine && def.examine === bpDef?.id
-          ? "Обследование"
+          ? "Исследование"
           : def?.repair && def.repair === bpDef?.id
             ? `Ремонт: ${esc(bpDef?.label || bpDef?.id)}`
             : `Стройка: ${esc(bpDef?.label || bpDef?.id || "?")}`;
@@ -5385,25 +5384,34 @@ function renderCellPanel(snap) {
     // Цена ремонта (§12.425): своя у руины (`repair_cost`), иначе цена тайла,
     // который встаёт, — тем же правилом, что `TileRules::site_cost` в ядре.
     const price = def.repair_cost?.size ? def.repair_cost : target?.cost;
-    const label = def.examine
-      ? "Обследовать"
-      : `Починить: ${esc(target?.label || fix)} ${costChips(price)}`;
     // Нечем чинить (§12.419): решает ядро (`fix_why`), вид гасит кнопку
     // классом и называет причину словом (§12.53) — `disabled` нельзя.
     // `built` (§12.424): материала нет, но он стоит в постройке, и снос его
-    // вернёт — причина с дорогой назад.
-    const fixWhy =
-      !def.examine && lastHand?.key === handAimKey() ? lastHand.fix : "";
-    const lacks = fixWhy === "lacks" || fixWhy === "built";
+    // вернёт — причина с дорогой назад. Знакомство (§12.426): `unseen` — база
+    // не видела ничего из цены, кнопки нет вовсе; `unknown` — видела не всё,
+    // кнопка погашена, а незнакомое в цене — «??». Пока ответ ядра не пришёл
+    // для этой клетки, ремонта не рисуем: кадр с полной ценой был бы спойлером.
+    const handReady = lastHand?.key === handAimKey();
+    const fixWhy = !def.examine && handReady ? lastHand.fix : "";
+    const veiled = fixWhy === "unseen" || fixWhy === "unknown";
+    const label = def.examine
+      ? "Исследовать"
+      : // Без имени цели (§12.426): что встанет после починки, понятно и так.
+        `Починить ${costChips(price, veiled)}`;
+    const lacks = fixWhy === "lacks" || fixWhy === "built" || veiled;
     const why =
       "нет материала: " +
-      costChips(price) +
+      costChips(price, veiled) +
       (fixWhy === "built" ? " — он в постройке, снос вернёт" : "");
+    const hidden = !def.examine && (!handReady || fixWhy === "unseen");
     parts.push(
-      `<div class="cat-sub">${def.examine ? "что с этим делать, пока неясно" : lacks ? why : "понятно, как чинить"}</div>`,
-      `<button class="tool ruin-fix${lacks ? " off" : ""}" data-key="fix@${x}, ${y}"` +
-        ` data-x="${x}" data-y="${y}"${lacks ? ` data-tip="${HAND_REFUSALS[fixWhy]}"` : ""}>${label}</button>`,
+      `<div class="cat-sub">${def.examine ? "что с этим делать, пока неясно" : fixWhy === "unseen" ? "чем чинить, пока неясно" : lacks ? why : "понятно, как чинить"}</div>`,
     );
+    if (!hidden)
+      parts.push(
+        `<button class="tool ruin-fix${lacks ? " off" : ""}" data-key="fix@${x}, ${y}"` +
+          ` data-x="${x}" data-y="${y}"${lacks ? ` data-tip="${HAND_REFUSALS[fixWhy]}"` : ""}>${label}</button>`,
+      );
   }
 
   // Завал (§12.381): разбор — обычный снос (`plan_demolish_rect` на 1×1),
@@ -8600,7 +8608,7 @@ const HAND_WORDS = {
   take: "взять из кучи",
   put: "положить сюда",
   // Руина отвечает работой над собой (§12.379): пойдёт именно этот кот.
-  examine: "обследовать",
+  examine: "исследовать",
   repair: "починить",
   // Завал отвечает разбором (§12.395): тот же снос, что у кнопки «Разобрать».
   dismantle: "разобрать завал",
@@ -8625,6 +8633,9 @@ const HAND_REFUSALS = {
   lacks: "Не починить: нет материала",
   // Материал стоит в постройке (§12.424): снос возвращает цену.
   built: "Не починить: материал в постройке — разберите её, и он вернётся",
+  // Знакомство с ценой (§12.426): называть незнакомое раньше находки нельзя.
+  unseen: "Не починить: чем — пока неясно",
+  unknown: "Не починить: нужно то, чего база ещё не видела",
 };
 const PILE_WHY = {
   untidy: "Лежит: не помечено на склад",
@@ -8875,11 +8886,16 @@ function syncRuins() {
   // Ворот у этого нет — кнопка в панели клетки и приказ коту работают сразу.
   const pal = meta?.palette ?? [];
   const cells = [];
+  // Ремонт, чью цену база ещё не видела целиком (§12.427, §12.428), знака
+  // не получает: с
+  // клеткой пока ничего не сделать, а мигающий ключ звал бы к кнопке, которой
+  // в панели нет. Список считает ядро (`ruins_mute`, тот же `fix_why`).
+  const mute = new Set(lastSnap?.ruins_mute ?? []);
   if (mapCells) {
     for (let i = 0; i < mapCells.length; i++) {
       const def = pal[mapCells[i]];
       if (def?.examine) cells.push([i, "examine"]);
-      else if (def?.repair) cells.push([i, "repair"]);
+      else if (def?.repair && !mute.has(i)) cells.push([i, "repair"]);
       // Завал с находкой (§12.417): `holds` у тайла — под ним что-то лежит.
       // Знак — «?», как у необследованной руины: «здесь неизвестное, клик
       // покажет». Что именно, не говорим — иначе находка не находка. Клик
@@ -9625,7 +9641,9 @@ document.addEventListener("visibilitychange", () => {
 // он алфавитный: в рулсете это отображение).
 // `veiled` — показывать ли незнакомое игроку «??» вместо глифа (§12.131).
 //
-// Включает его **одна** строка на всю игру — добыча заказа вылазки: обещание
+// Включают его **две** строки (§12.426): цена ремонта руины — она сама находка,
+// и деталь в ней называется, только когда её принесли, — и добыча заказа
+// вылазки: обещание
 // принести то, чего база ещё не видела, интереснее названного, а первое
 // знакомство должно случаться в момент, когда кот тащит это к шлюзу, а не в
 // таблице заказов. Везде остальное (цена тайла, цена темы, вход рецепта, «не

@@ -57,15 +57,15 @@ fn until_tile(sim: &mut Sim, x: i32, y: i32, id: &str, ticks: usize) -> bool {
     })
 }
 
-/// Докопаться, разобрать завал над руиной и починить шлюз (§12.376, §12.418):
+/// Докопаться, исследовать руину и починить шлюз (§12.376, §12.426):
 /// выход открыт, когда шлюз достроен.
 fn dig(sim: &mut Sim) {
     dig_to_ruin(sim);
     dig_to_bin(sim);
-    assert!(sim.plan_demolish(11, 0), "завал над шлюзом размечен");
+    assert!(sim.fix_at(11, 0), "шлюз размечен на исследование");
     assert!(
         until_tile(sim, 11, 0, "gate_ruin", 3000),
-        "под завалом нашли сломанный шлюз"
+        "исследовали — сломанный шлюз"
     );
     // Без детали ремонт не размечается (§12.419): ждём, пока ящик откопают.
     assert!(
@@ -344,8 +344,12 @@ fn the_shipped_ruleset_starts_in_one_rubble_room() {
         piles, 75,
         "ещё четыре клетки — завалы над ящиком, столом, лежанкой и складом"
     );
-    let ruin = sim.tile_index("rubble_gate").expect("завал над шлюзом");
-    assert_eq!(sim.tile(11, 0), ruin, "над шахтой — завал над шлюзом");
+    let ruin = sim.tile_index("broken_gate").expect("неисследованный шлюз");
+    assert_eq!(
+        sim.tile(11, 0),
+        ruin,
+        "над шахтой — неисследованный шлюз без завала"
+    );
     assert!(
         sim.tile_index("portal").is_none(),
         "портал — картинка, а не тайл"
@@ -432,7 +436,7 @@ fn the_shipped_ruleset_returns_the_part_spent_before_the_gate() {
     assert!(until_tile(&mut sim, 16, 2, "bed", 3000), "лежанка починена");
     dig_to_ruin(&mut sim);
     dig_to_bin(&mut sim);
-    assert!(sim.plan_demolish(11, 0), "завал над шлюзом размечен");
+    assert!(sim.fix_at(11, 0), "шлюз размечен на исследование");
     assert!(
         until_tile(&mut sim, 11, 0, "gate_ruin", 3000),
         "под завалом нашли сломанный шлюз"
@@ -519,8 +523,8 @@ fn the_shipped_ruleset_dismantles_only_rubble_at_the_start() {
     assert!(!sim.add_blueprint(15, 3, -1), "пол у портала разобран");
     assert!(sim.add_blueprint(6, 2, -1), "завал не разбирается");
     assert!(
-        sim.add_blueprint(11, 0, -1),
-        "завал над шлюзом не разбирается (§12.418)"
+        !sim.add_blueprint(11, 0, -1),
+        "неисследованный шлюз разбирается (§12.426)"
     );
     let mask = sim.buildable(-1, 0, 0, 0, 0);
     let w = sim.world.resource::<BaseMap>().width;
@@ -542,13 +546,17 @@ fn the_shipped_ruleset_uncovers_then_repairs_the_broken_gate() {
         !sim.add_blueprint(11, 0, i32::from(garage)),
         "шлюз ставится палитрой"
     );
-    assert!(!sim.fix_at(11, 0), "под завалом чинить нечего");
-    // Разбор размечается и за завалом шахты — работа ждёт прокопа.
-    assert!(sim.plan_demolish(11, 0), "завал над шлюзом не размечается");
+    // Исследование размечается и за завалом шахты — работа ждёт прокопа
+    // (§12.426: над самим шлюзом завала нет).
+    assert!(
+        !sim.plan_demolish(11, 0),
+        "неисследованный шлюз разбирается"
+    );
+    assert!(sim.fix_at(11, 0), "шлюз не размечается на исследование");
     dig_to_ruin(&mut sim);
     assert!(
         until_tile(&mut sim, 11, 0, "gate_ruin", 3000),
-        "под завалом нашли сломанный шлюз"
+        "исследовали — сломанный шлюз"
     );
     assert!(!sim.exit_open(), "руина — не дверь");
     assert!(
@@ -560,9 +568,10 @@ fn the_shipped_ruleset_uncovers_then_repairs_the_broken_gate() {
     assert!(dug >= 3, "прокоп дал лом на шлюз: {dug}");
     // Ремонт стоит детали (§12.417), а она только в ящике под завалом: пока
     // его не откопали, «Починить» не размечается вовсе (§12.419) — ни кнопкой,
-    // ни приказом коту, и причина едет тегом.
-    assert_eq!(sim.fix_why(11, 0), "lacks");
-    assert_eq!(sim.hand_tag("excellent", 11, 0), "lacks");
+    // ни приказом коту, и причина едет тегом. Детали база ещё не видела, а
+    // лом видела (§12.426): кнопка погашена, деталь в цене — «??».
+    assert_eq!(sim.fix_why(11, 0), "unknown");
+    assert_eq!(sim.hand_tag("excellent", 11, 0), "unknown");
     assert!(!sim.fix_at(11, 0), "шлюз размечен на ремонт без детали");
     sim.tick_n(300);
     assert_eq!(sim.tile(11, 0), ruin, "руина стоит, пока ящик не откопан");
@@ -770,8 +779,8 @@ fn the_shipped_ruleset_erases_all_rubble_with_one_rect() {
     assert_eq!(sim.planned_tile(7, 3), Some(-1), "и над пыльным столом");
     assert_eq!(
         sim.planned_tile(11, 0),
-        Some(-1),
-        "и над шлюзом: верхний ряд рамка щадит только у самого выхода (§12.418)"
+        None,
+        "шлюз рамка не трогает (§12.426: завала над ним нет)"
     );
 }
 
@@ -783,8 +792,8 @@ fn examining_the_ruin_trains_science() {
     let mut sim = start();
     let science = sim.skill_index("science").expect("наука");
     let build = sim.skill_index("build").expect("стройка");
-    // С §12.418 боевой старт кладёт над руиной завал; обследование осталось
-    // механизмом, и руину ставим сами.
+    // С §12.426 боевой старт снова ставит руину сам; ставим явно, чтобы тест
+    // не зависел от стартовой застройки.
     let broken = sim
         .tile_index("broken_gate")
         .expect("необследованная руина");
@@ -914,5 +923,92 @@ fn the_shipped_ruleset_finds_a_storage_that_fills_itself() {
             sim.item_at(14, 4, scrap) > 0
         }),
         "лом с раскопа доехал на склад сам"
+    );
+}
+
+/// Цена ремонта — тоже находка (§12.426): пока база не видела ничего из неё,
+/// «Починить» нет вовсе (`unseen`); видела лом, но не деталь — кнопка
+/// погашена, деталь в цене «??» (`unknown`); видела всё, но не хватает —
+/// прежнее `lacks`.
+#[test]
+fn the_shipped_ruleset_hides_the_repair_until_its_price_is_seen() {
+    let mut sim = start();
+    let ruin = sim.tile_index("gate_ruin").expect("сломанный шлюз");
+    sim.force_tile(11, 0, ruin);
+    let scrap = sim.item_index("scrap").expect("лом");
+    let part = sim.item_index("part").expect("деталь");
+    assert!(
+        !sim.seen(scrap) && !sim.seen(part),
+        "на старте база не видела ничего"
+    );
+    assert_eq!(sim.fix_why(11, 0), "unseen");
+    assert!(!sim.fix_at(11, 0), "чинят тем, чего не видели");
+
+    sim.put_item(15, 3, scrap, 5);
+    sim.tick_n(1);
+    assert!(sim.seen(scrap));
+    assert_eq!(sim.fix_why(11, 0), "unknown", "деталь ещё незнакома");
+
+    sim.put_item(15, 3, part, 1);
+    sim.tick_n(1);
+    sim.take_item(15, 3, part);
+    assert_eq!(sim.item_total(part), 0, "деталь унесли");
+    sim.tick_n(1);
+    assert!(
+        sim.seen(part),
+        "деталь знакома и после того, как её не стало"
+    );
+    assert_eq!(sim.fix_why(11, 0), "lacks", "знакомо всё, но детали нет");
+}
+
+/// Знак ремонта гаснет над руиной, с которой ничего не сделать (§12.427):
+/// пыльный стол до первой карты в мире базы — в списке `ruins_mute`, тем же
+/// `fix_why`, каким панель прячет «Починить». Карта знакома — знак вернулся.
+#[test]
+fn the_shipped_ruleset_mutes_ruins_it_cannot_repair_yet() {
+    let mut sim = start();
+    let dusty = sim.tile_index("dusty_table").expect("пыльный стол");
+    sim.force_tile(7, 3, dusty);
+    let w = sim.world.resource::<BaseMap>().width;
+    let cell = (3 * w + 7) as u32;
+    assert!(sim.ruins_mute().contains(&cell), "стол до карты молчит");
+
+    let map = sim.item_index("map").expect("карта");
+    sim.put_item(15, 3, map, 1);
+    sim.tick_n(1);
+    assert!(sim.seen(map));
+    assert!(
+        !sim.ruins_mute().contains(&cell),
+        "карта знакома — над столом знак ремонта"
+    );
+}
+
+/// Знак молчит и при знакомстве с частью цены (§12.428): сломанный шлюз, когда
+/// лом знаком, а деталь нет, — `unknown`, ремонт невозможен, знака нет.
+/// Деталь знакома — знак вернулся, хотя её и не хватает (`lacks`).
+#[test]
+fn the_shipped_ruleset_mutes_the_gate_until_its_part_is_seen() {
+    let mut sim = start();
+    let ruin = sim.tile_index("gate_ruin").expect("сломанный шлюз");
+    sim.force_tile(11, 0, ruin);
+    let cell = 11u32; // (11, 0): верхний ряд, индекс row-major — это x
+    let scrap = sim.item_index("scrap").expect("лом");
+    let part = sim.item_index("part").expect("деталь");
+    sim.put_item(15, 3, scrap, 5);
+    sim.tick_n(1);
+    assert_eq!(sim.fix_why(11, 0), "unknown");
+    assert!(
+        sim.ruins_mute().contains(&cell),
+        "деталь незнакома — знака нет"
+    );
+
+    sim.put_item(15, 3, part, 1);
+    sim.tick_n(1);
+    sim.take_item(15, 3, part);
+    sim.tick_n(1);
+    assert_eq!(sim.fix_why(11, 0), "lacks");
+    assert!(
+        !sim.ruins_mute().contains(&cell),
+        "деталь знакома — знак есть"
     );
 }
