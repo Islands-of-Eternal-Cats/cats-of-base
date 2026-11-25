@@ -596,15 +596,17 @@ fn the_shipped_ruleset_never_locks_its_way_back() {
     // заказ без отряда, которому нужен один шлюз. Стол теперь закрыт (его
     // открывает первое выполнение), а дорога назад — шлюз за лом (снос пола
     // лом даёт всегда) и окрестности, в чьём круге пола есть деталь на стол.
-    let garage = sim.tile_index("garage").expect("шлюз");
-    let part = sim.item_index("part").expect("деталь");
+    // Шлюз за деталь (§12.417) законен, только пока он не сносится: снесённый
+    // вернул бы деталь кучей, а потраченная на другое — база без выхода, без
+    // вылазок и без способа добыть деталь. Правила — боевые, мимо `opened`
+    // (тот снимает с шлюза неснимаемость ради прежних тестов).
+    let raw = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let garage = raw.tile_index("garage").expect("шлюз");
+    let part = raw.item_index("part").expect("деталь");
+    let rules = raw.world.resource::<TileRules>();
     assert!(
-        !sim.world
-            .resource::<TileRules>()
-            .cost_of(garage)
-            .iter()
-            .any(|&(i, _)| i == part),
-        "шлюз стоит деталь: база без деталей его не отстроит",
+        !rules.cost_of(garage).iter().any(|&(i, _)| i == part) || rules.is_fixed(garage),
+        "шлюз стоит деталь и сносится: база без деталей его не отстроит",
     );
     let scavenge = sim.mission_index("scavenge").expect("«Пошарить рядом»");
     let rule = sim.world.resource::<MissionRules>().0[scavenge].clone();

@@ -247,8 +247,8 @@ fn the_shipped_ruleset_tidies_demolition_scrap() {
     assert_eq!(sim.floors_left([5, 0, 1, 2]), 0, "ход разобран целиком");
     assert_eq!(
         sim.scrap_total(),
-        before + 4,
-        "пол по лому и шлюз за «2 лома + деталь» вернулись целиком: счёт \
+        before + 5,
+        "пол по лому и шлюз за «3 лома + деталь» вернулись целиком: счёт \
          штучный, деталь в нём тоже"
     );
     assert!(sim.scrap_is_in_storage(), "и весь лом уехал на склад");

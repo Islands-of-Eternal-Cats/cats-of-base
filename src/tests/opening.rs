@@ -32,6 +32,22 @@ fn dig_to_ruin(sim: &mut Sim) {
     assert!(dug, "докопались до сломанного шлюза");
 }
 
+/// Откопать ящик под завалом (§12.415, §12.417): шахта вниз до среднего ряда,
+/// коридор влево и клетка под ящиком, потом сам завал. В ящике детали, без
+/// которых шлюз не чинится.
+fn dig_to_bin(sim: &mut Sim) {
+    assert!(sim.plan_demolish_rect(11, 4, 1, 5), "шахта вниз размечена");
+    assert!(sim.plan_demolish_rect(9, 8, 2, 1), "коридор размечен");
+    assert!(
+        sim.plan_demolish_rect(8, 8, 1, 1),
+        "подход к ящику размечен"
+    );
+    assert!(
+        sim.plan_demolish_rect(8, 7, 1, 1),
+        "завал над ящиком размечен"
+    );
+}
+
 /// Ждать, пока на клетке не встанет тайл `id`.
 fn until_tile(sim: &mut Sim, x: i32, y: i32, id: &str, ticks: usize) -> bool {
     let t = sim.tile_index(id).expect("тайл в палитре");
@@ -45,13 +61,14 @@ fn until_tile(sim: &mut Sim, x: i32, y: i32, id: &str, ticks: usize) -> bool {
 /// открыт, когда шлюз достроен.
 fn dig(sim: &mut Sim) {
     dig_to_ruin(sim);
+    dig_to_bin(sim);
     assert!(sim.fix_at(11, 0), "руина размечена на обследование");
     assert!(
         until_tile(sim, 11, 0, "gate_ruin", 3000),
         "руину обследовали"
     );
     assert!(sim.fix_at(11, 0), "шлюз размечен на ремонт");
-    let open = (0..3000).any(|_| {
+    let open = (0..6000).any(|_| {
         sim.tick_n(1);
         sim.exit_open()
     });
@@ -322,12 +339,24 @@ fn the_shipped_ruleset_examines_then_repairs_the_broken_gate() {
     let dug = sim.scrap_total();
     assert!(dug >= 3, "прокоп дал лом на шлюз: {dug}");
     assert!(sim.fix_at(11, 0), "шлюз размечен на ремонт");
-    let open = (0..3000).any(|_| {
+    // Ремонт ждёт детали (§12.417): лом есть, а деталь — только в ящике.
+    sim.tick_n(1500);
+    assert!(!sim.exit_open(), "шлюз починен без детали");
+    assert_eq!(sim.tile(11, 0), ruin, "руина стоит, пока ящик не откопан");
+    dig_to_bin(&mut sim);
+    let open = (0..6000).any(|_| {
         sim.tick_n(1);
         sim.exit_open()
     });
     assert!(open, "шлюз починен, выход открыт");
     assert_eq!(sim.tile(11, 0), garage);
+    let part = sim.item_index("part").expect("деталь");
+    sim.tick_n(300);
+    assert_eq!(
+        sim.item_at(8, 7, part),
+        2,
+        "на шлюз ушла ровно одна деталь из трёх"
+    );
     assert!(!sim.fix_at(11, 0), "целый шлюз чинить нечего");
     assert!(
         sim.world.resource::<TileRules>().is_internal(garage),
@@ -335,23 +364,20 @@ fn the_shipped_ruleset_examines_then_repairs_the_broken_gate() {
     );
 }
 
-/// Снесённый шлюз оставляет обследованную руину, а не яму и не «?» (§12.376,
-/// §12.379): выход наверх потерять нельзя, а обследованное не забывается —
-/// шлюз чинится заново сразу.
+/// Починенный шлюз не сносится вовсе (§12.417): ремонт стоит детали, и снос,
+/// вернувший её кучей, позволил бы потратить её на другое — база осталась бы
+/// без выхода и без вылазок, то есть без единого способа добыть деталь. До
+/// §12.417 снос оставлял обследованную руину (§12.376, §12.379).
 #[test]
 fn the_shipped_ruleset_never_loses_its_way_up() {
     let mut sim = start();
     dig(&mut sim);
-    let ruin = sim.tile_index("gate_ruin").expect("обследованный шлюз");
-    assert!(sim.add_blueprint(11, 0, -1), "шлюз разбирается");
-    let gone = (0..2000).any(|_| {
-        sim.tick_n(1);
-        sim.tile(11, 0) == ruin
-    });
-    assert!(gone, "снос оставил обследованный шлюз");
-    assert!(!sim.add_blueprint(11, 0, -1), "руину не снести");
-    assert_eq!(sim.hand_tag("excellent", 11, 0), "repair");
-    assert!(sim.fix_at(11, 0), "и шлюз чинится снова");
+    let garage = sim.tile_index("garage").expect("шлюз");
+    assert!(!sim.add_blueprint(11, 0, -1), "шлюз разбирается");
+    assert!(!sim.plan_demolish(11, 0), "шлюз сносится кликом");
+    sim.tick_n(500);
+    assert_eq!(sim.tile(11, 0), garage, "шлюз на месте");
+    assert!(sim.exit_open(), "выход открыт");
 }
 
 /// Приказ коту по руине (§12.379): работу берёт **этот** кот, тем же кликом,
@@ -465,17 +491,18 @@ fn the_shipped_ruleset_hides_a_small_bin_under_the_rubble() {
     });
     assert!(found, "под завалом так и не нашёлся ящик");
 
-    // Ящик найден не пустым (§12.415): две детали внутри, и назначен он на
-    // них — без назначения коты вынесли бы находку на пол (§12.402).
+    // Ящик найден не пустым (§12.415): три детали внутри (§12.417), и
+    // назначен он на них — без назначения коты вынесли бы находку на пол
+    // (§12.402).
     let part = sim.item_index("part").expect("деталь");
     sim.tick_n(1);
-    assert_eq!(sim.item_at(8, 7, part), 2, "в найденном ящике две детали");
+    assert_eq!(sim.item_at(8, 7, part), 3, "в найденном ящике три детали");
     assert_eq!(sim.bin_of(8, 7), vec![part], "ящик назначен на детали");
     assert!(sim.seen(part), "находка знакомит базу с деталью");
     sim.tick_n(300);
     assert_eq!(
         sim.item_at(8, 7, part),
-        2,
+        3,
         "детали из ящика никто не выносит"
     );
 
@@ -546,8 +573,9 @@ fn a_tile_without_a_skill_trains_building() {
     assert_eq!(sim.xp_of("excellent", science), 0, "науки за прокоп нет");
 }
 
-/// Рамка «Разобрать» по всей базе шлюз не сносит (§12.411): выход наверх
-/// снимают только кликом по одной клетке. Завал рядом рамка берёт как обычно.
+/// Рамка «Разобрать» по всей базе шлюз не сносит (§12.411). С §12.417 его не
+/// снимает и клик: починенный шлюз неснимаем. Завал рядом рамка берёт как
+/// обычно.
 #[test]
 fn a_rect_eraser_leaves_the_gate_alone() {
     let mut sim = start();
@@ -565,6 +593,6 @@ fn a_rect_eraser_leaves_the_gate_alone() {
     if let Some((x, y)) = left_rubble {
         assert_eq!(sim.planned_tile(x, y), Some(-1), "завал рамкой размечен");
     }
-    assert!(sim.plan_demolish(11, 0), "одной клеткой — сносится");
-    assert_eq!(sim.planned_tile(11, 0), Some(-1));
+    assert!(!sim.plan_demolish(11, 0), "одной клеткой — сносится");
+    assert_eq!(sim.planned_tile(11, 0), None);
 }

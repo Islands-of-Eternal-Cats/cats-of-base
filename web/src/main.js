@@ -1106,8 +1106,11 @@ overlay.addChild(placeGfx);
 // Руины (§12.376, §12.379): пульсирующая рамка на клетке руины, пока с ней
 // есть что делать, — «вот где», ещё до того, как игрок её выбрал. Узел постоянный: рамка перерисовывается только на
 // смене карты или ворот, а пульс — это `alpha` в тикере.
-const ruinGfx = new Graphics();
-overlay.addChild(ruinGfx);
+// Рамка — свой узел на клетку (§12.417): у каждой своя фаза пульса, иначе
+// два «?» на карте мигают в такт и читаются одним сигналом, а не двумя
+// местами. Пересобираются они вместе со знаками и разрушаются явно (§12.84).
+const ruinFrames = new Container();
+overlay.addChild(ruinFrames);
 // Знак над руиной (§12.379): «?» — обследовать, ключ — починить. Узлы
 // пересобираются только на смене ключа `syncRuins`, снятые разрушаются явно
 // (§12.84); контекст глифа общий на глагол — `destroy()` без аргументов.
@@ -8738,7 +8741,9 @@ function placeableArea() {
 }
 
 // Клетки руин (§12.376, §12.379): рамка и знак глагола — приглашение, а не
-// правило: что сделает клик, решает ядро (`fix_at`, `hand_tag`).
+// правило: что сделает клик, решает ядро (`fix_at`, `hand_tag`). С §12.417
+// тем же «?» помечен завал с находкой (`holds`): ремонт шлюза ждёт его
+// детали, и без метки игрок не знает, какой из завалов разбирать.
 function syncRuins() {
   // Руина говорит сама, что с ней делать (§12.379): `examine`, потом `repair`.
   // Ворот у этого нет — кнопка в панели клетки и приказ коту работают сразу.
@@ -8749,19 +8754,34 @@ function syncRuins() {
       const def = pal[mapCells[i]];
       if (def?.examine) cells.push([i, "examine"]);
       else if (def?.repair) cells.push([i, "repair"]);
+      // Завал с находкой (§12.417): `holds` у тайла — под ним что-то лежит.
+      // Знак — «?», как у необследованной руины: «здесь неизвестное, клик
+      // покажет». Что именно, не говорим — иначе находка не находка. Клик
+      // при этом разбирает (`dismantle`), а не обследует: знак тут про
+      // неизвестность, а не про глагол. Набор едет `Map`, как все наборы палитры.
+      else if (def?.holds?.size) cells.push([i, "examine"]);
     }
   }
   const key = cells.map(([i, v]) => `${i}${v[0]}`).join(",");
   if (key === ruinKey) return;
   ruinKey = key;
-  ruinGfx.clear();
+  for (const n of ruinFrames.removeChildren()) n.destroy();
   for (const n of ruinMarks.removeChildren()) n.destroy();
   const W = meta.width;
   const size = TILE * 0.62;
-  for (const [i, verb] of cells) {
+  for (const [k, [i, verb]] of cells.entries()) {
     const x = i % W;
     const y = (i - x) / W;
-    ruinGfx.rect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2);
+    const frame = new Graphics()
+      .rect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2)
+      .stroke({ color: COLORS.placeable, width: 2.5 });
+    // Фаза — по порядку рамки, а не случайная: детерминирована и между
+    // перерисовками не скачет, пока набор руин тот же. Шаг — золотой угол
+    // (137°), так что любые две соседние рамки расходятся почти в противофазу.
+    // От индекса клетки фазу не брать: у шлюза и ящика стартовой карты она
+    // совпала бы до 9°.
+    frame.phase = (k * 2.399963) % (2 * Math.PI);
+    ruinFrames.addChild(frame);
     const mark = new Graphics(ruinGlyphContext(verb));
     mark.scale.set(size / 24);
     mark.x = x * TILE + (TILE - size) / 2;
@@ -8769,7 +8789,6 @@ function syncRuins() {
     mark.tint = COLORS.placeable;
     ruinMarks.addChild(mark);
   }
-  if (cells.length) ruinGfx.stroke({ color: COLORS.placeable, width: 2.5 });
 }
 
 function drawPlaceable() {
@@ -19754,7 +19773,9 @@ app.ticker.add(stepUnits);
 // Пульс рамки над руиной (§12.376): по настенным часам — это приглашение, а не
 // мир, и на паузе ему стоять незачем.
 app.ticker.add(() => {
-  if (ruinKey) ruinGfx.alpha = 0.45 + 0.45 * Math.sin(performance.now() / 260);
+  if (!ruinKey) return;
+  const t = performance.now() / 260;
+  for (const f of ruinFrames.children) f.alpha = 0.45 + 0.45 * Math.sin(t + f.phase);
 });
 // Свет — после шага котов: пятно у кота едет за уже сдвинутым узлом.
 app.ticker.add((t) => lighting.frame(units, t.deltaMS, speed));
