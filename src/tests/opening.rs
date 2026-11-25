@@ -203,6 +203,24 @@ fn the_shipped_ruleset_repairs_the_first_squad_with_a_map() {
     assert_eq!(sim.node_cells_of(), vec![(7, 3)], "стол стал отрядом");
     assert!(sim.structure_is_open(muster), "место брифинга в палитре");
     assert!(!sim.add_blueprint(7, 3, -1), "починенный стол не сносится");
+
+    // Раскопанный и починенный стол — всё тот же объект (§12.420): разбор
+    // завала и ремонт растят клетку штампа, а не разбирают его. Иначе стол
+    // остаётся без мест вокруг, и вылазка распускается тем же тиком.
+    for cat in ["excellent", "sp2", "sp3"] {
+        assert!(sim.enlist(cat, 7, 3), "{cat} записан в отряд");
+    }
+    let scavenge = sim.mission_index("scavenge").expect("пошарить");
+    assert!(sim.launch_node(scavenge, 7, 3, -1), "заявка принята");
+    sim.tick_n(5);
+    assert!(sim.in_squad("excellent"), "отряд не распустился");
+    assert!(
+        (0..3000).any(|_| {
+            sim.tick_n(1);
+            sim.is_away("excellent")
+        }),
+        "отряд сел за стол и ушёл"
+    );
 }
 
 /// Свободные коты ходят только рядом с базой (§12.367): дальний заказ — только

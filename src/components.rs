@@ -1821,9 +1821,21 @@ pub(crate) struct StructureRule {
     pub(crate) tech: String,
     /// Только стартовая застройка, в палитру не идёт (§12.418).
     pub(crate) internal: bool,
+    /// Во что клетки штампа вырастают своей жизнью (§12.420): пары
+    /// `(тайл сетки, во что он вырос)` — раскопка завала и ремонт руины
+    /// (`TileRules::grows_into`). Считается один раз при сборке правил: объект
+    /// спрашивают десятки систем, и тянуть в каждую палитру тайлов незачем.
+    pub(crate) grows: Vec<(i16, i16)>,
 }
 
 impl StructureRule {
+    /// Держит ли клетка с тайлом `now` клетку сетки `tile` (§12.420): тот же
+    /// тайл, либо выросший из него раскопкой и ремонтом. Одно выражение на
+    /// «объект достроен» (`Owners::of`) и «объект ещё стоит» (`prune_structures`).
+    pub(crate) fn holds(&self, tile: i16, now: i16) -> bool {
+        tile == now || self.grows.contains(&(tile, now))
+    }
+
     /// Ширина штампа без поворота.
     pub(crate) fn width(&self) -> i32 {
         self.cells.first().map_or(0, |r| r.len() as i32)
@@ -2246,6 +2258,38 @@ impl TileRules {
     /// Что встаёт на эту руину ремонтом (§12.379).
     pub(crate) fn repair_of(&self, tile: i16) -> Option<i16> {
         self.of(tile).and_then(|r| r.repair)
+    }
+
+    /// Вырастает ли клетка `from` в `to` своей жизнью, а не сносом (§12.420):
+    /// разбор завала открывает то, что под ним (`on` у внутреннего тайла —
+    /// игрок такой не ставит, значит и снос его — раскопка, а не разборка),
+    /// обследование и ремонт ставят следующий тайл руины. `from == to` — тоже да.
+    ///
+    /// Спрашивает `prune_structures`: стартовый штамп лежит под завалом
+    /// (§12.418), и сверка «клетка та же, что у штампа» иначе снимала объект
+    /// первым же разбором — стол оставался без мест, и отряд за ним не
+    /// собирался. Цикл (починенный стол стоит `on` руины) обрывает обход по
+    /// виденным, длина — страховка.
+    pub(crate) fn grows_into(&self, from: i16, to: i16) -> bool {
+        let mut seen = vec![from];
+        let mut i = 0;
+        while i < seen.len() && seen.len() <= self.0.len() {
+            let t = seen[i];
+            if t == to {
+                return true;
+            }
+            let uncover = self.of(t).filter(|r| r.internal).and_then(|r| r.on);
+            for next in [uncover, self.examine_of(t), self.repair_of(t)]
+                .into_iter()
+                .flatten()
+            {
+                if !seen.contains(&next) {
+                    seen.push(next);
+                }
+            }
+            i += 1;
+        }
+        false
     }
 
     pub(crate) fn is_lab(&self, tile: i16) -> bool {

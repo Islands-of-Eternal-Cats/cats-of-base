@@ -782,8 +782,10 @@ pub(crate) fn prune_structures(
             commands.entity(e).despawn();
             continue;
         };
+        // Раскопанная и починенная клетка — всё та же клетка штампа (§12.420):
+        // пыльный стол под завалом, а потом стол брифинга на его месте.
         let gone = rule.stamp(s.anchor, s.rot).into_iter().any(|((x, y), t)| {
-            map.tile_at(x, y) != t && !blueprints.iter().any(|b| (b.x, b.y) == (x, y))
+            !rule.holds(t, map.tile_at(x, y)) && !blueprints.iter().any(|b| (b.x, b.y) == (x, y))
         });
         if gone {
             commands.entity(e).despawn();

@@ -637,6 +637,7 @@ impl Sim {
             slots: Vec::new(),
             tech: String::new(),
             internal: false,
+            grows: Vec::new(),
         });
         rules.0.len() - 1
     }

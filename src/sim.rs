@@ -1950,9 +1950,39 @@ impl Sim {
                         .collect(),
                     tech: d.tech.clone(),
                     internal: d.internal,
+                    grows: Vec::new(),
                 })
                 .collect(),
         ));
+        // Рост клеток штампов (§12.420): раскопка и ремонт — не разборка.
+        {
+            let tiles = world.resource::<TileRules>();
+            let n = tiles.0.len() as i16;
+            let grows: Vec<Vec<(i16, i16)>> = world
+                .resource::<StructureRules>()
+                .0
+                .iter()
+                .map(|r| {
+                    let mut out = Vec::new();
+                    for t in r.cells.iter().flatten().flatten().copied() {
+                        for to in (0..n).filter(|&to| to != t && tiles.grows_into(t, to)) {
+                            if !out.contains(&(t, to)) {
+                                out.push((t, to));
+                            }
+                        }
+                    }
+                    out
+                })
+                .collect();
+            for (r, g) in world
+                .resource_mut::<StructureRules>()
+                .0
+                .iter_mut()
+                .zip(grows)
+            {
+                r.grows = g;
+            }
+        }
         // Стартовые объекты-штампы (§12.279) — после правил штампов, потому
         // что сетку берут у них, и поверх прямоугольников застройки. Ставятся
         // готовыми, как и вся стартовая застройка: это уже стоящая база.
@@ -3435,6 +3465,18 @@ impl Sim {
             let Some((e, whole)) = self.structure_at(cx, cy) else {
                 continue;
             };
+            // Стартовый штамп (`internal`, §12.418) целиком не сносится: его
+            // клетки лежат под завалом, и ластик снимает с них по слою, как с
+            // любого завала (§12.420). Объект при этом живёт —
+            // `prune_structures` считает раскопку и ремонт ростом клетки.
+            let internal = self
+                .world
+                .get::<Structure>(e)
+                .and_then(|s| self.world.resource::<StructureRules>().0.get(s.def))
+                .is_some_and(|r| r.internal);
+            if internal {
+                continue;
+            }
             self.world.despawn(e);
             for (xy, tile) in whole {
                 changed |= self.cancel_blueprint(xy.0, xy.1);
