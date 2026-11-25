@@ -1897,6 +1897,11 @@ impl Sim {
                         .filter(|&prev| prev < def)
                         .map(|prev| prev as i16),
                     reached: tile_index_of(&t.reached).map(|t| t as i16),
+                    holds: t
+                        .holds
+                        .iter()
+                        .filter_map(|(id, &n)| item_index(id).map(|i| (i, n)))
+                        .collect(),
                     examine: tile_index_of(&t.examine).map(|t| t as i16),
                     repair: tile_index_of(&t.repair).map(|t| t as i16),
                     skill: skill_index(&t.skill),

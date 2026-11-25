@@ -690,6 +690,7 @@ pub(crate) fn work_jobs(
     mut map: ResMut<BaseMap>,
     rules: Res<TileRules>,
     skill_rules: Res<SkillRules>,
+    mut bins: ResMut<Bins>,
     mut commands: Commands,
     cats: Query<(
         Entity,
@@ -722,15 +723,27 @@ pub(crate) fn work_jobs(
                 // Снос возвращает всю цену снесённого тайла, по каждому типу,
                 // и снимает ровно один слой (§12.237): постройку до пола, пол
                 // до пустоты.
-                let (refund, to): (Vec<(usize, i32)>, i16) = if bp.tile < 0 {
-                    let was = map.tile_at(bp.x, bp.y);
-                    (rules.cost_of(was).to_vec(), rules.stripped(was))
-                } else {
-                    (Vec::new(), bp.tile)
-                };
+                let (refund, found, to): (Vec<(usize, i32)>, Vec<(usize, i32)>, i16) =
+                    if bp.tile < 0 {
+                        let was = map.tile_at(bp.x, bp.y);
+                        (
+                            rules.cost_of(was).to_vec(),
+                            rules.holds_of(was).to_vec(),
+                            rules.stripped(was),
+                        )
+                    } else {
+                        (Vec::new(), Vec::new(), bp.tile)
+                    };
                 map.set(bp.x, bp.y, to);
                 for (item, count) in refund {
                     spill(&mut commands, &mut stacks, (pos.x, pos.y), item, count);
+                }
+                // Находка под завалом (§12.415): содержимое ложится в саму
+                // клетку, а открывшийся ящик сразу назначен на него — иначе
+                // ящик без назначения выгнал бы находку на пол (§12.402).
+                for (item, count) in found {
+                    spill(&mut commands, &mut stacks, (bp.x, bp.y), item, count);
+                    bins.set(bp.x, bp.y, item, true);
                 }
                 commands.entity(assign.0).despawn();
                 commands.entity(cat_e).remove::<Assignment>();

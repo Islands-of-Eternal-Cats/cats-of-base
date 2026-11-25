@@ -1988,6 +1988,8 @@ pub(crate) struct TileRule {
     /// Поверх какого тайла ставится этот (§12.238); `None` — на основание.
     /// Индекс строго меньше собственного, как у `after`.
     pub(crate) on: Option<i16>,
+    /// Что снос кладёт в открывшийся ящик и на что его назначает (§12.415).
+    pub(crate) holds: Vec<(usize, i32)>,
     /// Руина (§12.376): ластику не даётся никогда. Сломанный шлюз — основа
     /// шлюза, и стёртый, он оставил бы базу без выхода, вернуть который нечем.
     pub(crate) fixed: bool,
@@ -2017,6 +2019,11 @@ impl TileRules {
     /// Из чего строится тайл; пусто — бесплатно.
     pub(crate) fn cost_of(&self, tile: i16) -> &[(usize, i32)] {
         self.of(tile).map_or(&[], |r| &r.cost)
+    }
+
+    /// Что лежит под тайлом (§12.415); пусто — ничего.
+    pub(crate) fn holds_of(&self, tile: i16) -> &[(usize, i32)] {
+        self.of(tile).map_or(&[], |r| &r.holds)
     }
 
     pub(crate) fn capacity_of(&self, tile: i16) -> i32 {

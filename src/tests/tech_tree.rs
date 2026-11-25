@@ -80,6 +80,11 @@ fn item_stages(rs: &Ruleset, depth: &BTreeMap<&str, u32>) -> BTreeMap<String, (u
     for s in &rs.stock {
         note(&s.item, 0); // стартовый склад — самое раннее, что бывает
     }
+    for t in &rs.tiles {
+        for id in t.holds.keys() {
+            note(id, 0); // находка под стартовым завалом (§12.415)
+        }
+    }
     for m in &rs.missions {
         // Обычная вылазка технологиями не закрыта (§12.43); вылазка-урок
         // приносит добычу только после своей темы (§12.260).
@@ -304,6 +309,10 @@ fn the_shipped_ruleset_names_only_items_it_has() {
     check(
         "стартовый склад",
         rs.stock.iter().map(|s| &s.item).collect(),
+    );
+    check(
+        "находка под завалом",
+        rs.tiles.iter().flat_map(|t| t.holds.keys()).collect(),
     );
     check(
         "снаряжение стартовых котов",
