@@ -3717,6 +3717,49 @@ body.rail-wide #screenbar .door-label {
   fill: rgba(130, 215, 225, 0.28);
   stroke: rgba(130, 215, 225, 0.8);
 }
+/* База до осмотра входа (§12.422) — силуэт «?», как неразведанный участок
+   (§12.320), но кликается: осмотр и есть её заказ. Проявляется вспышкой. */
+.map-home.fog .map-fog-mark {
+  display: inline;
+}
+.map-home.fog .map-glyph,
+.map-home.fog .map-name,
+.map-home.fog .map-plate {
+  display: none;
+}
+.map-home.fog .map-hex {
+  stroke: var(--muted);
+  stroke-dasharray: 3 4;
+}
+.map-home.fog .map-home-halo {
+  fill: none;
+  stroke-dasharray: 3 4;
+}
+.map-home-flash {
+  fill: none;
+  stroke: #82d7e1;
+  stroke-width: 2.5;
+  opacity: 0;
+  pointer-events: none;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.map-home.reveal .map-home-flash {
+  animation: map-flash 1.4s ease-out 2;
+}
+.map-home.reveal .map-glyph,
+.map-home.reveal .map-name,
+.map-home.reveal .map-plate {
+  animation: home-reveal 1.2s ease-out;
+}
+@keyframes home-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
 /* Участок-дорога (§12.292): караван ведут вдоль неё, и длина её — часть срока.
    Шире и плотнее ребра соседства: это путь, а не «куда может пойти очаг». */
 .map-road {
@@ -4331,6 +4374,9 @@ body.rail-wide #screenbar .door-label {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .map-home.reveal * {
+    animation: none;
+  }
   .map-trip-mark {
     transition: none;
   }

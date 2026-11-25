@@ -7615,6 +7615,20 @@ impl Sim {
         self.note_news();
     }
 
+    /// База разведана (§12.422): выполнен заказ `outskirts.raided`. Пока нет,
+    /// вид рисует её на карте штаба силуэтом «?» — первая вылазка («Осмотреть
+    /// вход снаружи») иначе не меняла на карте ничего. Монотонно: журнал `Raids`.
+    pub(crate) fn home_met(&self) -> bool {
+        let id = &self.outskirts.raided;
+        if id.is_empty() {
+            return true;
+        }
+        self.missions
+            .iter()
+            .position(|m| &m.id == id)
+            .is_none_or(|def| self.world.resource::<Raids>().0.contains(&def))
+    }
+
     /// Выход открыт (§12.367): хоть один кот на базе может дойти до шлюза —
     /// тем же `nearest_exit`, каким заявка без стола выбирает дверь.
     pub(crate) fn exit_open(&mut self) -> bool {
@@ -8888,6 +8902,7 @@ impl Sim {
         };
         let exits = self.exit_cells_of().len() as i32;
         let exit_open = self.exit_open();
+        let home_met = self.home_met();
         // Отряды поимённо: с §12.152 у каждого гаража свой состав, и панель
         // обязана называть его словом — иначе кнопка вылазки берёт отряд ниоткуда.
         let nodes: Vec<NodeSnap> = {
@@ -9281,6 +9296,7 @@ impl Sim {
             musters,
             exits,
             exit_open,
+            home_met,
             nodes,
             nearby,
             free: free_ids,

@@ -1494,6 +1494,8 @@ worker.onmessage = (e) => {
     // всё уже закрытое «только что закрытым» (см. `goalsDoneSeen`).
     goalsDoneSeen = null;
     exitSeen = null;
+    homeMetSeen = null;
+    homeRevealDue = false;
     // Портал (§12.372): играет первый снимок свежего мира, не загрузки.
     portalArmed = true;
     portal = null;
@@ -7600,6 +7602,12 @@ let goalsDoneSeen = null;
 // штаб открывается сам: прокоп и был дорогой к нему. Монотонно — ушедший
 // всем составом отряд дверь не прячет.
 let exitSeen = null;
+// База на карте штаба (§12.422): `home_met` из ядра, как видел его вид.
+// Переход `false → true` — осмотр входа выполнен, и значок базы проявляется
+// из «?» вспышкой (`homeRevealDue`) — сразу, если штаб открыт, иначе при
+// следующем входе в него. Загруженная партия базовой линией не вспыхивает.
+let homeMetSeen = null;
+let homeRevealDue = false;
 
 goalsToggleEl.addEventListener("click", () => {
   goalsOpen = !goalsOpen;
@@ -12229,6 +12237,18 @@ function syncRaidMap() {
   const near = nearAll.find(
     (n) => (meta.missions?.[n.def]?.yields ?? []).length > 0,
   );
+  // Туман над базой (§12.422): до выполненного `outskirts.raided` значок
+  // базы — «?». Кликается по-прежнему: за ним и стоит сам осмотр.
+  if (raidUi.home) {
+    const fog = lastSnap?.home_met === false;
+    raidUi.home.classList.toggle("fog", fog);
+    if (!fog && homeRevealDue) {
+      homeRevealDue = false;
+      raidUi.home.classList.remove("reveal");
+      void raidUi.home.getBoundingClientRect();
+      raidUi.home.classList.add("reveal");
+    }
+  }
   if (raidUi.home && near) {
     const full = (meta.missions?.[near.def]?.yields ?? []).length;
     raidUi.home.style.setProperty(
@@ -12243,7 +12263,9 @@ function syncRaidMap() {
       raidUi.note,
       '<div class="map-h">База</div>' +
         `<div>${
-          !near
+          lastSnap?.home_met === false
+            ? "вход снаружи ещё не осмотрен"
+            : !near
             ? "окрестности ещё не осмотрены"
             : near.left > 0
               ? `окрестности: ещё ${plural(near.left, "заметный выход", "заметных выхода", "заметных выходов")}`
@@ -13260,6 +13282,12 @@ function syncDoors(snap) {
     // («нет выхода») звала бы туда, куда игрок и так копает.
     const exitNow =
       !!lastSnap?.exit_open || (lastSnap?.missions ?? []).length > 0;
+    const homeNow = lastSnap?.home_met !== false;
+    if (homeMetSeen === null) homeMetSeen = homeNow;
+    else if (homeNow && !homeMetSeen) {
+      homeMetSeen = true;
+      homeRevealDue = true;
+    }
     if (exitSeen === null) exitSeen = exitNow;
     else if (exitNow && !exitSeen) {
       exitSeen = true;
@@ -17961,6 +17989,9 @@ function buildSiteGraph(holder) {
     `<path class="map-hex" d="${siteHex(SITE_R * 1.4)}"/>` +
     siteGlyph("home", SITE_R * 1.3) +
     siteName("База", SITE_R * 1.75 + 16) +
+    // До осмотра входа база — силуэт «?» (§12.422), как неразведанный участок.
+    `<text class="map-fog-mark" y="6">?</text>` +
+    `<path class="map-home-flash" d="${siteHex(SITE_R * 1.4)}"/>` +
     `</g>` +
     all
       .map(

@@ -131,10 +131,12 @@ fn the_shipped_ruleset_opens_one_verb_at_a_time() {
     assert!(!sim.raid_gates(gatehouse).unlocked);
     assert!(!sim.raid_gates(scavenge).unlocked);
     assert!(!sim.structure_is_open(muster), "стола нет");
+    assert!(!sim.home_met(), "база на карте — «?» до осмотра (§12.422)");
 
     dig(&mut sim);
     assert!(sim.scavenge(inspect, vec!["excellent".into()], -1));
     assert!(done(&mut sim, inspect, 2000), "вход осмотрен");
+    assert!(sim.home_met(), "осмотр ставит базу на карту (§12.422)");
     assert!(
         sim.raid_gates(gatehouse).unlocked,
         "открылась местность вокруг шлюза"
@@ -202,6 +204,11 @@ fn the_shipped_ruleset_repairs_the_first_squad_with_a_map() {
     assert_eq!(sim.item_total(map), 0, "карта ушла в стол");
     assert_eq!(sim.node_cells_of(), vec![(7, 3)], "стол стал отрядом");
     assert!(sim.structure_is_open(muster), "место брифинга в палитре");
+    let junkyard = sim.mission_index("junkyard").expect("свалка");
+    assert!(
+        sim.raid_gates(junkyard).unlocked,
+        "починенный стол открывает Свалку (§12.421)"
+    );
     assert!(!sim.add_blueprint(7, 3, -1), "починенный стол не сносится");
 
     // Раскопанный и починенный стол — всё тот же объект (§12.420): разбор

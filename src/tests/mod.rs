@@ -2008,6 +2008,12 @@ impl Sim {
     /// Возвращает якорь стола.
     fn add_squad(&mut self) -> (i32, i32) {
         let def = self.structure_index("muster").expect("место брифинга");
+        // Палитровый стол открывается только починенным (§12.418), и Свалку
+        // с §12.421 открывает тоже он: в живой партии без него второго стола
+        // не бывает, — отмечаем его в журнале застройки.
+        if let Some(fixed) = self.tile_index("briefing_table") {
+            self.world.resource_mut::<BaseMap>().note_erected(fixed);
+        }
         self.force_structure(def, 3, 10);
         let node = self.node_cells_of()[0];
         for id in ["excellent", "sp2", "sp3"] {
