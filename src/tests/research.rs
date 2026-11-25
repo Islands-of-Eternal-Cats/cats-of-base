@@ -810,12 +810,16 @@ fn the_shipped_ruleset_opens_the_radio_by_its_operator() {
 
 /// **Боевой рулсет: цепочка палитры идёт вперёд.** Предшественник ниже по
 /// списку не разрешится вовсе — тайл просто откроется сразу, и замысел цепочки
-/// развалится молча (§12.210).
+/// развалится молча (§12.210). Исключение — предшественник вне палитры
+/// (§12.418): починенный пыльный стол чинят, а не строят, и стоит он в конце.
 #[test]
 fn the_shipped_ruleset_chains_its_palette_forward() {
     let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     for (def, prev) in sim.tile_order().iter().enumerate() {
         let Some(prev) = *prev else { continue };
+        if sim.world.resource::<TileRules>().is_internal(prev) {
+            continue;
+        }
         assert!(
             (prev as usize) < def,
             "тайл {def} ждёт тайл {prev}, стоящий ниже",

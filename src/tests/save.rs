@@ -347,6 +347,23 @@ fn bookmarks_survive_a_save() {
     assert!(loaded.is_favorite(item), "и избранное тоже");
 }
 
+/// Скрытая строка «Ресурсов» — третья закладка, и загрузку она переживает
+/// так же (§12.418). Снятие возвращает строку, чужой индекс отклоняется.
+#[test]
+fn hidden_rows_survive_a_save() {
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
+    let item = live.item_index("ration").expect("паёк");
+    assert!(live.set_hidden(item, true));
+    assert!(!live.set_hidden(usize::MAX, true), "предмета нет");
+
+    let json = live.save().expect("снимок");
+    let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
+    assert!(loaded.is_hidden(item), "загруженная партия забыла скрытое");
+
+    assert!(loaded.set_hidden(item, false));
+    assert!(!loaded.is_hidden(item), "строка не вернулась");
+}
+
 /// Ссылки на сущности переживают загрузку: claim остаётся за тем же котом.
 ///
 /// В снимке `Entity` не сохранишь — это индекс с поколением, у нового мира они

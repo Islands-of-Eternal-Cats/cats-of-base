@@ -47,6 +47,8 @@ const MATERIAL = {
   broken_gate: "plate",
   gate_ruin: "plate",
   muster_table: "plate",
+  briefing_table: "plate",
+  dusty_table: "plate",
   shop: "rubber",
   post: "rubber",
   relay: "rubber",
@@ -582,6 +584,8 @@ export function prop(g, id, x, y, tint, n, d) {
   };
   switch (id) {
     case "rubble_bin": // завал над найденным ящиком (§12.404)
+    case "rubble_table": // завал над пыльным столом (§12.418)
+    case "rubble_gate": // завал над сломанным шлюзом (§12.418)
     case "rubble": {
       // Завал (§12.367): груда камней коробками разной высоты — ниже стены,
       // выше мебели; раскладка своя у каждой клетки (`n`).
@@ -795,6 +799,23 @@ export function prop(g, id, x, y, tint, n, d) {
       if (dy < 0) box(0.3, 0.7, 0.4, 0.08, 0.5, back);
       break;
     }
+    // Пыльный стол (§12.418): та же столешница без карты, в пыли.
+    case "dusty_table": {
+      const cx = px + T / 2;
+      const cy = py + T / 2;
+      const r = T * 0.44;
+      const h = T * 0.3;
+      g.ellipse(cx + 2, cy + 3, r, r * 0.86).fill({ color: 0, alpha: 0.35 });
+      g.rect(cx - T * 0.06, cy - h, T * 0.12, h).fill(0x3e3020);
+      g.ellipse(cx, cy - h + 3, r, r * 0.86).fill(0x4a3c2a);
+      g.ellipse(cx, cy - h, r, r * 0.86).fill(0x6e5a40);
+      g.ellipse(cx, cy - h, r * 0.78, r * 0.78 * 0.86).fill({
+        color: 0xb8b0a0,
+        alpha: 0.28,
+      });
+      break;
+    }
+    case "briefing_table":
     case "muster_table": {
       const cx = px + T / 2;
       const cy = py + T / 2;

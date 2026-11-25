@@ -258,9 +258,14 @@ pub(crate) fn surface_ok(rules: &TileRules, at: (i32, i32), tile: i16) -> bool {
 /// снеся сам объект: тогда слотов нет, и ластик по той же рамке снимает всё.
 /// Одно исключение — вернуть пол в яму под слотом: иначе партия, где пол
 /// стёрли до §12.360, держала бы сбор вечно и чинить было бы нечем.
+/// Второе — снять со слота слой, под которым остаётся пол (§12.418): пыльное
+/// место брифинга стоит в стартовой застройке посреди завала, и восемь его
+/// стульев откапывают. Ямы такой снос не оставляет, значит места не отнимает.
 pub(crate) fn may_build(plan: &Plan, rules: &TileRules, at: (i32, i32), tile: i16) -> bool {
-    let refloor = plan.built_at(at.0, at.1) < 0 && tile == rules.base().unwrap_or(0);
-    (refloor || plan.slot_at(at.0, at.1).is_none())
+    let built = plan.built_at(at.0, at.1);
+    let refloor = built < 0 && tile == rules.base().unwrap_or(0);
+    let unclutter = tile < 0 && built >= 0 && rules.stripped(built) >= 0;
+    (refloor || unclutter || plan.slot_at(at.0, at.1).is_none())
         && rules.rests_on(plan.built_at(at.0, at.1), tile)
         && access_ok(plan, rules, at, tile)
         && zoning_ok(plan, rules, at, tile)

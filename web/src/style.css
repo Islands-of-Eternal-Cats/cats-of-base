@@ -2737,6 +2737,43 @@ body.rail-wide #screenbar .door-label {
   color: var(--accent);
   border-color: var(--accent);
 }
+/* ★ и глазик — одна клетка сетки (§12.418): колонки строк не сдвигаются. */
+.ware-marks {
+  display: flex;
+  gap: 4px;
+}
+.tool.ware-eye {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  color: var(--muted);
+}
+.tool.ware-eye .eye-slash {
+  display: none;
+}
+/* Скрытая строка: глаз перечёркнут — «сейчас не на виду». */
+.tool.ware-eye.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.tool.ware-eye.on .eye-slash {
+  display: inline;
+}
+/* Заголовок группы «Скрытые»: подпись-кнопка, а не строка таблицы. */
+.tool.ware-hidden-head {
+  align-self: flex-start;
+  margin-top: 8px;
+  padding: 3px 8px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.tool.ware-hidden-head:hover {
+  color: var(--fg, inherit);
+}
 .ware-name {
   display: flex;
   align-items: center;

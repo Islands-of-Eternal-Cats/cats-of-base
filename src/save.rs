@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 55;
+pub(crate) const FORMAT: u32 = 56;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -160,6 +160,8 @@ pub(crate) const SAVED: &[&str] = &[
     // уже пробовали с «Убирать сам», и зеркало врало (§12.96).
     "Favorites",
     "Tickers",
+    // Скрытые строки «Ресурсов» (§12.418) — та же закладка игрока.
+    "Hidden",
     "Fame",
     "Money",
     // Отметки по условиям связки (§12.159): с какого тика держится каждое.
@@ -354,6 +356,9 @@ pub(crate) struct StateDto {
     /// Избранные предметы: их строки стоят наверху окна «Склад» (§12.100).
     #[serde(default)]
     pub(crate) favorites: Vec<usize>,
+    /// Скрытые строки окна «Ресурсы» (§12.418).
+    #[serde(default)]
+    pub(crate) hidden: Vec<usize>,
     /// Тикеры: предмет и сторона, с которой по нему торгуют в один клик
     /// (§12.100). Пара, а не тройка: порога у тикера нет — он не правило.
     #[serde(default)]
@@ -1009,6 +1014,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                 })
                 .collect(),
             favorites: world.resource::<Favorites>().0.clone(),
+            hidden: world.resource::<Hidden>().0.clone(),
             tickers: world.resource::<Tickers>().0.clone(),
             fame: world.resource::<Fame>().0,
             money: world.resource::<Money>().0,
@@ -1197,6 +1203,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
         })
         .collect();
     world.resource_mut::<Favorites>().0 = s.favorites.clone();
+    world.resource_mut::<Hidden>().0 = s.hidden.clone();
     world.resource_mut::<Tickers>().0 = s.tickers.clone();
     world.resource_mut::<Fame>().0 = s.fame;
     world.resource_mut::<Money>().0 = s.money;

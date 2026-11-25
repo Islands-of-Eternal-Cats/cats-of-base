@@ -165,6 +165,7 @@ fn sim_from(rows: &[&str]) -> Sim {
     // закрепил. Заводят их `set_favorite` и `set_ticker`.
     world.insert_resource(Favorites::default());
     world.insert_resource(Tickers::default());
+    world.insert_resource(Hidden::default());
     // Шкала «что база видела» (§12.131) заводится всегда и пустой, как лента
     // новостей: это не контент, а память мира о случившемся, и наблюдатель
     // пишет в неё независимо от того, смотрит ли на неё хоть один экран.
@@ -253,6 +254,7 @@ fn sim_from(rows: &[&str]) -> Sim {
             // оно есть. Включает `set_on`.
             on: String::new(),
             holds: BTreeMap::new(),
+            veiled: false,
             // Контейнера у схемы нет: ноль — без предела (§12.90), сделки в
             // синтетических мирах любого размера. Включает `set_lot`.
             lot: 0,
@@ -634,6 +636,7 @@ impl Sim {
             cells,
             slots: Vec::new(),
             tech: String::new(),
+            internal: false,
         });
         rules.0.len() - 1
     }
@@ -862,6 +865,7 @@ impl Sim {
                 // Избранного в синтетическом мире нет, как нет тикеров и
                 // правил сбыта (§12.112): закладку ставит рулсет или игрок.
                 favorite: false,
+                keepsake: false,
                 // Приборов сбора и личных вещей тоже нет (§12.256): их
                 // включает `set_item_traits`.
                 collects: 0,
@@ -3225,6 +3229,11 @@ impl Sim {
     /// (§12.100). Стороны у избранного нет — это порядок, а не торговля.
     fn is_favorite(&self, item: usize) -> bool {
         self.world.resource::<Favorites>().has(item)
+    }
+
+    /// Скрыта ли строка предмета в окне «Ресурсы» (§12.418).
+    fn is_hidden(&self, item: usize) -> bool {
+        self.world.resource::<Hidden>().has(item)
     }
 
     /// Сторона тикера по предмету; `None` — тикера нет (§12.100). Спрашивают

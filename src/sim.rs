@@ -1887,8 +1887,13 @@ impl Sim {
                         .iter()
                         .filter_map(|(id, &lvl)| skill_index(id).map(|s| (s, lvl)))
                         .collect(),
+                    // Предшественник выше по палитре (§12.209) — или вне её
+                    // (§12.418): руину чинят, а не строят, и у починенного
+                    // тайла (`internal`) своих ворот в очереди палитры нет, так
+                    // что цикла через него не сложить. Индексы при этом растут
+                    // только в конец, и выше починенный стол не встать.
                     after: tile_index_of(&t.after)
-                        .filter(|&prev| prev < def)
+                        .filter(|&prev| prev < def || rs.tiles[prev].internal)
                         .map(|prev| prev as i16),
                     raided: (!t.raided.is_empty())
                         .then(|| rs.missions.iter().position(|m| m.id == t.raided))
@@ -1944,6 +1949,7 @@ impl Sim {
                         })
                         .collect(),
                     tech: d.tech.clone(),
+                    internal: d.internal,
                 })
                 .collect(),
         ));
@@ -2426,6 +2432,7 @@ impl Sim {
                 .collect(),
         ));
         world.insert_resource(Tickers::default());
+        world.insert_resource(Hidden::default());
         // Что база уже видела своими глазами (§12.131). Пустой заводится, а
         // наполняется ниже — одним прогоном наблюдателя по собранному миру:
         // стартовый склад база видела заведомо, и ждать первого тика тут
@@ -3211,6 +3218,11 @@ impl Sim {
         let Some(rule) = self.world.resource::<StructureRules>().0.get(def).cloned() else {
             return false;
         };
+        // Штамп стартовой застройки (§12.418) не строится вовсе: пыльный стол
+        // чинят картой, а новые столы ставят обычным местом брифинга.
+        if rule.internal {
+            return false;
+        }
         if !rule.tech.is_empty() && !self.world.resource::<Techs>().knows(&rule.tech) {
             return false;
         }
@@ -3394,6 +3406,10 @@ impl Sim {
         // Выход наверх (`surface`: шлюз и его руины) рамка не трогает вовсе
         // (§12.411): без него нет ни вылазок, ни новых котов, и сносят его
         // только кликом по одной клетке — осознанно, а не заодно с завалом.
+        // Завал над шлюзом (§12.418) — не выход, а завал: он `surface` лишь
+        // потому, что лежит в верхнем ряду, и рамка берёт его, как любой
+        // другой. Отличает его то же, что любой завал: вне палитры и не
+        // `fixed` (шлюз и руины `fixed`).
         let single = w.abs() <= 1 && h.abs() <= 1;
         let cells: Vec<(i32, i32)> = {
             let (map, rules) = (
@@ -3402,7 +3418,10 @@ impl Sim {
             );
             rect_cells(x, y, w, h)
                 .filter(|c| !done.contains(c))
-                .filter(|&(cx, cy)| single || !rules.is_surface(map.tile_at(cx, cy)))
+                .filter(|&(cx, cy)| {
+                    let t = map.tile_at(cx, cy);
+                    single || !rules.is_surface(t) || (rules.is_internal(t) && !rules.is_fixed(t))
+                })
                 .collect()
         };
         let mut cancelled = false;
@@ -3427,10 +3446,12 @@ impl Sim {
             // сколько бы под ним ни лежало (§12.408): завал над найденным ящиком
             // (§12.404) на уровень выше голого завала, и рамка по всей базе
             // брала только его. Только завал (§12.411): шлюз тоже `internal`,
-            // но он постройка, а не обломки.
+            // но он постройка, а не обломки. Неснимаемое (`fixed`: пыльный и
+            // починенный стол, §12.418) завалом не считается — иначе рамка
+            // целилась бы в него и не снимала больше ничего.
             let level = |&(cx, cy): &(i32, i32)| {
                 let t = map.tile_at(cx, cy);
-                if t >= 0 && rules.is_internal(t) && rules.is_solid(t) {
+                if t >= 0 && rules.is_internal(t) && rules.is_solid(t) && !rules.is_fixed(t) {
                     usize::MAX
                 } else {
                     rules.level(t)
@@ -5991,6 +6012,19 @@ impl Sim {
     pub fn set_favorite(&mut self, item: usize, on: bool) -> bool {
         note(&mut self.world, format!("favorite {item} {on}"));
         self.world.resource_mut::<Favorites>().set(item, on);
+        true
+    }
+
+    /// Скрыть строку предмета в окне «Ресурсы» или вернуть её (§12.418).
+    ///
+    /// Ворот нет по доводу избранного: это порядок и видимость строк, а не
+    /// механика. Правила на скрытом предмете продолжают работать.
+    pub fn set_hidden(&mut self, item: usize, on: bool) -> bool {
+        note(&mut self.world, format!("hide {item} {on}"));
+        if item >= self.world.resource::<Seen>().0.len() {
+            return false;
+        }
+        self.world.resource_mut::<Hidden>().set(item, on);
         true
     }
 
@@ -8718,6 +8752,7 @@ impl Sim {
         // отсортированы по предмету, — потому что от него зависит порядок строк
         // на экране, а обход ECS недетерминирован (§11).
         let favorites: Vec<usize> = self.world.resource::<Favorites>().0.clone();
+        let hidden: Vec<usize> = self.world.resource::<Hidden>().0.clone();
         let tickers: Vec<TickerSnap> = self
             .world
             .resource::<Tickers>()
@@ -9168,6 +9203,7 @@ impl Sim {
             prices,
             sales,
             favorites,
+            hidden,
             tickers,
             posts,
             post_free,

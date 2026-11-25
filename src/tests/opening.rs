@@ -57,15 +57,15 @@ fn until_tile(sim: &mut Sim, x: i32, y: i32, id: &str, ticks: usize) -> bool {
     })
 }
 
-/// Докопаться, обследовать руину и починить шлюз (§12.376, §12.379): выход
-/// открыт, когда шлюз достроен.
+/// Докопаться, разобрать завал над руиной и починить шлюз (§12.376, §12.418):
+/// выход открыт, когда шлюз достроен.
 fn dig(sim: &mut Sim) {
     dig_to_ruin(sim);
     dig_to_bin(sim);
-    assert!(sim.fix_at(11, 0), "руина размечена на обследование");
+    assert!(sim.plan_demolish(11, 0), "завал над шлюзом размечен");
     assert!(
         until_tile(sim, 11, 0, "gate_ruin", 3000),
-        "руину обследовали"
+        "под завалом нашли сломанный шлюз"
     );
     assert!(sim.fix_at(11, 0), "шлюз размечен на ремонт");
     let open = (0..6000).any(|_| {
@@ -107,7 +107,8 @@ fn the_shipped_ruleset_digs_scrap_out_of_the_rubble() {
 }
 
 /// Сначала открыт только «Осмотреть вход»; «Исследовать …» — после него,
-/// «Пошарить» и стол — после «Исследовать местность вокруг шлюза» (§12.377).
+/// «Пошарить» — после «Исследовать местность вокруг шлюза» (§12.377). Стол
+/// брифинга с §12.418 ждёт ещё и починки пыльного стола картой.
 #[test]
 fn the_shipped_ruleset_opens_one_verb_at_a_time() {
     let mut sim = start();
@@ -140,8 +141,60 @@ fn the_shipped_ruleset_opens_one_verb_at_a_time() {
     );
     assert!(sim.has_unit("sp2") && sim.has_unit("sp3"), "свои нашлись");
     assert_eq!(sim.unit_count(), 3);
-    assert!(sim.structure_is_open(muster), "стол брифинга открылся");
+    assert!(
+        !sim.structure_is_open(muster),
+        "стол брифинга открылся до починки пыльного"
+    );
     assert!(sim.raid_gates(scavenge).unlocked, "открылось «Пошарить»");
+}
+
+/// Первый отряд — пыльный стол, починенный картой (§12.418): «Исследовать
+/// местность» приносит карту, комнатку со столом откапывают, стол чинят, и
+/// только тогда он становится отрядом, а место брифинга — палитрой. Карта
+/// уходит в стол целиком.
+#[test]
+fn the_shipped_ruleset_repairs_the_first_squad_with_a_map() {
+    let mut sim = start();
+    let gatehouse = sim.mission_index("explore_gatehouse").expect("местность");
+    let inspect = sim.mission_index("inspect").expect("осмотр");
+    let muster = sim.structure_index("muster").expect("место брифинга");
+    let map = sim.item_index("map").expect("карта");
+    let hidden = sim.tile_index("rubble_table").expect("завал над столом");
+    assert_eq!(sim.tile(7, 3), hidden, "посреди левой верхней — завал");
+    assert!(
+        sim.node_cells_of().is_empty(),
+        "пыльный стол — ещё не отряд"
+    );
+
+    dig(&mut sim);
+    assert!(sim.scavenge(inspect, vec!["excellent".into()], -1));
+    assert!(done(&mut sim, inspect, 3000), "вход осмотрен");
+    assert!(sim.scavenge(gatehouse, vec!["excellent".into()], -1));
+    assert!(done(&mut sim, gatehouse, 6000), "местность исследована");
+    assert_eq!(sim.item_total(map), 1, "принесли карту");
+
+    // Комнатка под завалом: стулья вокруг стола — слоты, и откапывают их тем
+    // же ластиком (§12.418), а дорога к ней — коридор от шахты.
+    assert!(sim.plan_demolish_rect(9, 3, 2, 1), "коридор размечен");
+    assert!(sim.plan_demolish_rect(6, 2, 3, 3), "комнатка размечена");
+    assert!(
+        until_tile(&mut sim, 7, 3, "dusty_table", 20000),
+        "под завалом нашли пыльный стол"
+    );
+    assert!(!sim.add_blueprint(7, 3, -1), "пыльный стол не сносится");
+    assert!(
+        sim.node_cells_of().is_empty(),
+        "обследованный стол без карты — ещё не отряд"
+    );
+    assert!(sim.fix_at(7, 3), "пыльный стол размечен на ремонт");
+    assert!(
+        until_tile(&mut sim, 7, 3, "briefing_table", 20000),
+        "стол починили"
+    );
+    assert_eq!(sim.item_total(map), 0, "карта ушла в стол");
+    assert_eq!(sim.node_cells_of(), vec![(7, 3)], "стол стал отрядом");
+    assert!(sim.structure_is_open(muster), "место брифинга в палитре");
+    assert!(!sim.add_blueprint(7, 3, -1), "починенный стол не сносится");
 }
 
 /// Свободные коты ходят только рядом с базой (§12.367): дальний заказ — только
@@ -227,8 +280,15 @@ fn the_shipped_ruleset_starts_in_one_rubble_room() {
     // Под одной клеткой завала лежит малый ящик (§12.404).
     let hidden = sim.tile_index("rubble_bin").expect("завал над ящиком");
     assert_eq!(sim.tile(8, 7), hidden, "над входом в левую среднюю — ящик");
+    // Посреди левой верхней — завал над пыльным столом (§12.418).
+    let dusty = sim.tile_index("rubble_table").expect("завал над столом");
+    assert_eq!(
+        sim.tile(7, 3),
+        dusty,
+        "посреди левой верхней — завал над столом"
+    );
     for (x, y) in cells {
-        if (x, y) != (15, 3) && (x, y) != (8, 7) {
+        if (x, y) != (15, 3) && (x, y) != (8, 7) && (x, y) != (7, 3) {
             assert_eq!(sim.tile(x, y), rubble, "завалено: ({x}, {y})");
         }
     }
@@ -240,9 +300,12 @@ fn the_shipped_ruleset_starts_in_one_rubble_room() {
         .flat_map(|x| (0..h).map(move |y| (x, y)))
         .filter(|&(x, y)| sim.tile(x, y) == rubble)
         .count();
-    assert_eq!(piles, 78, "и ещё одна клетка — завал над ящиком");
-    let ruin = sim.tile_index("broken_gate").expect("сломанный шлюз");
-    assert_eq!(sim.tile(11, 0), ruin, "над шахтой — сломанный шлюз");
+    assert_eq!(
+        piles, 77,
+        "ещё одна клетка — завал над ящиком, одна — пыльный стол"
+    );
+    let ruin = sim.tile_index("rubble_gate").expect("завал над шлюзом");
+    assert_eq!(sim.tile(11, 0), ruin, "над шахтой — завал над шлюзом");
     assert!(
         sim.tile_index("portal").is_none(),
         "портал — картинка, а не тайл"
@@ -291,49 +354,44 @@ fn the_shipped_ruleset_builds_nothing_before_the_entrance_is_inspected() {
 fn the_shipped_ruleset_dismantles_only_rubble_at_the_start() {
     let mut sim = start();
     assert!(!sim.add_blueprint(15, 3, -1), "пол у портала разобран");
-    assert!(!sim.add_blueprint(11, 0, -1), "сломанный шлюз разобран");
     assert!(sim.add_blueprint(6, 2, -1), "завал не разбирается");
+    assert!(
+        sim.add_blueprint(11, 0, -1),
+        "завал над шлюзом не разбирается (§12.418)"
+    );
     let mask = sim.buildable(-1, 0, 0, 0, 0);
     let w = sim.world.resource::<BaseMap>().width;
     let at = |x: i32, y: i32| mask[(y * w + x) as usize];
     assert_eq!(at(15, 3), 0, "маска зовёт разобрать пол");
-    assert_eq!(at(11, 0), 0, "маска зовёт разобрать сломанный шлюз");
     assert_eq!(at(7, 2), 1, "маска не даёт разобрать завал");
 }
 
-/// Сломанный шлюз (§12.376, §12.379): руину сперва обследуют, потом чинят —
-/// кнопкой в панели клетки, а не палитрой. Шлюза в палитре нет ни до, ни
-/// после: его чинят, а не строят. Дверью руина не считается, выход открывает
-/// достроенный шлюз.
+/// Сломанный шлюз (§12.376, §12.418): верх шахты засыпан, и шлюз
+/// показывается разбором завала, а потом чинится кнопкой в панели клетки, а
+/// не палитрой. Шлюза в палитре нет ни до, ни после. Дверью руина не
+/// считается, выход открывает достроенный шлюз.
 #[test]
-fn the_shipped_ruleset_examines_then_repairs_the_broken_gate() {
+fn the_shipped_ruleset_uncovers_then_repairs_the_broken_gate() {
     let mut sim = start();
     let garage = sim.tile_index("garage").expect("шлюз");
-    let ruin = sim.tile_index("gate_ruin").expect("обследованный шлюз");
+    let ruin = sim.tile_index("gate_ruin").expect("сломанный шлюз");
     assert!(
         !sim.add_blueprint(11, 0, i32::from(garage)),
         "шлюз ставится палитрой"
     );
-    assert!(
-        !sim.add_blueprint(11, 0, i32::from(ruin)),
-        "обследование ставится палитрой"
-    );
-    assert!(!sim.fix_at(10, 0), "чинится скала, а не руина");
-    // Обследование размечается и за завалом — работа ждёт прокопа, как
-    // любой чертёж (§12.379).
-    assert!(sim.fix_at(11, 0), "руина за завалом не размечается");
+    assert!(!sim.fix_at(11, 0), "под завалом чинить нечего");
+    // Разбор размечается и за завалом шахты — работа ждёт прокопа.
+    assert!(sim.plan_demolish(11, 0), "завал над шлюзом не размечается");
     dig_to_ruin(&mut sim);
-    assert!(!sim.exit_open(), "руина — не дверь");
-    assert_eq!(sim.hand_tag("excellent", 11, 0), "examine");
     assert!(
         until_tile(&mut sim, 11, 0, "gate_ruin", 3000),
-        "обследовали"
+        "под завалом нашли сломанный шлюз"
     );
-    assert!(!sim.exit_open(), "обследованная руина — тоже не дверь");
+    assert!(!sim.exit_open(), "руина — не дверь");
     assert_eq!(sim.hand_tag("excellent", 11, 0), "repair");
     assert!(
         !sim.add_blueprint(11, 0, i32::from(garage)),
-        "и после обследования шлюз не в палитре"
+        "и после разбора шлюз не в палитре"
     );
 
     let dug = sim.scrap_total();
@@ -534,6 +592,12 @@ fn the_shipped_ruleset_erases_all_rubble_with_one_rect() {
         .collect();
     assert!(missed.is_empty(), "завал без пометки: {missed:?}");
     assert_eq!(sim.planned_tile(8, 7), Some(-1), "и завал над ящиком тоже");
+    assert_eq!(sim.planned_tile(7, 3), Some(-1), "и над пыльным столом");
+    assert_eq!(
+        sim.planned_tile(11, 0),
+        Some(-1),
+        "и над шлюзом: верхний ряд рамка щадит только у самого выхода (§12.418)"
+    );
 }
 
 /// Обследование руины растит «Науку», а не «Стройку» (§12.410): навык у
@@ -544,6 +608,12 @@ fn examining_the_ruin_trains_science() {
     let mut sim = start();
     let science = sim.skill_index("science").expect("наука");
     let build = sim.skill_index("build").expect("стройка");
+    // С §12.418 боевой старт кладёт над руиной завал; обследование осталось
+    // механизмом, и руину ставим сами.
+    let broken = sim
+        .tile_index("broken_gate")
+        .expect("необследованная руина");
+    sim.force_tile(11, 0, broken);
     assert!(sim.fix_at(11, 0));
     dig_to_ruin(&mut sim);
     let (sci0, build0) = (

@@ -204,6 +204,35 @@ function glyphHtml(sym, color, cls = "") {
 /// Рулсет — контент, и предмет в нём заводится без спроса у вида: у своего
 /// глифа для него нет, и падать на этом нельзя. Такой предмет остаётся цветным
 /// квадратиком — ровно тем, чем были все шестеро до §12.109.
+// Сюжетная вещь, которой на базе больше нет (§12.418): её строку не показывают
+// ни шапка, ни «Ресурсы». Карта приходит один раз и уходит в пыльный стол, и
+// навсегда оставшаяся «Карта 0» звала бы её ждать. Флаг — контент (`keepsake`),
+// счёт — тот же снимок, что у шапки: склад и пол с лапами.
+function keepsakeGone(i) {
+  if (!meta?.items?.[i]?.keepsake) return false;
+  const st = stock[i];
+  return !st || st.stored + st.loose <= 0;
+}
+
+// Глазик строки «Ресурсов» (§12.418): открытый — строка на виду, перечёркнутый
+// — в группе «Скрытые». Контур, а не символ шрифта: эмодзи глаза в разных
+// системах рисуется по-разному и не красится цветом кнопки.
+const EYE_ICON =
+  '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">' +
+  '<path fill="currentColor" d="M12 5C6.5 5 2.7 9.2 1.5 12c1.2 2.8 5 7 10.5 7s9.3-4.2 10.5-7C21.3 9.2 17.5 5 12 5Zm0 11.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9Zm0-2.3a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z"/>' +
+  '<path class="eye-slash" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M4 4 L20 20"/>' +
+  "</svg>";
+
+// Раскрыта ли группа «Скрытые» в окне «Ресурсы» (§12.418). Удобство вида, а не
+// решение игрока о мире: помнится в браузере, как свёрнутая рейка дверей.
+let hiddenOpen = false;
+try {
+  hiddenOpen = localStorage.getItem("sp-hidden-open") === "1";
+} catch {
+  /* приватное окно — живём без памяти */
+}
+let hiddenHead = null;
+
 function itemGlyph(i, cls = "") {
   const it = (meta?.items ?? [])[i];
   if (!it) return "";
@@ -606,7 +635,8 @@ function crewDropWhy(drag, drop) {
   if (!n || n.busy) return `«${n?.name ?? ""}» в деле`;
   if (wounded.has(drag.id)) return "ранен";
   // Допуск радиста считает ядро (`may_relay`, §12.291), вид его только читает.
-  if (radio && !drag.cat.may_relay) return `не умеет «${relayLevel(drag.cat).name}»`;
+  if (radio && !drag.cat.may_relay)
+    return `не умеет «${relayLevel(drag.cat).name}»`;
   return "";
 }
 function crewDropAt(px, py) {
@@ -660,7 +690,8 @@ function crewDragStart(d) {
   // Обёртка с классом колонки — чтобы строка сохранила свой вид вне неё.
   const g = document.createElement("div");
   g.className = "crew-ghost raidwin-crew";
-  for (const t of d.copy.querySelectorAll("[data-tip]")) t.removeAttribute("data-tip");
+  for (const t of d.copy.querySelectorAll("[data-tip]"))
+    t.removeAttribute("data-tip");
   g.appendChild(d.copy);
   g.style.width = `${r.width}px`;
   d.dx = d.x0 - r.left;
@@ -749,12 +780,16 @@ window.addEventListener("pointerup", (e) => {
   crewDragEnd(crewDrag.on ? crewDropAt(e.clientX, e.clientY) : null);
 });
 window.addEventListener("pointercancel", () => crewDrag && crewDragEnd(null));
-window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && crewDrag?.on) {
-    e.stopPropagation();
-    crewDragEnd(null);
-  }
-}, true);
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.key === "Escape" && crewDrag?.on) {
+      e.stopPropagation();
+      crewDragEnd(null);
+    }
+  },
+  true,
+);
 // Строка списка радиста (§12.357): приписать или снять — те же команды, что
 // раньше у кнопки рации в строке кота.
 onPanelClick(raidWinEl, ".radio-pick", (b) => {
@@ -1360,6 +1395,8 @@ let sales = [];
 // Избранное — только предметы (это порядок строк в окне), тикеры — предмет и
 // сторона (это лента на главном экране и кнопки сделки в ней).
 let favorites = [];
+// Скрытые игроком строки окна «Ресурсы» (§12.418) — из ядра, как избранное.
+let hiddenItems = [];
 let tickers = [];
 // Кого выберет следующий клик у предмета, на котором правила ещё нет. Это не
 // зеркало правила (его нет), а заготовка выбора: как только порог поставят,
@@ -1882,6 +1919,8 @@ function drawFurniture(g, id, x, y, tint, n) {
     // Завал над найденным ящиком (§12.404) выглядит обычным завалом: находка
     // видна, только когда его разобрали.
     case "rubble_bin":
+    case "rubble_table":
+    case "rubble_gate":
     case "rubble": {
       // Завал (§12.367): груда камней на всю клетку — непроходимо, но видно,
       // что это не стена, а то, что можно разобрать. Раскладка камней своя у
@@ -2080,6 +2119,33 @@ function drawFurniture(g, id, x, y, tint, n) {
     // Место брифинга (§12.279): строится и рисуется **один стол**, а сидят
     // вокруг на свободных слотах (§12.283) — это обычный пол. Где слоты,
     // показывает превью постройки пунктиром; кто сел — сами коты.
+    // Пыльный стол (§12.418): тот же круглый стол, но пустой — карты на нём
+    // нет, столешница в серой пыли и паре следов лап.
+    case "dusty_table": {
+      shadowUnder(T * 0.06, T * 0.06, T * 0.88, T * 0.88);
+      g.circle(px + T / 2, py + T / 2, T * 0.44).fill(0x6e5a40);
+      g.circle(px + T / 2, py + T / 2, T * 0.44).stroke({
+        color: dark,
+        width: 1,
+      });
+      g.circle(px + T / 2, py + T / 2, T * 0.34).fill({
+        color: 0xb8b0a0,
+        alpha: 0.28,
+      });
+      for (const [ax, ay, r] of [
+        [0.36, 0.38, 0.05],
+        [0.6, 0.62, 0.04],
+        [0.64, 0.36, 0.035],
+      ]) {
+        g.circle(px + T * ax, py + T * ay, T * r).fill({
+          color: 0x4a3a26,
+          alpha: 0.45,
+        });
+      }
+      break;
+    }
+    // Починенный картой стол (§12.418) рисуется ровно как построенный.
+    case "briefing_table":
     case "muster_table": {
       // Круглый стол с картой похода посередине.
       shadowUnder(T * 0.06, T * 0.06, T * 0.88, T * 0.88);
@@ -3416,6 +3482,7 @@ function renderSnapshot(snap) {
   prices = snap.prices ?? [];
   sales = snap.sales ?? [];
   favorites = snap.favorites ?? [];
+  hiddenItems = snap.hidden ?? [];
   tickers = snap.tickers ?? [];
   stock = snap.stock ?? [];
   posts = snap.posts ?? 0;
@@ -3460,6 +3527,9 @@ function renderSnapshot(snap) {
       // Считает это ядро — в снимке нет истории, а `stored > 0` прятало бы
       // строку обратно, стоило запасу кончиться.
       if (!(snap.stock ?? [])[i]?.seen) return "";
+      // Сюжетная вещь (§12.418) — только пока она есть: «Карта 0» звала бы
+      // ждать то, что уже ушло в стол.
+      if (keepsakeGone(i)) return "";
       // Главное число — **учтённое**: склад минус бронь (§12.53). С §12.69 у
       // него один смысл на всё, что база делает наружу, — им и платят, и
       // торгуют. Валяющееся приписано отдельно и приглушённо: оно у базы есть,
@@ -5182,9 +5252,7 @@ function renderCellPanel(snap) {
   if (piles.length) {
     const chips = piles
       .map(
-        (s) =>
-          `${itemGlyph(s.item)}` +
-          `${esc(itemLabel(s.item))} ${s.count}`,
+        (s) => `${itemGlyph(s.item)}` + `${esc(itemLabel(s.item))} ${s.count}`,
       )
       .join(" · ");
     parts.push(`<div class="cat-sub">${chips}</div>`);
@@ -5288,7 +5356,7 @@ function renderCellPanel(snap) {
       ? "Обследовать"
       : `Починить: ${esc(target?.label || fix)} ${costChips(target?.cost)}`;
     parts.push(
-      `<div class="cat-sub">${def.examine ? "что с этим делать, пока неясно" : "обследовано: понятно, как чинить"}</div>`,
+      `<div class="cat-sub">${def.examine ? "что с этим делать, пока неясно" : "понятно, как чинить"}</div>`,
       `<button class="tool ruin-fix" data-key="fix@${x}, ${y}"` +
         ` data-x="${x}" data-y="${y}">${label}</button>`,
     );
@@ -5300,7 +5368,9 @@ function renderCellPanel(snap) {
   // разбор — стоит на кнопке фишками (§12.80). Размеченный снос отвечает
   // полоской площадки выше, поэтому кнопка пропадает вместе с ним.
   // Завал над ящиком (§12.404) разбирается той же кнопкой.
-  if ((def?.id === "rubble" || def?.id === "rubble_bin") && !bp) {
+  // С §12.418 так же — завал над пыльным столом: всё, что под «?», закрыто
+  // сверху завалом (`veiled`), и содержимое видно только после разбора.
+  if ((def?.id === "rubble" || def?.veiled) && !bp) {
     parts.push(
       `<button class="tool rubble-clear" data-key="dismantle@${x}, ${y}"` +
         ` data-x="${x}" data-y="${y}">Разобрать ${def.cost ? `→ ${costChips(def.cost)}` : ""}</button>`,
@@ -7960,7 +8030,8 @@ function needBars(e, always) {
   // шкала там тоже ответ. «Просела» меряется **показанным** числом, а не сырым:
   // сытость тает каждый тик, и 998 из 1000 рисовалось бы полоской «100%» —
   // полной шкалой, которую правило и прячет.
-  const energyPct = e.energy_max > 0 ? Math.round((e.energy / e.energy_max) * 100) : 100;
+  const energyPct =
+    e.energy_max > 0 ? Math.round((e.energy / e.energy_max) * 100) : 100;
   if (e.energy_max > 0 && (always || energyPct < 100)) {
     const pct = energyPct;
     const spent = e.energy_critical > 0 && e.energy <= e.energy_critical;
@@ -8001,7 +8072,8 @@ function needBars(e, always) {
   // просевшая полоска всегда означает «этот кот только что вернулся с плохой
   // вылазки», а порог надо назвать словом: ниже него кота не берут в отряд, и
   // без подписи игрок прочитает молчащую кнопку как поломку.
-  const healthPct = e.health_max > 0 ? Math.round((e.health / e.health_max) * 100) : 100;
+  const healthPct =
+    e.health_max > 0 ? Math.round((e.health / e.health_max) * 100) : 100;
   if (e.health_max > 0 && (always || healthPct < 100)) {
     const pct = healthPct;
     const hurt = e.health <= e.health_hurt;
@@ -8758,8 +8830,9 @@ function syncRuins() {
       // Знак — «?», как у необследованной руины: «здесь неизвестное, клик
       // покажет». Что именно, не говорим — иначе находка не находка. Клик
       // при этом разбирает (`dismantle`), а не обследует: знак тут про
-      // неизвестность, а не про глагол. Набор едет `Map`, как все наборы палитры.
-      else if (def?.holds?.size) cells.push([i, "examine"]);
+      // неизвестность, а не про глагол. С §12.418 признак — `veiled` у тайла:
+      // под завалом бывает и не ящик (пыльный стол).
+      else if (def?.veiled) cells.push([i, "examine"]);
     }
   }
   const key = cells.map(([i, v]) => `${i}${v[0]}`).join(",");
@@ -11366,29 +11439,29 @@ function raidGate(i, node) {
             : ruleWhy
               ? `${hint} · ${ruleWhy}`
               : roomWhy
-              ? roomWhy
-              : taken
-                ? // Одним словом на обе причины (§12.183): «ведёт» — это ответ на
-                  // «свободен ли заказ», а кто именно ведёт, названо строкой выше
-                  // номером отряда.
-                  "эту вылазку уже ведёт другой отряд — он назван строкой выше"
-                : !known
-                  ? `${hint} · нужна известность ${def.requires ?? 0}`
-                  : nobody
-                    ? `${hint} · ${nothingWhy}`
-                    : // ⚠️ **Перебор называется раньше сбора**: он чинится решением
-                      // игрока (вычеркнуть), а сбор — временем (§12.116), и пока
-                      // отряд спит, «вычеркните лишних» иначе не прозвучало бы.
-                      over
-                      ? `${hint} · в отряде ${enlisted}, а больше ${most} этот заказ` +
-                        ` не уводит — вычеркните лишних`
-                      : !fit
-                        ? `${hint} · уйдут, когда соберутся все${waiting}`
-                        : paws < least
-                          ? `${hint} · готовых ${paws}, нужно ${need}`
-                          : lackWhy
-                            ? `${hint} · ${lackWhy}`
-                            : hint;
+                ? roomWhy
+                : taken
+                  ? // Одним словом на обе причины (§12.183): «ведёт» — это ответ на
+                    // «свободен ли заказ», а кто именно ведёт, названо строкой выше
+                    // номером отряда.
+                    "эту вылазку уже ведёт другой отряд — он назван строкой выше"
+                  : !known
+                    ? `${hint} · нужна известность ${def.requires ?? 0}`
+                    : nobody
+                      ? `${hint} · ${nothingWhy}`
+                      : // ⚠️ **Перебор называется раньше сбора**: он чинится решением
+                        // игрока (вычеркнуть), а сбор — временем (§12.116), и пока
+                        // отряд спит, «вычеркните лишних» иначе не прозвучало бы.
+                        over
+                        ? `${hint} · в отряде ${enlisted}, а больше ${most} этот заказ` +
+                          ` не уводит — вычеркните лишних`
+                        : !fit
+                          ? `${hint} · уйдут, когда соберутся все${waiting}`
+                          : paws < least
+                            ? `${hint} · готовых ${paws}, нужно ${need}`
+                            : lackWhy
+                              ? `${hint} · ${lackWhy}`
+                              : hint;
   // Причина отказа отдельной строкой от подсказки: тулбар склеивает их в один
   // `title`, а штаб (§12.71) печатает причину словом под заказом — там она и
   // должна читаться, не наводя мышь.
@@ -11777,7 +11850,8 @@ function tripStackSvg(m, tags) {
       : "";
   const right = x0 + (n - 1) * step + STACK_R;
   const badge = `<g transform="translate(${(right + 2).toFixed(1)},${-STACK_R - 3}) scale(0.75)">${tagsSvg(tags)}</g>`;
-  const item = m.phase === "back" && !m.failed && m.share > 0 ? m.loot?.[0]?.[0] : null;
+  const item =
+    m.phase === "back" && !m.failed && m.share > 0 ? m.loot?.[0]?.[0] : null;
   const it = item != null ? (meta?.items ?? [])[item] : null;
   const loot =
     it && ITEM_GLYPHS[it.id]
@@ -11882,8 +11956,7 @@ function syncOrbits() {
       const what = (meta?.missions ?? [])[m.def]?.label ?? "";
       liveTitle(g, `${id} — ${RAID_PHASE[m.phase] ?? "сбор"}: ${what}`);
     });
-    for (const g of [...cats.children])
-      if (!mine.has(g.dataset.id)) g.remove();
+    for (const g of [...cats.children]) if (!mine.has(g.dataset.id)) g.remove();
   }
   for (const c of [...layer.children]) if (!seen.has(c.dataset.c)) c.remove();
 }
@@ -11947,9 +12020,12 @@ function syncFlashes() {
     if (!was.has(key) || was.get(key) === phase) continue;
     const prev = was.get(key);
     const end =
-      m.site >= 0 ? siteApproaches[m.site]?.at(-1) ?? siteHome : siteHome;
+      m.site >= 0 ? (siteApproaches[m.site]?.at(-1) ?? siteHome) : siteHome;
     const at = prev === "" || phase === "" ? siteHome : end;
-    const ring = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    const ring = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "circle",
+    );
     ring.setAttribute("class", "map-flash");
     ring.setAttribute("cx", at[0].toFixed(1));
     ring.setAttribute("cy", at[1].toFixed(1));
@@ -16341,7 +16417,17 @@ function buildStockWindow() {
       sendAction({ type: "setFavorite", item, on: !favorites.includes(item) }),
     );
     fav.classList.add("toggle", "ware-fav");
-    row.appendChild(fav);
+    // Глазик (§12.418) — рядом со звездой и по тому же доводу: про саму строку,
+    // а не про запас. Скрытая строка уезжает в группу «Скрытые» внизу списка,
+    // правила на предмете работают как работали.
+    const eye = mkTool(EYE_ICON, () =>
+      sendAction({ type: "setHidden", item, on: !hiddenItems.includes(item) }),
+    );
+    eye.classList.add("toggle", "ware-eye");
+    const marks = document.createElement("div");
+    marks.className = "ware-marks";
+    marks.append(fav, eye);
+    row.appendChild(marks);
 
     const name = document.createElement("div");
     name.className = "ware-name";
@@ -16628,6 +16714,7 @@ function buildStockWindow() {
       item,
       row,
       fav,
+      eye,
       name,
       label,
       num,
@@ -16646,6 +16733,22 @@ function buildStockWindow() {
       it,
     });
   });
+
+  // Группа «Скрытые» (§12.418): заголовок-кнопка под обычными строками,
+  // свёрнутая по умолчанию. Скрытое не исчезает совсем — иначе вернуть строку
+  // было бы нечем, — а уходит под заголовок со счётом.
+  hiddenHead = mkTool("", () => {
+    hiddenOpen = !hiddenOpen;
+    try {
+      localStorage.setItem("sp-hidden-open", hiddenOpen ? "1" : "0");
+    } catch {
+      /* без памяти — только на эту вкладку */
+    }
+    syncStockWindow();
+  });
+  hiddenHead.classList.add("toggle", "ware-hidden-head");
+  hiddenHead.hidden = true;
+  list.appendChild(hiddenHead);
 }
 
 // Сводка «что сейчас делается» в шапке окна (§12.107). Заказы едут в снимке
@@ -16853,7 +16956,18 @@ function syncStockWindow() {
     // темой, не нажать вовсе. Знание тут и есть знакомство: раз база умеет
     // это делать, предмет ей известен.
     const makeable = r.keeps.some((k) => recipeSnaps[k.def]?.unlocked);
-    r.row.hidden = !st.seen && !makeable;
+    // Скрытая игроком строка (§12.418) стоит под заголовком «Скрытые» и видна,
+    // только пока группа раскрыта; сюжетная вещь без запаса не стоит нигде.
+    r.shown = (st.seen || makeable) && !keepsakeGone(r.item);
+    r.tucked = hiddenItems.includes(r.item);
+    r.row.hidden = !r.shown || (r.tucked && !hiddenOpen);
+    r.eye.classList.toggle("on", r.tucked);
+    liveTitle(
+      r.eye,
+      r.tucked
+        ? "Вернуть строку в список"
+        : "Скрыть строку: уедет в группу «Скрытые» внизу",
+    );
     if (r.row.hidden) continue;
     const free = Math.max(0, st.stored - st.booked);
     const name = esc(itemKnownName(r.item));
@@ -17216,7 +17330,9 @@ function syncStockWindow() {
           ? ""
           : only
             ? `Продажа ${q.sell}¤ за штуку · купить нельзя: добывают только коты` +
-              (q.next_in > 0 ? ` · через ${q.next_in} станет ${q.next_sell}¤` : "")
+              (q.next_in > 0
+                ? ` · через ${q.next_in} станет ${q.next_sell}¤`
+                : "")
             : `Покупка ${q.buy}¤ · продажа ${q.sell}¤ за штуку` +
               (q.next_in > 0
                 ? ` · через ${q.next_in} станет ${q.next_buy}¤ / ${q.next_sell}¤`
@@ -17239,17 +17355,30 @@ function syncStockWindow() {
 // Избранные — наверх, остальные по палитре. Переставляем **узлы**, а не
 // разметку: строка переживает переезд вместе со слушателями, набором в поле и
 // удержанием кнопки, а `innerHTML` убил бы всё это (§12.84).
+//
+// Скрытые (§12.418) — после заголовка «Скрытые», тем же списком и тем же
+// проходом (§12.201): второй проход спорил бы с первым о порядке каждым кадром.
 function orderWareRows() {
   const list = stockWinEl.querySelector(".win-list");
   if (!list) return;
-  const want = [...wareRows].sort((a, b) => {
+  const sorted = [...wareRows].sort((a, b) => {
     const fa = favorites.includes(a.item) ? 0 : 1;
     const fb = favorites.includes(b.item) ? 0 : 1;
     return fa - fb || a.item - b.item;
   });
-  const now = [...list.children];
-  if (want.every((r, i) => now[i] === r.row)) return;
-  for (const r of want) list.appendChild(r.row);
+  const tucked = sorted.filter((r) => r.tucked);
+  const count = tucked.filter((r) => r.shown).length;
+  if (hiddenHead) {
+    hiddenHead.hidden = count === 0;
+    const label = `${hiddenOpen ? "▾" : "▸"} Скрытые · ${count}`;
+    if (hiddenHead.textContent !== label) hiddenHead.textContent = label;
+  }
+  const want = [
+    ...sorted.filter((r) => !r.tucked).map((r) => r.row),
+    ...(hiddenHead ? [hiddenHead] : []),
+    ...tucked.map((r) => r.row),
+  ];
+  orderChildren(list, want);
 }
 
 function openRaidWindow(x, y, pick = null) {
@@ -18130,10 +18259,7 @@ function renderRaidWindow() {
   // Прогноз со свободными годится только «Пошарить рядом»: на дальние заказы
   // их не берут (§12.371), и карточка такого заказа считает отряд без них
   // (`squad`), иначе сила и доля обещали бы вылазку, которой не будет.
-  syncRaidCards(
-    sel && raid ? raid : null,
-    sel ?? outskirtsNode(),
-  );
+  syncRaidCards(sel && raid ? raid : null, sel ?? outskirtsNode());
   // Список вещей слота (§12.293) — один на всю колонку.
   syncSlotPop("raid");
   // Карта — **после карточек**: прокрутка к выбранному участку ищет их узлы.
@@ -18626,7 +18752,8 @@ function syncCrewRows(sel) {
       head.classList.toggle("crew-section", !!g.section);
       head.classList.toggle("squad-crew", g.key.startsWith("sq") && !g.bare);
       head.classList.toggle("crew-mission", !!g.bare);
-      if (head.dataset.drop !== (g.drop ?? "")) head.dataset.drop = g.drop ?? "";
+      if (head.dataset.drop !== (g.drop ?? ""))
+        head.dataset.drop = g.drop ?? "";
       if (head.textContent !== g.head) head.textContent = g.head;
       order.push(head);
     }
@@ -18727,7 +18854,8 @@ function tripHtml(m, node) {
     : (!m.rescue && m.share < 100
         ? `<div class="raidwin-verdict"><span class="warn">доля ${m.share} %</span>` +
           `<i>сила ${m.strength} против сложности ${m.danger}</i></div>`
-        : "") + missionLootRow(def, m.share, !!m.samples, m.loot, m.gather, true);
+        : "") +
+      missionLootRow(def, m.share, !!m.samples, m.loot, m.gather, true);
   const act = [];
   if (!m.away)
     act.push(
@@ -18805,9 +18933,7 @@ function syncRaidCards(raid, node) {
   );
   const want = (meta.missions ?? []).map((_, i) => [
     String(i),
-    open[i] && here(i)
-      ? raidCard(i, node)
-      : "",
+    open[i] && here(i) ? raidCard(i, node) : "",
     i,
   ]);
   // Отряд в деле (§12.361): колонка — только про его вылазку. Прочие заказы
@@ -19042,7 +19168,9 @@ function missionLootRow(def, share, samples, counts, gather, onlyGot = false) {
     const gchips = costChips(new Map(chips.map(([id, c]) => [id, c])));
     if (chips.length && onlyGot) together = gchips + note;
     else if (chips.length)
-      rows.push(`<div class="raidwin-gather">вернутся с ${gchips}${note}</div>`);
+      rows.push(
+        `<div class="raidwin-gather">вернутся с ${gchips}${note}</div>`,
+      );
   }
   const lost = samples || onlyGot ? [] : gathered.filter(([id]) => seenId(id));
   // Не достанется — зачёркнутой фишкой в той же строке добычи, а причина — в
@@ -19612,8 +19740,7 @@ function ruleState(node) {
               : "";
   // Слово — причина простоя, а не обычное состояние: его стоит показать
   // и у отряда в списке.
-  const stuck =
-    !!nogate || blocked || (node.auto_on && !!hold && !node.busy);
+  const stuck = !!nogate || blocked || (node.auto_on && !!hold && !node.busy);
   return { label, state, hold, blocked, nogate, stuck };
 }
 
@@ -19775,7 +19902,8 @@ app.ticker.add(stepUnits);
 app.ticker.add(() => {
   if (!ruinKey) return;
   const t = performance.now() / 260;
-  for (const f of ruinFrames.children) f.alpha = 0.45 + 0.45 * Math.sin(t + f.phase);
+  for (const f of ruinFrames.children)
+    f.alpha = 0.45 + 0.45 * Math.sin(t + f.phase);
 });
 // Свет — после шага котов: пятно у кота едет за уже сдвинутым узлом.
 app.ticker.add((t) => lighting.frame(units, t.deltaMS, speed));
