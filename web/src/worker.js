@@ -164,6 +164,8 @@ function loop() {
         key: handAim.key,
         verb: handAim.id ? sim.hand_tag(handAim.id, handAim.x, handAim.y) : "",
         why: sim.pile_why(handAim.x, handAim.y),
+        // Чем чинить руину (§12.419): `lacks` — материала на базе нет.
+        fix: sim.fix_why(handAim.x, handAim.y),
       },
     });
   }

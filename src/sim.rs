@@ -2964,8 +2964,57 @@ impl Sim {
             .or_else(|| rules.repair_of(tile).map(|t| (t, false)))
     }
 
+    /// Чего не хватает базе на ремонт руины в клетке (§12.419): цена ремонта
+    /// минус всё, что у базы есть (кучи где угодно и лапы — ремонт это чертёж,
+    /// а чертёж берёт и с пола, §12.130), минус обещанное покупателю.
+    /// Пусто — материал есть (или это обследование: у него цены нет).
+    ///
+    /// Одно выражение на кнопку «Починить», приказ коту по руине и подсказку
+    /// в панели: разойдись они — кнопка горела бы там, где клик не сработает.
+    fn fix_lacks(&mut self, x: i32, y: i32) -> Vec<(usize, i32)> {
+        let Some((t, false)) = self.fix_target(x, y) else {
+            return Vec::new();
+        };
+        let cost = self.world.resource::<TileRules>().cost_of(t).to_vec();
+        if cost.is_empty() {
+            return cost;
+        }
+        let have = {
+            let mut piles = self.world.query::<&Stack>();
+            let mut loads = self.world.query::<&Carrying>();
+            crate::hauling::on_base_counts(piles.iter(&self.world), loads.iter(&self.world))
+        };
+        let owed = self.owed_for_sale();
+        cost.into_iter()
+            .filter_map(|(item, need)| {
+                let reserved = owed
+                    .iter()
+                    .find(|&&(i, _)| i == item)
+                    .map_or(0, |&(_, n)| n);
+                let free = have.get(item).copied().unwrap_or(0) - reserved;
+                (free < need).then_some((item, need - free.max(0)))
+            })
+            .collect()
+    }
+
+    /// Почему руину в клетке не починить (§12.419), тегом для панели клетки:
+    /// `lacks` — у базы нет материала на ремонт. Пусто — можно (или клетка не
+    /// руина, или ремонт уже размечен).
+    pub fn fix_why(&mut self, x: i32, y: i32) -> String {
+        if self.blueprint_at(x, y).is_some() || self.fix_lacks(x, y).is_empty() {
+            String::new()
+        } else {
+            "lacks".to_string()
+        }
+    }
+
     /// Чертёж работы над руиной: уже размеченный или новый (§12.379).
+    /// Новый ремонт без материала на базе не размечается (§12.419): работа,
+    /// которую нечем сделать, висела бы молча — та же молчащая кнопка.
     fn fix_blueprint(&mut self, x: i32, y: i32) -> Option<Entity> {
+        if self.blueprint_at(x, y).is_none() && !self.fix_lacks(x, y).is_empty() {
+            return None;
+        }
         let (t, _) = self.fix_target(x, y)?;
         // Руина стоит, где стоит: доступ, зонирование и верхний ряд — ворота
         // **новой** постройки, а не работы над старой. Спросить их значило бы
@@ -7168,7 +7217,12 @@ impl Sim {
             return tag.to_string();
         }
         // Руина отвечает работой над собой (§12.379): `examine` · `repair`.
+        // Ремонт без материала на базе — отказ (§12.419): тем же `fix_why`,
+        // что гасит кнопку «Починить».
         if let Some((_, examine)) = self.fix_target(x, y) {
+            if !self.fix_why(x, y).is_empty() {
+                return "lacks".to_string();
+            }
             return if examine { "examine" } else { "repair" }.to_string();
         }
         // Завал отвечает разбором (§12.395): пойдёт именно этот кот.

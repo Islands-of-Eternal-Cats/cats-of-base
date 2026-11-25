@@ -67,6 +67,14 @@ fn dig(sim: &mut Sim) {
         until_tile(sim, 11, 0, "gate_ruin", 3000),
         "под завалом нашли сломанный шлюз"
     );
+    // Без детали ремонт не размечается (§12.419): ждём, пока ящик откопают.
+    assert!(
+        (0..6000).any(|_| {
+            sim.tick_n(1);
+            sim.fix_why(11, 0).is_empty()
+        }),
+        "детали на ремонт достали"
+    );
     assert!(sim.fix_at(11, 0), "шлюз размечен на ремонт");
     let open = (0..6000).any(|_| {
         sim.tick_n(1);
@@ -388,7 +396,6 @@ fn the_shipped_ruleset_uncovers_then_repairs_the_broken_gate() {
         "под завалом нашли сломанный шлюз"
     );
     assert!(!sim.exit_open(), "руина — не дверь");
-    assert_eq!(sim.hand_tag("excellent", 11, 0), "repair");
     assert!(
         !sim.add_blueprint(11, 0, i32::from(garage)),
         "и после разбора шлюз не в палитре"
@@ -396,19 +403,32 @@ fn the_shipped_ruleset_uncovers_then_repairs_the_broken_gate() {
 
     let dug = sim.scrap_total();
     assert!(dug >= 3, "прокоп дал лом на шлюз: {dug}");
-    assert!(sim.fix_at(11, 0), "шлюз размечен на ремонт");
-    // Ремонт ждёт детали (§12.417): лом есть, а деталь — только в ящике.
-    sim.tick_n(1500);
-    assert!(!sim.exit_open(), "шлюз починен без детали");
+    // Ремонт стоит детали (§12.417), а она только в ящике под завалом: пока
+    // его не откопали, «Починить» не размечается вовсе (§12.419) — ни кнопкой,
+    // ни приказом коту, и причина едет тегом.
+    assert_eq!(sim.fix_why(11, 0), "lacks");
+    assert_eq!(sim.hand_tag("excellent", 11, 0), "lacks");
+    assert!(!sim.fix_at(11, 0), "шлюз размечен на ремонт без детали");
+    sim.tick_n(300);
     assert_eq!(sim.tile(11, 0), ruin, "руина стоит, пока ящик не откопан");
     dig_to_bin(&mut sim);
+    let part = sim.item_index("part").expect("деталь");
+    assert!(
+        (0..3000).any(|_| {
+            sim.tick_n(1);
+            sim.item_total(part) > 0
+        }),
+        "из-под завала достали детали"
+    );
+    assert_eq!(sim.fix_why(11, 0), "", "деталь есть — чинить можно");
+    assert_eq!(sim.hand_tag("excellent", 11, 0), "repair");
+    assert!(sim.fix_at(11, 0), "шлюз размечен на ремонт");
     let open = (0..6000).any(|_| {
         sim.tick_n(1);
         sim.exit_open()
     });
     assert!(open, "шлюз починен, выход открыт");
     assert_eq!(sim.tile(11, 0), garage);
-    let part = sim.item_index("part").expect("деталь");
     sim.tick_n(300);
     assert_eq!(
         sim.item_at(8, 7, part),

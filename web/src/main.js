@@ -343,6 +343,8 @@ const cellEl = document.getElementById("cell");
 // Руина (§12.379): «Обследовать», потом «Починить» — работу берёт любой
 // свободный кот; конкретного посылают приказом по самой клетке.
 onPanelClick(cellEl, ".ruin-fix", (b) =>
+  // Нечем чинить (§12.419) — кнопка тусклая, причина в подсказке.
+  b.classList.contains("off") ||
   sendAction({ type: "fix", x: Number(b.dataset.x), y: Number(b.dataset.y) }),
 );
 // Завал (§12.381): «Разобрать» — тот же снос, что ластиком на клетке.
@@ -5355,10 +5357,17 @@ function renderCellPanel(snap) {
     const label = def.examine
       ? "Обследовать"
       : `Починить: ${esc(target?.label || fix)} ${costChips(target?.cost)}`;
+    // Нечем чинить (§12.419): решает ядро (`fix_why`), вид гасит кнопку
+    // классом и называет причину словом (§12.53) — `disabled` нельзя.
+    const lacks =
+      !def.examine &&
+      lastHand?.key === handAimKey() &&
+      lastHand.fix === "lacks";
+    const why = "нет материала: " + costChips(target?.cost);
     parts.push(
-      `<div class="cat-sub">${def.examine ? "что с этим делать, пока неясно" : "понятно, как чинить"}</div>`,
-      `<button class="tool ruin-fix" data-key="fix@${x}, ${y}"` +
-        ` data-x="${x}" data-y="${y}">${label}</button>`,
+      `<div class="cat-sub">${def.examine ? "что с этим делать, пока неясно" : lacks ? why : "понятно, как чинить"}</div>`,
+      `<button class="tool ruin-fix${lacks ? " off" : ""}" data-key="fix@${x}, ${y}"` +
+        ` data-x="${x}" data-y="${y}"${lacks ? ` data-tip="Не починить: на базе нет материала"` : ""}>${label}</button>`,
     );
   }
 
@@ -8571,6 +8580,8 @@ const HAND_REFUSALS = {
   booked: "Не взять: всё обещано покупателю",
   unreachable: "Не дойти",
   asleep: "Кот спит и приказ не примет",
+  // Ремонт без материала на базе (§12.419): тот же `fix_why`, что гасит кнопку.
+  lacks: "Не починить: нет материала",
 };
 const PILE_WHY = {
   untidy: "Лежит: не помечено на склад",
