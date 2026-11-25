@@ -1950,6 +1950,23 @@ function drawFurniture(g, id, x, y, tint, n) {
       });
       break;
     }
+    case "small_bin": {
+      // Малый ящик (§12.402): открытый деревянный ящик сверху — кромка из
+      // досок и тёмное нутро. Содержимое рисует `drawScrap`, поэтому крышки нет.
+      const m = T * 0.16;
+      const s = T - 2 * m;
+      shadowUnder(m, m, s, s);
+      g.rect(px + m, py + m, s, s).fill(0x8a6a42);
+      g.rect(px + m + 3, py + m + 3, s - 6, s - 6).fill(0x2a1f14);
+      g.rect(px + m + 3, py + m + 3, s - 6, 2).fill({ color: 0, alpha: 0.35 });
+      // Стыки досок на кромке.
+      for (const k of [0.33, 0.66]) {
+        g.rect(px + m + s * k, py + m, 1, 3).fill(0x3e2c18);
+        g.rect(px + m + s * k, py + m + s - 3, 1, 3).fill(0x3e2c18);
+      }
+      g.rect(px + m, py + m, s, s).stroke({ color: 0x3e2c18, width: 1 });
+      break;
+    }
     case "bin": {
       shadowUnder(T * 0.18, T * 0.18, T * 0.64, T * 0.64);
       g.roundRect(px + T * 0.18, py + T * 0.18, T * 0.64, T * 0.64, 2).fill(

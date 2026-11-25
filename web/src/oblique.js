@@ -657,6 +657,29 @@ export function prop(g, id, x, y, tint, n, d) {
       });
       break;
     }
+    case "small_bin": {
+      // Малый ящик (§12.402): открытый деревянный ящик — стенки из досок,
+      // тёмное нутро. Крышки нет намеренно: что в нём лежит, рисует
+      // `drawScrap`, и куча поднята на `SURFACE.small_bin` — она лежит
+      // **в** ящике, над передней стенкой, а не на полу за ней.
+      const wood = 0x8a6a42;
+      const H = 0.34;
+      const t = box(0.14, 0.32, 0.72, 0.48, H, wood, 0x6e5232);
+      const fy = t.y + t.d; // верх передней стенки
+      const fh = T * H;
+      // Три доски передней стенки и стойки по углам.
+      for (const k of [1 / 3, 2 / 3]) {
+        g.rect(t.x, fy + fh * k, t.w, 1).fill(0x3e2c18);
+      }
+      g.rect(t.x, fy, 3, fh).fill(0x4a3520);
+      g.rect(t.x + t.w - 3, fy, 3, fh).fill(0x4a3520);
+      g.rect(t.x, fy + fh - 1, t.w, 1).fill({ color: 0, alpha: 0.4 });
+      // Нутро: тёмная впадина внутри кромки.
+      g.rect(t.x + 3, t.y + 3, t.w - 6, t.d - 5).fill(0x2a1f14);
+      g.rect(t.x + 3, t.y + 3, t.w - 6, 2).fill({ color: 0, alpha: 0.35 });
+      g.rect(t.x, t.y, t.w, t.d).stroke({ color: 0x3e2c18, width: 1 });
+      break;
+    }
     case "bin": {
       const t = box(0.18, 0.24, 0.64, 0.56, 0.34, shade(tint, 0.15));
       g.rect(t.x, t.y, t.w, t.d * 0.3).fill(shade(tint, 0.4));
@@ -922,7 +945,7 @@ export const wallRise = (lowered) => (lowered ? 0 : RISE);
 /// столешница стеллажа сдвинута вверх, и куча в центре клетки оказывалась у её
 /// переднего края, а куча с паллеты позади — на задней кромке стеллажа, то
 /// есть читалась лежащей на нём.
-const SURFACE = { rack: 0.3, bench: 0.36, storage: 0.07 };
+const SURFACE = { rack: 0.3, bench: 0.36, storage: 0.07, small_bin: 0.24 };
 export const surfaceRise = (id) => SURFACE[id] ?? 0;
 
 /// Тайлы, чья мебель закрывает клетку целиком: в виде 3/4 глиф роли поверх них

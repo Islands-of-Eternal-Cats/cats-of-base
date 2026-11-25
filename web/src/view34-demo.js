@@ -10,6 +10,7 @@ const TILES = {
   S: ["storage", "#26506e"],
   R: ["rack", "#2f6f8e"],
   X: ["bin", "#3f7e8e"],
+  x: ["small_bin", "#356a78"],
   L: ["lab", "#5a3a6e"],
   B: ["bench", "#6b4a80"],
   W: ["ward", "#8e4a4a"],
@@ -26,7 +27,7 @@ const TILES = {
 };
 const MAP = [
   "############################",
-  "#######X##LLLLL#WWW##GG#####",
+  "######xX##LLLLL#WWW##GG#####",
   "#RRRRRRS##LLBLL#WWW##GG#####",
   "#RSSSSSS##LLLLL#WWW##..#####",
   "####.######.#####.####.#####",
