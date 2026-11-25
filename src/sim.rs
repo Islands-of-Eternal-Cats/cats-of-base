@@ -2189,6 +2189,7 @@ impl Sim {
                                         phases: def.phases.clone(),
                                         requires: def.requires,
                                         needs,
+                                        sell_only: rs.items.get(i).is_some_and(|it| it.unique),
                                     };
                                     (i, line)
                                 })

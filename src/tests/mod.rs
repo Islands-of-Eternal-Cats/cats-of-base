@@ -868,6 +868,8 @@ impl Sim {
                 sweeps: false,
                 grants: Vec::new(),
                 collected: String::new(),
+                // Уникальных тоже нет (§12.416): синтетический прайс продаёт всё.
+                unique: false,
                 personal: false,
                 // Слотов тоже нет (§12.293): вещи не спорят друг с другом —
                 // слот ставит `set_slot`.
@@ -3049,6 +3051,7 @@ impl Sim {
                     phases: phases.to_vec(),
                     requires: 0,
                     needs: Vec::new(),
+                    sell_only: false,
                 },
             ));
             rule.prices.sort_unstable_by_key(|(i, _)| *i);

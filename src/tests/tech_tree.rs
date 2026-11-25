@@ -96,7 +96,9 @@ fn item_stages(rs: &Ruleset, depth: &BTreeMap<&str, u32>) -> BTreeMap<String, (u
         }
     }
     for f in &rs.factions {
-        for id in f.prices.keys() {
+        // Уникальный продукт не продаёт никто (§12.416): источником он не
+        // считается, прайс его только берёт.
+        for id in f.prices.keys().filter(|id| !is_unique(rs, id)) {
             note(id, 0); // купить можно с первого тика
         }
     }
@@ -340,7 +342,7 @@ fn the_shipped_ruleset_opens_early_items_without_fame() {
         free.insert(s.item.as_str());
     }
     for f in &rs.factions {
-        for id in f.prices.keys() {
+        for id in f.prices.keys().filter(|id| !is_unique(&rs, id)) {
             free.insert(id.as_str());
         }
     }
@@ -732,4 +734,10 @@ fn the_shipped_ruleset_opens_the_big_desk_after_big_labs_and_tutoring() {
         1,
         "одно место учителя"
     );
+}
+
+/// Уникальный ли предмет (§12.416): его добывают только коты базы, и прайс его
+/// берёт, но не продаёт — купить его нельзя, значит прайс ему не источник.
+fn is_unique(rs: &Ruleset, id: &str) -> bool {
+    rs.items.iter().any(|i| i.id == id && i.unique)
 }

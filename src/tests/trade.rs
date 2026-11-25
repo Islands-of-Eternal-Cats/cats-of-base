@@ -1543,3 +1543,29 @@ fn the_shipped_ruleset_never_pays_for_taking_a_bought_thing_apart() {
         );
     }
 }
+
+/// **Образец не купить нигде** (§12.416): это уникальный продукт котов базы.
+/// Сторона, которая им торгует, его только берёт — курс продажи есть, покупки
+/// нет, и заявка на покупку отклоняется, как товар вне прайса.
+#[test]
+fn the_shipped_ruleset_never_sells_samples() {
+    let mut sim = shipped();
+    let sample = sim.item_index("sample").expect("образец в палитре");
+    let sides = sim.faction_spans().len();
+    assert!(
+        (0..sides).any(|f| sim.quote(f, sample, false).is_some()),
+        "образец по-прежнему продаётся хоть кому-то",
+    );
+    sim.set_money(100_000);
+    for f in 0..sides {
+        assert_eq!(
+            sim.quote(f, sample, true),
+            None,
+            "сторона {f} продаёт образец"
+        );
+        assert!(
+            !sim.trade(f, sample, 1, true),
+            "сторона {f} приняла заявку на образец"
+        );
+    }
+}

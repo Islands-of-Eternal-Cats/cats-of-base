@@ -7246,7 +7246,7 @@ function renderTickers() {
     // Состояние кнопок считает `tradeState` — то же место, что и в окне
     // (§12.100): второй экземпляр этой арифметики однажды покажет живую кнопку,
     // которую фасад отклонит.
-    const acts = [true, false]
+    const acts = (sellOnly(t.item) ? [false] : [true, false])
       .map((buying) => {
         const s = tradeState(t.faction, t.item, buying, qty);
         return (
@@ -7274,8 +7274,11 @@ function renderTickers() {
         `<button class="tool tick-off" data-key="off@${t.item}" ` +
         `data-item="${t.item}" data-tip="Убрать из ленты">×</button>` +
         "</div>" +
-        `<div class="tick-rate">${rateText(q, true)}` +
-        `<span class="ware-sep">·</span>${rateText(q, false)}</div>` +
+        `<div class="tick-rate">${
+          sellOnly(t.item)
+            ? rateText(q, false)
+            : `${rateText(q, true)}<span class="ware-sep">·</span>${rateText(q, false)}`
+        }</div>` +
         (posts ? `<div class="cat-act">${acts}</div>` : "") +
         "</div>",
     );
@@ -10321,7 +10324,7 @@ function sellableOf(item) {
 // на первое и не хватает на второе.
 function tradeState(fi, ii, buying, qty) {
   const q = quoteOf(fi, ii);
-  if (!q) return null;
+  if (!q || (buying && sellOnly(ii))) return null;
   const unit = buying ? q.buy : q.sell;
   const total = unit * qty;
   const broke = buying && money < total;
@@ -13738,7 +13741,7 @@ function buildBuyWindow() {
   // выбрать сторону за игрока (§12.88).
   (meta.factions ?? []).forEach((f, fi) => {
     for (const item of (meta.items ?? []).keys()) {
-      if (!sidesOf(item).includes(fi)) continue;
+      if (!sidesOf(item).includes(fi) || sellOnly(item)) continue;
       const row = mkTool(
         `${itemGlyph(item)}<span class="buy-name"></span>` +
           `<span class="buy-rate"></span><b class="qty">×5</b>`,
@@ -16151,6 +16154,13 @@ function sideOf(item, sides) {
 // Стороны, которые вообще торгуют этим предметом. Из палитры, а не из снапшота:
 // окно может открыться раньше первого курса, а прайс — контент (см. `costChips`,
 // `prices` приезжает `Map`).
+// Уникальный продукт (§12.416): его добывают коты базы, а снаружи только
+// берут — строки покупки у него нет ни в окне, ни в ленте. Флаг контента из
+// палитры, как и сам прайс (`sidesOf`); `quote` в ядре отказывает по нему же.
+function sellOnly(item) {
+  return !!(meta.items ?? [])[item]?.unique;
+}
+
 function sidesOf(item) {
   const id = (meta.items ?? [])[item]?.id;
   return (meta.factions ?? [])
@@ -17174,18 +17184,24 @@ function syncStockWindow() {
 
     if (r.rate) {
       const q = quoteOf(who, r.item);
-      const html = q
-        ? `${rateText(q, true)}<span class="ware-sep">·</span>${rateText(q, false)}`
-        : "—";
+      const only = sellOnly(r.item);
+      const html = !q
+        ? "—"
+        : only
+          ? rateText(q, false)
+          : `${rateText(q, true)}<span class="ware-sep">·</span>${rateText(q, false)}`;
       if (r.rate.innerHTML !== html) r.rate.innerHTML = html;
       liveTitle(
         r.rate,
-        q
-          ? `Покупка ${q.buy}¤ · продажа ${q.sell}¤ за штуку` +
+        !q
+          ? ""
+          : only
+            ? `Продажа ${q.sell}¤ за штуку · купить нельзя: добывают только коты` +
+              (q.next_in > 0 ? ` · через ${q.next_in} станет ${q.next_sell}¤` : "")
+            : `Покупка ${q.buy}¤ · продажа ${q.sell}¤ за штуку` +
               (q.next_in > 0
                 ? ` · через ${q.next_in} станет ${q.next_buy}¤ / ${q.next_sell}¤`
-                : "")
-          : "",
+                : ""),
       );
     }
   }
