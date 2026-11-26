@@ -201,20 +201,39 @@ function unlocked(text) {
 }
 
 /// Выжимка статьи в той версии, какая открыта сейчас, — строкой HTML без
-/// абзацев (§12.441). Ссылки в ней — просто слова: окно выжимок их не ведёт,
-/// дорога к статье там одна — «Подробнее». Выжимки нет — первый абзац статьи:
-/// сторож требует её у каждой, но справочник не механика, и пустая строка
-/// хуже, чем длинная.
+/// абзацев (§12.441). Ссылки в ней — кнопки, как в статье (§12.456): выжимка
+/// Антенны ведёт к анализатору и лаборатории, а строка лаборатории под ней
+/// не встаёт вовсе (`gistLinks`). Битая или закрытая ссылка остаётся словом.
+/// Выжимки нет — первый абзац статьи: сторож требует её у каждой, но
+/// справочник не механика, и пустая строка хуже, чем длинная.
 export function renderGist(key, nameOf) {
+  return inline(gistSource(key), (m, target, word) => {
+    const t = resolve(target.toLowerCase());
+    const label = word || nameOf(t) || t;
+    return hasArticle(t)
+      ? `<button class="wiki-link" data-key="wikigist${esc(key)}${t}" data-go="${esc(t)}">${esc(label)}</button>`
+      : esc(label);
+  });
+}
+
+/// Куда ведут открытые ссылки выжимки (§12.456): строку статьи, на которую
+/// уже показывает соседняя выжимка, страница «Новые записи» не повторяет.
+export function gistLinks(key) {
+  const out = new Set();
+  for (const m of gistSource(key).matchAll(/\[\[([a-z]+:[a-z0-9_]+)(?:\|.+?)?\]\]/gi)) {
+    const t = resolve(m[1].toLowerCase());
+    if (hasArticle(t)) out.add(t);
+  }
+  return out;
+}
+
+function gistSource(key) {
   const art = articles.get(key);
   if (!art) return "";
   const short = art.teaser && teased(key);
   let text = unlocked(short ? art.teaserGist : art.gist);
   if (!text.trim()) text = (bodyOf(key).split(/\n\s*\n/)[0] ?? "").trim();
-  return inline(text.replace(/^>\s?/gm, ""), (m, target, word) => {
-    const t = resolve(target.toLowerCase());
-    return esc(word || nameOf(t) || t);
-  });
+  return text.replace(/^>\s?/gm, "");
 }
 
 /// Строчная разметка: выделение, ссылки, переводы строк (§12.204).
