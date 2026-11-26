@@ -758,9 +758,25 @@ pub(crate) fn work_jobs(
                 // Находка под завалом (§12.415): содержимое ложится в саму
                 // клетку, а открывшийся ящик сразу назначен на него — иначе
                 // ящик без назначения выгнал бы находку на пол (§12.402).
+                // Назначение — только у ящика (§12.461): лежанка с пайками
+                // ящиком не становится, и пайки с неё уедут обычной уборкой.
+                // А `keeps` назначает ящик и пустым — под вещь, найденную потом.
+                let keeps = if bp.tile < 0 || examining {
+                    rules.keeps_of(was).to_vec()
+                } else {
+                    Vec::new()
+                };
+                let is_bin = rules.priority_of(to) > 0;
                 for (item, count) in found {
                     spill(&mut commands, &mut stacks, (bp.x, bp.y), item, count);
-                    bins.set(bp.x, bp.y, item, true);
+                    if is_bin {
+                        bins.set(bp.x, bp.y, item, true);
+                    }
+                }
+                if is_bin {
+                    for item in keeps {
+                        bins.set(bp.x, bp.y, item, true);
+                    }
                 }
                 commands.entity(assign.0).despawn();
                 commands.entity(cat_e).remove::<Assignment>();

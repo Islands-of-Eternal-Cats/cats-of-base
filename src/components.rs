@@ -2017,6 +2017,8 @@ pub(crate) struct TileRule {
     pub(crate) on: Option<i16>,
     /// Что снос кладёт в открывшийся ящик и на что его назначает (§12.415).
     pub(crate) holds: Vec<(usize, i32)>,
+    /// На что назначен открывшийся ящик, хоть и пустой (§12.461).
+    pub(crate) keeps: Vec<usize>,
     /// Руина (§12.376): ластику не даётся никогда. Сломанный шлюз — основа
     /// шлюза, и стёртый, он оставил бы базу без выхода, вернуть который нечем.
     pub(crate) fixed: bool,
@@ -2069,6 +2071,11 @@ impl TileRules {
     /// Что лежит под тайлом (§12.415); пусто — ничего.
     pub(crate) fn holds_of(&self, tile: i16) -> &[(usize, i32)] {
         self.of(tile).map_or(&[], |r| &r.holds)
+    }
+
+    /// На что назначен ящик, открывшийся из этого тайла (§12.461).
+    pub(crate) fn keeps_of(&self, tile: i16) -> &[usize] {
+        self.of(tile).map_or(&[], |r| &r.keeps)
     }
 
     pub(crate) fn capacity_of(&self, tile: i16) -> i32 {

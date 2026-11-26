@@ -1934,6 +1934,7 @@ impl Sim {
                         .iter()
                         .filter_map(|(id, &n)| item_index(id).map(|i| (i, n)))
                         .collect(),
+                    keeps: t.keeps.iter().filter_map(|id| item_index(id)).collect(),
                     examine: tile_index_of(&t.examine).map(|t| t as i16),
                     repair: tile_index_of(&t.repair).map(|t| t as i16),
                     repair_cost: t

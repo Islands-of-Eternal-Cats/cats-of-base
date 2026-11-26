@@ -42,6 +42,7 @@ export const LOOKS_LIKE = {
   unknown_table: "broken_gate",
   unknown_bed: "broken_gate",
   unknown_storage: "broken_gate",
+  unknown_pile: "broken_gate",
 };
 
 /// Материал пола по роли клетки. Неизвестное — бетон, как пол коридора.

@@ -255,6 +255,7 @@ fn sim_from(rows: &[&str]) -> Sim {
             // оно есть. Включает `set_on`.
             on: String::new(),
             holds: BTreeMap::new(),
+            keeps: Vec::new(),
             veiled: false,
             // Контейнера у схемы нет: ноль — без предела (§12.90), сделки в
             // синтетических мирах любого размера. Включает `set_lot`.
