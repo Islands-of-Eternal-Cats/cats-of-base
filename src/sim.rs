@@ -3521,6 +3521,74 @@ impl Sim {
     /// запланирована, один жест половину снял бы, а половину поставил, и результат
     /// зависел бы от того, что игрок делал раньше. Порядок «сначала отмена» ещё и
     /// безопаснее — отмена ничего не разрушает.
+    /// Инструмент «Разбор завала» (§12.432): ластик, который берёт **только
+    /// завал** (`TileRules::is_rubble`), — постройку им не снести, сколько рамкой
+    /// ни задень. Работает переключателем: есть в рамке неразмеченный завал —
+    /// размечаются все такие; весь уже размечен — разметка снимается. Снос тот
+    /// же, что у ластика и кнопки «Разобрать» (`add_blueprint(.., -1)`).
+    pub fn clear_rubble_rect(&mut self, x: i32, y: i32, w: i32, h: i32) -> bool {
+        note(&mut self.world, format!("clear_rubble {x} {y} {w} {h}"));
+        let rubble: Vec<(i32, i32)> = {
+            let (map, rules) = (
+                self.world.resource::<BaseMap>(),
+                self.world.resource::<TileRules>(),
+            );
+            rect_cells(x, y, w, h)
+                .filter(|&(cx, cy)| rules.is_rubble(map.tile_at(cx, cy)))
+                .collect()
+        };
+        let (marked, fresh): (Vec<_>, Vec<_>) = rubble
+            .into_iter()
+            .partition(|&(cx, cy)| self.demolish_planned(cx, cy));
+        let mut changed = false;
+        if fresh.is_empty() {
+            for (cx, cy) in marked {
+                changed |= self.cancel_blueprint(cx, cy);
+            }
+        } else {
+            for (cx, cy) in fresh {
+                changed |= self.add_blueprint(cx, cy, -1);
+            }
+        }
+        changed
+    }
+
+    /// Маска инструмента «Разбор завала» (§12.432): 1 там, где завал ещё не
+    /// размечен на разбор. Вид красит её теми же зелёными клетками, что маску
+    /// постройки (§12.302).
+    pub fn rubble_mask(&mut self) -> Vec<u8> {
+        let (w, h) = (self.width, self.height);
+        // Размеченный снос собираем разом: маска считается каждым кадром, пока
+        // инструмент в руке, и опрос чертежей на каждую клетку стоил бы
+        // клетки × чертежи.
+        let planned: std::collections::HashSet<(i32, i32)> = {
+            let mut q = self.world.query::<&Blueprint>();
+            q.iter(&self.world)
+                .filter(|bp| bp.tile < 0)
+                .map(|bp| (bp.x, bp.y))
+                .collect()
+        };
+        let (map, rules) = (
+            self.world.resource::<BaseMap>(),
+            self.world.resource::<TileRules>(),
+        );
+        let mut mask = vec![0u8; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                if rules.is_rubble(map.tile_at(x, y)) && !planned.contains(&(x, y)) {
+                    mask[(y * w + x) as usize] = 1;
+                }
+            }
+        }
+        mask
+    }
+
+    /// Размечен ли на клетке снос (чертёж с тайлом `-1`).
+    pub(crate) fn demolish_planned(&mut self, x: i32, y: i32) -> bool {
+        self.blueprint_at(x, y)
+            .is_some_and(|e| self.world.get::<Blueprint>(e).is_some_and(|bp| bp.tile < 0))
+    }
+
     pub fn plan_demolish_rect(&mut self, x: i32, y: i32, w: i32, h: i32) -> bool {
         note(&mut self.world, format!("erase_rect {x} {y} {w} {h}"));
         // Объект убирается **целиком и одним решением** (§12.160): половина
@@ -3622,7 +3690,7 @@ impl Sim {
             // целилась бы в него и не снимала больше ничего.
             let level = |&(cx, cy): &(i32, i32)| {
                 let t = map.tile_at(cx, cy);
-                if t >= 0 && rules.is_internal(t) && rules.is_solid(t) && !rules.is_fixed(t) {
+                if rules.is_rubble(t) {
                     usize::MAX
                 } else {
                     rules.level(t)

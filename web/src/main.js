@@ -353,13 +353,16 @@ onPanelClick(
     sendAction({ type: "fix", x: Number(b.dataset.x), y: Number(b.dataset.y) }),
 );
 // Завал (§12.381): «Разобрать» — тот же снос, что ластиком на клетке.
-onPanelClick(cellEl, ".rubble-clear", (b) =>
+onPanelClick(cellEl, ".rubble-clear", (b) => {
+  // ...и берёт в руку «Разбор завала» (§12.432): соседние завалы размечают
+  // следующими кликами или рамкой, а не ходкой «клетка → панель» на каждый.
   sendAction({
     type: "dismantle",
     x: Number(b.dataset.x),
     y: Number(b.dataset.y),
-  }),
-);
+  });
+  takeRubbleTool();
+});
 onPanelClick(cellEl, ".store-mark", (b) =>
   sendAction({
     type: "store",
@@ -1201,6 +1204,10 @@ let itemColors = []; // number[] — цвет предмета по индекс
 let mapCells = null; // Int-массив состояния карты
 let mode = "cursor"; // 'cursor' | 'build'
 let buildTile = 0; // индекс палитры, или -1 = разобрать (в режиме build)
+// «Разбор завала» (§12.432): ластик только по завалу, тайл `-2`. Тот же код в
+// воркере: им он выбирает `clear_rubble_rect` и маску `rubble_mask`.
+const RUBBLE_TOOL = -2;
+let rubbleBtn = null; // кнопка инструмента в палитре — её берёт и «Разобрать» в панели
 // Объект-штамп в руке (§12.162): -1 = игрок держит тайл или ластик. Тайл и
 // объект взаимно исключают друг друга — в руке всегда одно.
 let buildStruct = -1;
@@ -1526,6 +1533,7 @@ worker.onmessage = (e) => {
     cam = null; // карта нового мира своя — вписываем заново (§12.321)
     layout();
     drawMap(m.map);
+    syncRubbleTool();
     if (!triedResume) {
       triedResume = true;
       const saved = localStorage.getItem(SAVE_KEY);
@@ -1534,6 +1542,7 @@ worker.onmessage = (e) => {
   } else if (m.type === "map") {
     puffChanged(mapCells, m.map.cells);
     drawMap(m.map);
+    syncRubbleTool();
   } else if (m.type === "snapshot") {
     lastHand = m.hand ?? null;
     syncHandAim();
@@ -8812,6 +8821,14 @@ function modeChrome() {
         tint: null,
       };
     }
+    if (buildTile === RUBBLE_TOOL) {
+      return {
+        key: "erase",
+        label: "РАЗБОР ЗАВАЛА: клик или рамка · Esc — выход",
+        color: COLORS.erase,
+        tint: null,
+      };
+    }
     if (buildTile < 0) {
       return { key: "erase", label: "РАЗБОР", color: COLORS.erase, tint: null };
     }
@@ -8906,8 +8923,9 @@ function askBuildMask(r) {
   const key = `${tile}:${structure}:${buildRot}:${rect.join(",")}`;
   if (key === maskAsked) return;
   maskAsked = key;
-  // Курсор и ластик правилу не подчиняются.
-  if (tile < 0 && structure < 0 && buildMask) {
+  // Курсор и ластик правилу не подчиняются. «Разбор завала» — подчиняется
+  // (§12.432): его маска — неразмеченный завал.
+  if (tile < 0 && tile !== RUBBLE_TOOL && structure < 0 && buildMask) {
     buildMask = null;
     drawPlaceable();
   }
@@ -10227,6 +10245,18 @@ function buildToolbar() {
     structButtons.push({ btn: b, def: i });
     build.appendChild(b);
   });
+
+  // «Разбор завала» (§12.432): ластик только по завалу — постройку им не
+  // снести. Стоит перед полным ластиком и виден, пока на карте есть завал
+  // (`syncRubbleTool`). Его же берёт в руку «Разобрать» в панели завала.
+  const rb = mkTool(
+    '<span class="sw sw-rubble"></span><span>Разбор завала</span>',
+    () => selectBuild(RUBBLE_TOOL, rb),
+  );
+  liveTitle(rb, "Только завал: клик или рамка. Постройки не трогает");
+  rubbleBtn = rb;
+  build.appendChild(rb);
+  syncRubbleTool();
 
   const er = mkTool(
     '<span class="sw sw-erase"></span><span>Разобрать</span>',
@@ -20087,6 +20117,26 @@ function selectBuildIdle() {
   activate(null);
   applyModeChrome();
   askBuildMask(null);
+}
+
+// «Разобрать» в панели завала берёт инструмент «Разбор завала» (§12.432):
+// раскрывает «Постройку» (это и есть режим, §12.288) и кладёт его в руку.
+// Повторно не кладёт из рук — `selectBuild` по активной кнопке её снял бы.
+function takeRubbleTool() {
+  if (!rubbleBtn) return;
+  if (openSection !== "Постройка") openOnly("Постройка");
+  if (mode === "build" && buildTile === RUBBLE_TOOL) return;
+  selectBuild(RUBBLE_TOOL, rubbleBtn);
+}
+
+// Кнопка «Разбор завала» видна, пока на карте есть завал (§12.432): без него
+// инструменту нечего брать, и строка палитры отвечала бы кликом «ничего».
+// Ушёл последний — инструмент кладётся из рук.
+function syncRubbleTool() {
+  if (!rubbleBtn || !meta || !mapCells) return;
+  const any = mapCells.some((t) => isRubble(meta.palette[t]));
+  rubbleBtn.hidden = !any;
+  if (!any && mode === "build" && buildTile === RUBBLE_TOOL) selectBuildIdle();
 }
 
 function toolInHand() {

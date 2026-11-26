@@ -526,6 +526,10 @@ main#stage.mode-cursor #mode-banner {
 .sw-erase {
   background: repeating-linear-gradient(45deg, #7a2b3a 0 3px, #40151d 3px 6px);
 }
+/* «Разбор завала» (§12.432): цвет завала под косой штриховкой ластика. */
+.sw-rubble {
+  background: repeating-linear-gradient(45deg, #7a2b3a 0 2px, #4a4036 2px 6px);
+}
 .sw-cursor {
   background: #6cf0a0;
   border-radius: 50%;

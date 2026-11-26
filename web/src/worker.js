@@ -45,6 +45,9 @@ let lastMapVersion = -1;
 // она зависит и от карты, и от чертежей, а те меняются между кадрами, поэтому
 // считается каждым кадром заново. -1 = игрок не строит, считать нечего.
 let maskTile = -1;
+// Инструмент «Разбор завала» (§12.432): тайл `-2` в руке — ластик только по
+// завалу. Тот же код в `main.js` (`RUBBLE_TOOL`).
+const RUBBLE_TOOL = -2;
 // Рамка, которую игрок тянет прямо сейчас; нулевая ширина = рамки нет. Внутри
 // неё правило считается с накоплением, как при самой разметке: иначе превью
 // обещало бы девять полок из мазка три на три, а разметилось бы восемь.
@@ -154,6 +157,9 @@ function loop() {
       mask = structMask;
     } else if (maskTile >= 0) {
       mask = sim.buildable(maskTile, ...maskRect);
+    } else if (maskTile === RUBBLE_TOOL) {
+      // «Разбор завала» (§12.432): зелёным — неразмеченный завал.
+      mask = sim.rubble_mask();
     }
     postMessage({
       type: "snapshot",
@@ -215,6 +221,7 @@ onmessage = (e) => {
     // сначала снимает чертежи в рамке, и только если снимать было нечего —
     // планирует снос, который выполняют коты (см. `plan_demolish_rect` в ядре).
     if (m.tile >= 0) sim.add_blueprint_rect(m.x, m.y, m.w, m.h, m.tile);
+    else if (m.tile === RUBBLE_TOOL) sim.clear_rubble_rect(m.x, m.y, m.w, m.h);
     else sim.plan_demolish_rect(m.x, m.y, m.w, m.h);
   } else if (m.type === "place" && sim) {
     // Объект ставится **одним кликом**, без рамки: размер у него свой, и

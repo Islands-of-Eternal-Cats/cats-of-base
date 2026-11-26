@@ -3,6 +3,7 @@
 //! рулсета, без `open_base`.
 
 use super::*;
+use crate::map::rect_cells;
 
 const CORE: &str = include_str!("../../assets/rulesets/core.yaml");
 
@@ -1038,4 +1039,53 @@ fn the_shipped_ruleset_keeps_far_ruins_out_of_reach() {
         }
     }
     panic!("разобрали сбоку — «?» над ним так и не стал достижим");
+}
+
+/// «Разбор завала» (§12.432) размечает рамкой только завал: на стартовой базе
+/// рамка 3×3 вокруг кота (`(15, 3)` свободен) размечает восемь завалов и не
+/// трогает пол под котом; вторая такая же рамка снимает разметку. Маска
+/// гаснет на размеченном.
+#[test]
+fn the_shipped_ruleset_clears_only_rubble_with_the_rubble_tool() {
+    let mut sim = start();
+    let w = sim.world.resource::<BaseMap>().width;
+    assert_eq!(sim.rubble_mask()[(3 * w + 16) as usize], 1);
+    assert!(sim.clear_rubble_rect(14, 2, 3, 3));
+    for (x, y) in rect_cells(14, 2, 3, 3) {
+        assert_eq!(sim.demolish_planned(x, y), (x, y) != (15, 3), "({x}, {y})");
+    }
+    assert_eq!(
+        sim.rubble_mask()[(3 * w + 16) as usize],
+        0,
+        "размеченное гаснет"
+    );
+    assert!(sim.clear_rubble_rect(14, 2, 3, 3), "вторая рамка снимает");
+    assert!(!sim.demolish_planned(16, 3));
+}
+
+/// Постройку «Разбором завала» не снести (§12.432): рамка во всю открытую
+/// базу, где завала нет, не размечает ничего — тогда как ластик той же рамкой
+/// снёс бы верхний слой.
+#[test]
+fn the_rubble_tool_never_touches_a_building() {
+    let mut sim = opened(Sim::new(CORE).expect("рулсет"));
+    let (w, h) = {
+        let map = sim.world.resource::<BaseMap>();
+        (map.width, map.height)
+    };
+    let rubble = sim.rubble_mask().iter().filter(|&&m| m == 1).count();
+    sim.clear_rubble_rect(0, 0, w, h);
+    for (x, y) in rect_cells(0, 0, w, h) {
+        let t = sim.world.resource::<BaseMap>().tile_at(x, y);
+        if sim.demolish_planned(x, y) {
+            assert!(
+                sim.world.resource::<TileRules>().is_rubble(t),
+                "({x}, {y}) не завал, а размечен"
+            );
+        }
+    }
+    let marked = rect_cells(0, 0, w, h)
+        .filter(|&(x, y)| sim.demolish_planned(x, y))
+        .count();
+    assert_eq!(marked, rubble, "размечен ровно весь завал");
 }

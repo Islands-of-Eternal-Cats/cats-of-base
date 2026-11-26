@@ -2260,6 +2260,15 @@ impl TileRules {
         self.of(tile).is_some_and(|r| r.fixed)
     }
 
+    /// Завал (§12.372, §12.408): обломки вне палитры (`internal` и `solid`), но
+    /// не неснимаемое (`fixed`: шлюз, пыльный и починенный стол). Одно
+    /// выражение на верхний слой ластика и на инструмент «Разбор завала»
+    /// (§12.432): разойдись они — инструмент брал бы то, чего ластик завалом
+    /// не считает.
+    pub(crate) fn is_rubble(&self, tile: i16) -> bool {
+        tile >= 0 && self.is_internal(tile) && self.is_solid(tile) && !self.is_fixed(tile)
+    }
+
     /// До какого тайла обязан был дойти кот, чтобы этот открылся (§12.376).
     pub(crate) fn reached_of(&self, tile: i16) -> Option<i16> {
         self.of(tile).and_then(|r| r.reached)
