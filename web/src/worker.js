@@ -31,6 +31,7 @@ const READ_ONLY = new Set([
   "trace",
   "setBuildTile",
   "setHandAim",
+  "setHoverAim",
   "setNearbyPick",
   "setSquadPick",
 ]);
@@ -167,12 +168,19 @@ function loop() {
         // Чем чинить руину (§12.419, §12.426): `lacks` · `built` · `unseen` · `unknown`.
         fix: sim.fix_why(handAim.x, handAim.y),
       },
+      // Что значил бы приказ по клетке под курсором: им красится рамка
+      // наведения, пока выбран кот. Тот же `hand_tag`, что у выбранной клетки.
+      hover: hoverAim && {
+        key: hoverAim.key,
+        verb: sim.hand_tag(hoverAim.id, hoverAim.x, hoverAim.y),
+      },
     });
   }
   setTimeout(loop, 16);
 }
 
 let handAim = null;
+let hoverAim = null;
 
 onmessage = (e) => {
   const m = e.data;
@@ -192,6 +200,8 @@ onmessage = (e) => {
     sim?.set_squad_pick(new Int32Array(m.cells));
   } else if (m.type === "setHandAim") {
     handAim = m.aim;
+  } else if (m.type === "setHoverAim") {
+    hoverAim = m.aim;
   } else if (m.type === "setBuildTile") {
     // Инструмент в руке игрока — состояние вида, и живёт оно здесь: ядру он не
     // нужен ни для чего, кроме ответа «где этот тайл поставить можно».

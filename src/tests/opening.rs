@@ -1012,3 +1012,30 @@ fn the_shipped_ruleset_mutes_the_gate_until_its_part_is_seen() {
         "деталь знакома — знак есть"
     );
 }
+
+/// Рамка-приглашение не зовёт туда, куда не дойти (§12.431): на старте кот
+/// стоит в `(15, 3)`, а работают только по сторонам (`DIRS`), — завал сбоку
+/// (`(16, 3)`) ему по лапе, а «?» наискосок (`(16, 2)`), шлюз за шахтой и
+/// дальний ящик — нет: они в `cells_far`. Разобран завал сбоку — «?» над ним
+/// стал достижим. Пустота в список не идёт.
+#[test]
+fn the_shipped_ruleset_keeps_far_ruins_out_of_reach() {
+    let mut sim = start();
+    let w = sim.world.resource::<BaseMap>().width;
+    let at = |x: i32, y: i32| (y * w + x) as u32;
+    let far = sim.cells_far();
+    assert!(!far.contains(&at(16, 3)), "завал сбоку — по лапе");
+    assert!(far.contains(&at(16, 2)), "наискосок не дотянуться");
+    assert!(far.contains(&at(11, 0)), "шлюз за шахтой не достать");
+    assert!(far.contains(&at(8, 7)), "дальний ящик не достать");
+    assert!(!far.contains(&at(0, 0)), "пустота не в списке");
+
+    assert!(sim.plan_demolish_rect(16, 3, 1, 1));
+    for _ in 0..2000 {
+        sim.tick_n(1);
+        if !sim.cells_far().contains(&at(16, 2)) {
+            return;
+        }
+    }
+    panic!("разобрали сбоку — «?» над ним так и не стал достижим");
+}

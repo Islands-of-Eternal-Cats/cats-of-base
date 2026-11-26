@@ -63,6 +63,7 @@ const COLORS = {
   wallLight: 0x676c7a, // блик по верху стены
   shadow: 0x000000,
   select: 0x6cf0a0, // выбор кота / метка цели / взведённая клетка
+  act: 0xffc857, // наведение с котом в руке: приказ сделает дело с вещью или откроет дверь
   placeable: 0x6cf0a0, // режим стройки: сюда тайл в руке поставить можно (§12.302)
   cell: 0x9fb0ff, // осмотренная клетка: уголки вокруг того, о чём говорит панель
   erase: 0xff5566,
@@ -343,10 +344,13 @@ const cellEl = document.getElementById("cell");
 // миллисекунд. Регистрируется один раз, здесь, а не при отрисовке панели.
 // Руина (§12.379): «Обследовать», потом «Починить» — работу берёт любой
 // свободный кот; конкретного посылают приказом по самой клетке.
-onPanelClick(cellEl, ".ruin-fix", (b) =>
-  // Нечем чинить (§12.419) — кнопка тусклая, причина в подсказке.
-  b.classList.contains("off") ||
-  sendAction({ type: "fix", x: Number(b.dataset.x), y: Number(b.dataset.y) }),
+onPanelClick(
+  cellEl,
+  ".ruin-fix",
+  (b) =>
+    // Нечем чинить (§12.419) — кнопка тусклая, причина в подсказке.
+    b.classList.contains("off") ||
+    sendAction({ type: "fix", x: Number(b.dataset.x), y: Number(b.dataset.y) }),
 );
 // Завал (§12.381): «Разобрать» — тот же снос, что ластиком на клетке.
 onPanelClick(cellEl, ".rubble-clear", (b) =>
@@ -1226,6 +1230,9 @@ let selectedUnits = [];
 // повторный клик по ней отправляет туда выбранных котов (§12.58).
 let selectedCell = null; // { x, y } в тайлах
 let lastHand = null; // ответ ядра по выбранной клетке (§12.303)
+let lastHover = null; // тот же ответ по клетке под курсором — цвет рамки наведения
+let hoverTile = null; // клетка под курсором (только в режиме курсора)
+let hoverDrawn = ""; // по какому ответу рамка наведения нарисована последней
 let dragFrom = null; // якорь рамки (клетка, где нажали), null = не тянем
 let dragTo = null; // текущий угол рамки; переживает выход курсора за карту
 // Кот, стоявший под началом рамки. Запоминается в момент нажатия, а не читается
@@ -1530,6 +1537,11 @@ worker.onmessage = (e) => {
   } else if (m.type === "snapshot") {
     lastHand = m.hand ?? null;
     syncHandAim();
+    lastHover = m.hover ?? null;
+    syncHoverAim();
+    if (hoverAt && mode === "cursor" && hoverSig() !== hoverDrawn)
+      updateHover(hoverAt);
+    syncHandTip();
     // Перерисовываем рамку только на **изменение** маски: `snapshot` приходит
     // каждые 16 мс, а безусловный `clear()` живого `Graphics` — это разбор
     // фигуры шестьдесят раз в секунду на ровном месте (§12.84, §12.109).
@@ -1958,9 +1970,12 @@ function drawFurniture(g, id, x, y, tint, n) {
       shadowUnder(m, m, T - 2 * m, T - 2 * m);
       g.roundRect(px + m, py + m, T - 2 * m, T - 2 * m, 3).fill(0x5a4030);
       for (let i = 1; i < 4; i++) {
-        g.rect(px + m + 1, py + m + ((T - 2 * m) * i) / 4, T - 2 * m - 2, 1).fill(
-          0x2e2218,
-        );
+        g.rect(
+          px + m + 1,
+          py + m + ((T - 2 * m) * i) / 4,
+          T - 2 * m - 2,
+          1,
+        ).fill(0x2e2218);
       }
       g.moveTo(px + T * 0.5, py + T * 0.58)
         .lineTo(px + T - m - 1, py + T * 0.52)
@@ -5067,6 +5082,12 @@ function renderCatPanel(entities) {
 // Роль клетки словами: чем она полезна сверх цвета. Свойства тайла — та самая
 // схема «комната значит что-то сверх цвета» (§12.35), и все девять приезжают в
 // `meta.palette` целиком, так что второго списка в ядре заводить не пришлось.
+// Завал (§12.381, §12.418): простой и с находкой под ним (`veiled`). Одно
+// выражение на панель и подсказку у курсора.
+function isRubble(def) {
+  return def?.id === "rubble" || !!def?.veiled;
+}
+
 function tileRoles(def) {
   if (!def) return [];
   const roles = [];
@@ -5093,7 +5114,10 @@ function tileRoles(def) {
   // Строка общая на **все** непроходимые тайлы — стеллаж, столы парты,
   // лаборатории и места брифинга, — поэтому имени тайла в ней нет: оно стоит
   // заголовком. «Пройти можно» с §12.142 неправда: клетку обходят.
-  if (def.solid) roles.push("на клетку не встать — её обходят");
+  // У завала строки нет (§12.431): «её обходят» отвечала на вопрос, которого
+  // игрок не задавал, и стояла над единственным делом клетки — «Разобрать».
+  if (def.solid && !isRubble(def))
+    roles.push("на клетку не встать — её обходят");
   return roles;
 }
 
@@ -5228,9 +5252,10 @@ function renderCellPanel(snap) {
             : `пойдут: ${who}`
       }</div>`,
     );
-  } else if (cellReleases()) {
-    parts.push('<div class="cell-armed">ещё клик — снять выделение</div>');
   }
+  // Строки «ещё клик — снять выделение» нет (§12.431): повторный клик снимает
+  // выбор и без неё, а зелёная рамка под главной кнопкой клетки спорила с ней
+  // за взгляд. Жесту игрок учится сам.
 
   // Про уже посланного панель говорит фактом — тускло, как про приписанного.
   // Отдельной строки «придёт сюда сам» у парты здесь больше нет (§12.147): о
@@ -5407,9 +5432,12 @@ function renderCellPanel(snap) {
     parts.push(
       `<div class="cat-sub">${def.examine ? "что с этим делать, пока неясно" : fixWhy === "unseen" ? "чем чинить, пока неясно" : lacks ? why : "понятно, как чинить"}</div>`,
     );
+    // Кнопка — сразу под именем, как «Разобрать» у завала (§12.431).
     if (!hidden)
-      parts.push(
-        `<button class="tool ruin-fix${lacks ? " off" : ""}" data-key="fix@${x}, ${y}"` +
+      parts.splice(
+        1,
+        0,
+        `<button class="tool ruin-fix${lacks ? " off" : " primary"}" data-key="fix@${x}, ${y}"` +
           ` data-x="${x}" data-y="${y}"${lacks ? ` data-tip="${HAND_REFUSALS[fixWhy]}"` : ""}>${label}</button>`,
       );
   }
@@ -5422,9 +5450,14 @@ function renderCellPanel(snap) {
   // Завал над ящиком (§12.404) разбирается той же кнопкой.
   // С §12.418 так же — завал над пыльным столом: всё, что под «?», закрыто
   // сверху завалом (`veiled`), и содержимое видно только после разбора.
-  if ((def?.id === "rubble" || def?.veiled) && !bp) {
-    parts.push(
-      `<button class="tool rubble-clear" data-key="dismantle@${x}, ${y}"` +
+  // ⚠️ **Кнопка стоит сразу под именем** (§12.431): это единственное дело
+  // клетки, и ниже строк о роли и кучах её не замечали — игрок не знал, что
+  // делать с завалом. Заливка акцентом (`.primary`) — по той же причине.
+  if (isRubble(def) && !bp) {
+    parts.splice(
+      1,
+      0,
+      `<button class="tool primary rubble-clear" data-key="dismantle@${x}, ${y}"` +
         ` data-x="${x}" data-y="${y}">Разобрать ${def.cost ? `→ ${costChips(def.cost)}` : ""}</button>`,
     );
   }
@@ -8568,6 +8601,13 @@ function command(global, add) {
     else updateSelectionOverlay();
     return;
   }
+  // Повторный клик по осмотренной клетке, когда котов не выбрано, снимает
+  // выделение, как Escape (§12.430): приказывать некому, и второй клик иначе
+  // не делал бы ничего.
+  if (cellDeselects()) {
+    clearSelection();
+    return;
+  }
   const hand = handOnCell();
   if (hand && HAND_DOORS[hand]) {
     // Окно открывается **на клике**, а не когда кот дошёл (§12.349, §12.101):
@@ -8663,6 +8703,35 @@ function syncHandAim() {
     },
   });
 }
+// Рамка наведения спрашивает ядро о клетке под курсором — тем же
+// `hand_tag`, что и выбранная клетка, но отдельным прицелом: выбранная клетка
+// держит панель, а курсор бегает.
+let hoverAimKey = "";
+function hoverKey() {
+  return hoverTile && selectedUnits.length
+    ? `${selectedUnits[0]}@${hoverTile.x},${hoverTile.y}`
+    : "";
+}
+function syncHoverAim() {
+  const key = hoverKey();
+  if (key === hoverAimKey) return;
+  hoverAimKey = key;
+  worker.postMessage({
+    type: "setHoverAim",
+    aim: key && {
+      key,
+      id: selectedUnits[0],
+      x: hoverTile.x,
+      y: hoverTile.y,
+    },
+  });
+}
+// Что сейчас решает вид рамки: прицел и ответ на него. Сменилось — перерисовать.
+function hoverSig() {
+  const k = hoverKey();
+  const h = lastHover && lastHover.key === k ? lastHover.verb : "?";
+  return `${k}|${h}`;
+}
 function handOnCell() {
   const h = lastHand;
   return h && h.key === handAimKey() && selectedUnits.length ? h.verb : "";
@@ -8694,6 +8763,13 @@ function revealSection(tx, ty) {
 function cellReleases() {
   if (!selectedCell || selectedUnits.length !== 1) return false;
   return unitAt(selectedCell.x, selectedCell.y) === selectedUnits[0];
+}
+
+// Снимет выделение — если котов не выбрано и на клетке кота нет (§12.430);
+// с котом на клетке второй клик снова выбирает его (см. `command`).
+function cellDeselects() {
+  if (!selectedCell || selectedUnits.length) return false;
+  return !unitAt(selectedCell.x, selectedCell.y);
 }
 
 // Взведена — если по клетке есть кого отправить и есть куда идти.
@@ -8891,6 +8967,9 @@ function syncRuins() {
   // клеткой пока ничего не сделать, а мигающий ключ звал бы к кнопке, которой
   // в панели нет. Список считает ядро (`ruins_mute`, тот же `fix_why`).
   const mute = new Set(lastSnap?.ruins_mute ?? []);
+  // Куда не дотянется ни один кот (§12.431, `cells_far` из ядра), рамки нет, а
+  // знак приглушён: пульс звал бы к клетке, где клик ответит «не дойти».
+  const far = new Set(lastSnap?.cells_far ?? []);
   if (mapCells) {
     for (let i = 0; i < mapCells.length; i++) {
       const def = pal[mapCells[i]];
@@ -8905,7 +8984,9 @@ function syncRuins() {
       else if (def?.veiled) cells.push([i, "examine"]);
     }
   }
-  const key = cells.map(([i, v]) => `${i}${v[0]}`).join(",");
+  const key = cells
+    .map(([i, v]) => `${i}${v[0]}${far.has(i) ? "f" : ""}`)
+    .join(",");
   if (key === ruinKey) return;
   ruinKey = key;
   for (const n of ruinFrames.removeChildren()) n.destroy();
@@ -8924,12 +9005,14 @@ function syncRuins() {
     // От индекса клетки фазу не брать: у шлюза и ящика стартовой карты она
     // совпала бы до 9°.
     frame.phase = (k * 2.399963) % (2 * Math.PI);
-    ruinFrames.addChild(frame);
+    if (far.has(i)) frame.destroy();
+    else ruinFrames.addChild(frame);
     const mark = new Graphics(ruinGlyphContext(verb));
     mark.scale.set(size / 24);
     mark.x = x * TILE + (TILE - size) / 2;
     mark.y = y * TILE + (TILE - size) / 2;
     mark.tint = COLORS.placeable;
+    if (far.has(i)) mark.alpha = 0.4;
     ruinMarks.addChild(mark);
   }
 }
@@ -8979,6 +9062,74 @@ function sameMask(a, b) {
   if (!a || !b || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
+}
+
+// Подсказка у курсора (§12.431): что сделает клик по клетке под ним — словом,
+// там, куда игрок смотрит. Панель клетки стоит в дальнем углу, и на первом
+// завале партии её не читали: игрок не знал, что завал разбирают. Глагол
+// приходит из ядра (`hand_tag` по прицелу наведения) — вид только называет его
+// теми же словами, что панель (`HAND_WORDS`, `HAND_REFUSALS`). Без выбранного
+// кота клик лишь осматривает, поэтому у завала и руины подсказка ведёт к
+// кнопке панели, а не обещает разбор. На ходьбе и пустом полу молчит: «клик —
+// идти» над каждой клеткой — шум.
+const handTipEl = document.getElementById("handtip");
+let handTipOut = true; // курсор ушёл со сцены
+let handTipText = "";
+function handTipFor() {
+  if (handTipOut || mode !== "cursor" || !hoverTile || !meta || !mapCells)
+    return ["", ""];
+  if (topWindow()) return ["", ""];
+  const { x, y } = hoverTile;
+  if (unitAt(x, y)) return ["", ""];
+  if (selectedUnits.length) {
+    if (!lastHover || lastHover.key !== hoverKey()) return ["", ""];
+    const v = lastHover.verb;
+    if (HAND_WORDS[v]) return [`клик — ${HAND_WORDS[v]}`, "act"];
+    if (HAND_DOORS[v]) return [`клик — откроется: ${HAND_DOORS[v]}`, "act"];
+    if (HAND_REFUSALS[v]) return [HAND_REFUSALS[v], "no"];
+    return ["", ""];
+  }
+  const i = y * meta.width + x;
+  const def = meta.palette[mapCells[i]];
+  const mute = (lastSnap?.ruins_mute ?? []).includes(i);
+  const verb = isRubble(def)
+    ? "Разобрать"
+    : def?.examine
+      ? "Исследовать"
+      : def?.repair && !mute
+        ? "Починить"
+        : "";
+  if (!verb) return ["", ""];
+  const name = def.label || def.id;
+  if ((lastSnap?.cells_far ?? []).includes(i))
+    return [`${name}: пока не дотянуться`, "no"];
+  if (selectedCell && selectedCell.x === x && selectedCell.y === y)
+    return [`${name}: кнопка «${verb}» — в панели справа`, "act"];
+  return [`${name}: клик — что с ним делать`, "act"];
+}
+function syncHandTip() {
+  if (!handTipEl) return;
+  const [text, tone] = handTipFor();
+  const sig = `${tone}|${text}`;
+  if (sig !== handTipText) {
+    handTipText = sig;
+    handTipEl.textContent = text;
+    handTipEl.className = tone;
+    handTipEl.hidden = !text;
+  }
+  if (text && hoverAt) {
+    // У правого и нижнего края окна подсказка встаёт по другую сторону
+    // курсора — обрезанная фраза не подсказывает ничего.
+    const r = app.canvas.getBoundingClientRect();
+    const cx = r.left + hoverAt.x;
+    const cy = r.top + hoverAt.y;
+    const w = handTipEl.offsetWidth;
+    const h = handTipEl.offsetHeight;
+    const left = cx + 16 + w > innerWidth - 8 ? cx - 12 - w : cx + 16;
+    const top = cy + 18 + h > innerHeight - 8 ? cy - 10 - h : cy + 18;
+    handTipEl.style.left = `${Math.max(8, left)}px`;
+    handTipEl.style.top = `${Math.max(8, top)}px`;
+  }
 }
 
 function updateHover(global) {
@@ -9046,19 +9197,47 @@ function updateHover(global) {
     return;
   }
 
+  // Режим курсора: без выбранного кота рамки нет вовсе (клик по любой клетке
+  // значит одно — осмотр, и рамка ничего не различала бы), а с котом она
+  // называет цветом, что сделает приказ сюда (`hand_tag` из ядра): ход, дело
+  // с вещью или дверь, отказ. Над котом — выбор: клик возьмёт его.
+  if (mode === "cursor") {
+    hoverTile = t ? { x: t.tx, y: t.ty } : null;
+    syncHoverAim();
+    hoverDrawn = hoverSig();
+    syncHandTip();
+    askBuildMask(null);
+    if (!t || !selectedUnits.length) return;
+    let col = null;
+    if (unitAt(t.tx, t.ty)) col = COLORS.select;
+    else {
+      const k = hoverKey();
+      // Ответ ещё не приехал — кадр без рамки лучше вспышки не того цвета.
+      if (!lastHover || lastHover.key !== k) return;
+      const v = lastHover.verb;
+      if (HAND_WORDS[v] || HAND_DOORS[v]) col = COLORS.act;
+      else if (v) col = COLORS.erase;
+      else if (isWalkable(t.tx, t.ty)) col = COLORS.select;
+    }
+    if (col == null) return;
+    hoverRect
+      .rect(t.tx * TILE, t.ty * TILE, TILE, TILE)
+      .fill({ color: col, alpha: 0.2 })
+      .stroke({ color: col, width: 2, alpha: 0.85 });
+    return;
+  }
+  hoverTile = null;
+  syncHoverAim();
+  syncHandTip();
+
   // Во время протяжки показываем всю рамку — даже если курсор ушёл за карту.
   const r = dragFrom
     ? rectOf(dragFrom, dragTo)
     : t && { x: t.tx, y: t.ty, w: 1, h: 1 };
   askBuildMask(r);
   if (!r) return;
-  // Одна клетка с котом под ней подсвечивается как выбор, а не как разметка:
-  // отпустив кнопку здесь, игрок выберет кота, и цвет обязан сказать это до
-  // клика, а не после.
-  const overUnit =
-    mode === "cursor" && r.w === 1 && r.h === 1 && t && unitAt(t.tx, t.ty);
   const m = modeChrome();
-  const col = overUnit ? COLORS.select : (m.tint ?? m.color);
+  const col = m.tint ?? m.color;
   hoverRect
     .rect(r.x * TILE, r.y * TILE, r.w * TILE, r.h * TILE)
     .fill({ color: col, alpha: 0.28 })
@@ -9192,6 +9371,13 @@ app.canvas.addEventListener(
 // колесом с `ctrlKey`; без запрета он масштабирует всю страницу целиком. Если
 // тот же щипок пришёл и колесом, жест молчит: иначе зум удвоился бы.
 let gestureScale = 1;
+app.canvas.addEventListener("pointerleave", () => {
+  handTipOut = true;
+  syncHandTip();
+});
+app.canvas.addEventListener("pointermove", () => {
+  handTipOut = false;
+});
 app.canvas.addEventListener("gesturestart", (e) => {
   e.preventDefault();
   gestureScale = 1;
@@ -12319,10 +12505,10 @@ function syncRaidMap() {
           lastSnap?.home_met === false
             ? "вход снаружи ещё не осмотрен"
             : !near
-            ? "окрестности ещё не осмотрены"
-            : near.left > 0
-              ? `окрестности: ещё ${plural(near.left, "заметный выход", "заметных выхода", "заметных выходов")}`
-              : "окрестности обшарены: дальше мелочь, изредка деталь"
+              ? "окрестности ещё не осмотрены"
+              : near.left > 0
+                ? `окрестности: ещё ${plural(near.left, "заметный выход", "заметных выхода", "заметных выходов")}`
+                : "окрестности обшарены: дальше мелочь, изредка деталь"
         }</div>`,
     );
     return;

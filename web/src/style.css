@@ -478,6 +478,20 @@ main#stage.mode-cursor #mode-banner {
   background: #3e3c34;
 }
 
+/* Главное дело клетки (§12.431): «Разобрать» у завала, «Исследовать» и
+   «Починить» у руины. Стоит в панели первой и обведена акцентом с мягким
+   свечением — без него игрок кнопку не замечал и не знал, что делать с
+   завалом. От `.active` отличается свечением: заливка у них разная по силе,
+   а «в руках» — про палитру, где `.primary` не бывает. */
+.tool.primary {
+  border-color: var(--accent);
+  background: rgba(255, 200, 87, 0.1);
+  box-shadow: 0 0 10px rgba(255, 200, 87, 0.25);
+}
+.tool.primary:hover {
+  background: rgba(255, 200, 87, 0.18);
+}
+
 .sw {
   width: 14px;
   height: 14px;
@@ -1817,6 +1831,32 @@ body.crew-dragging * {
   pointer-events: none;
 }
 #livetip[hidden] {
+  display: none;
+}
+
+/* Подсказка у курсора (§12.431): что сделает клик. Сквозная для мыши, как
+   `#livetip`, и ниже модалов — над окном её нет вовсе (`handTipFor`). */
+#handtip {
+  position: fixed;
+  z-index: 9;
+  padding: 3px 8px;
+  background: rgba(21, 23, 31, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+#handtip.act {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+#handtip.no {
+  color: var(--muted, #9aa0ad);
+}
+#handtip[hidden] {
   display: none;
 }
 

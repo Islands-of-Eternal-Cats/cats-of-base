@@ -37,7 +37,7 @@ use crate::hauling::{
     HAND_HOLD, best_tiers, bin_pulls, free_space, plan_spend, stock_grid, stored_counts,
 };
 use crate::jobs::{BUILD_WORK, Plan, build_spot, may_build, site_clutter, work_spot};
-use crate::map::{BaseMap, rect_cells};
+use crate::map::{BaseMap, DIRS, rect_cells};
 use crate::missions::{
     Crew, crew_danger, crew_force, crew_traits, duration, exit_cells, faction_is_met, gather_squad,
     guide_cut, guide_of, guide_value, nearest_exit, node_cells, node_count, numbered_as, outcome,
@@ -7729,6 +7729,56 @@ impl Sim {
         out
     }
 
+    /// Клетки, до которых сейчас не дотянется ни один кот на базе (§12.431):
+    /// ни сама клетка, ни сосед с полом не достижимы тем же `Reach`, каким
+    /// раздатчики ищут место работы (`work_spot`). Вид не пульсирует рамкой над
+    /// такой руиной или «?» — приглашение звало бы туда, куда не дойти. Пустота
+    /// в список не идёт. Индексы клеток row-major.
+    pub(crate) fn cells_far(&mut self) -> Vec<u32> {
+        let cats: Vec<(i32, i32)> = {
+            let mut q = self
+                .world
+                .query_filtered::<&Position, (With<UnitId>, Without<Away>)>();
+            q.iter(&self.world).map(|p| (p.x, p.y)).collect()
+        };
+        let map = self.world.resource::<BaseMap>();
+        let rules = self.world.resource::<TileRules>();
+        let (w, h) = (map.width, map.height);
+        let mut reached = vec![false; (w * h) as usize];
+        for at in cats {
+            let reach = Reach::all(map, rules, at);
+            for y in 0..h {
+                for x in 0..w {
+                    if reach.dist_at(x, y).is_some() {
+                        reached[(y * w + x) as usize] = true;
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                if !map.has_floor(x, y) {
+                    continue;
+                }
+                let near = std::iter::once((x, y))
+                    .chain(DIRS.iter().map(|(dx, dy)| (x + dx, y + dy)))
+                    .any(|(cx, cy)| {
+                        cx >= 0
+                            && cy >= 0
+                            && cx < w
+                            && cy < h
+                            && reached[(cy * w + cx) as usize]
+                            && map.walkable(rules, cx, cy)
+                    });
+                if !near {
+                    out.push((y * w + x) as u32);
+                }
+            }
+        }
+        out
+    }
+
     pub(crate) fn home_met(&self) -> bool {
         let id = &self.outskirts.raided;
         if id.is_empty() {
@@ -9025,6 +9075,7 @@ impl Sim {
         let exit_open = self.exit_open();
         let home_met = self.home_met();
         let ruins_mute = self.ruins_mute();
+        let cells_far = self.cells_far();
         // Отряды поимённо: с §12.152 у каждого гаража свой состав, и панель
         // обязана называть его словом — иначе кнопка вылазки берёт отряд ниоткуда.
         let nodes: Vec<NodeSnap> = {
@@ -9420,6 +9471,7 @@ impl Sim {
             exit_open,
             home_met,
             ruins_mute,
+            cells_far,
             nodes,
             nearby,
             free: free_ids,
