@@ -695,6 +695,30 @@ fn an_ordered_cat_clears_the_rubble_itself() {
     assert!(sim.scrap_total() > 0, "разбор дал лом");
 }
 
+/// **Инструмент «Расчистить» открывает первый разбор с клетки** (§12.449):
+/// до него тулбару показывать нечего, после — признак не гаснет ни от снятой
+/// разметки, ни от загрузки партии.
+#[test]
+fn the_first_rubble_clearing_opens_the_clearing_tool() {
+    let mut sim = start();
+    assert!(!sim.rubble_met(), "на старте завал не разбирали");
+    assert!(sim.plan_demolish(14, 3), "разбор размечен кнопкой клетки");
+    assert!(sim.rubble_met(), "первый разбор открыл инструмент");
+    assert!(sim.plan_demolish(14, 3), "разметка снята тем же кликом");
+    assert!(sim.rubble_met(), "снятая разметка инструмент не прячет");
+    let saved = sim.save().expect("снимок");
+    let loaded = Sim::load(CORE, &saved).expect("загрузка");
+    assert!(loaded.rubble_met(), "загруженная партия помнит разбор");
+}
+
+/// Приказ выбранному коту по завалу — та же дорога к инструменту (§12.449).
+#[test]
+fn an_ordered_clearing_opens_the_clearing_tool_too() {
+    let mut sim = start();
+    assert!(sim.command_at("excellent", 14, 3), "приказ принят");
+    assert!(sim.rubble_met(), "приказ по завалу открыл инструмент");
+}
+
 /// Повторный приказ по уже размеченному разбору его не отменяет, как ластик,
 /// а отдаёт коту (§12.395).
 #[test]

@@ -2508,6 +2508,7 @@ impl Sim {
         world.insert_resource(RecruitsMet(vec![false; rs.recruits.len()]));
         world.insert_resource(Mastery::default());
         world.insert_resource(Reached::default());
+        world.insert_resource(RubbleMet::default());
         // Лента новостей (§12.120). Базовой линии у неё пока нет: снимет её
         // первый же `note_news`, и стартовая доступность новостью не станет.
         world.insert_resource(News::default());
@@ -2976,7 +2977,13 @@ impl Sim {
         if !may_build(&plan, self.world.resource::<TileRules>(), (x, y), t) {
             return false;
         }
-        self.spawn_blueprint(x, y, t)
+        let rubble = t < 0 && self.rubble_at(x, y);
+        let placed = self.spawn_blueprint(x, y, t);
+        // Первый разбор завала открывает инструмент «Расчистить» (§12.449).
+        if placed && rubble {
+            self.world.resource_mut::<RubbleMet>().0 = true;
+        }
+        placed
     }
 
     /// Чертёж на клетке без единых ворот: уже стоящий тайл не размечается, а
@@ -7885,6 +7892,11 @@ impl Sim {
         out
     }
 
+    /// Разбирали ли завал хоть раз (§12.449) — то, что едет в снимок.
+    pub(crate) fn rubble_met(&self) -> bool {
+        self.world.resource::<RubbleMet>().0
+    }
+
     pub(crate) fn home_met(&self) -> bool {
         let id = &self.outskirts.raided;
         if id.is_empty() {
@@ -9582,6 +9594,7 @@ impl Sim {
             exits,
             exit_open,
             home_met,
+            rubble_met: self.rubble_met(),
             ruins_mute,
             cells_far,
             nodes,

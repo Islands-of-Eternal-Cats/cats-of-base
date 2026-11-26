@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 56;
+pub(crate) const FORMAT: u32 = 57;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -187,6 +187,9 @@ pub(crate) const SAVED: &[&str] = &[
     // До каких тайлов кот хоть раз мог дойти (§12.376): без этого загруженная
     // партия убрала бы шлюз из палитры, если путь к руине с тех пор перекрыт.
     "Reached",
+    // Разбирали ли завал хоть раз (§12.449): без этого загруженная партия
+    // снова спрятала бы инструмент «Расчистить».
+    "RubbleMet",
     "Chronicle",
     "Goals",
     "Raids",
@@ -393,6 +396,9 @@ pub(crate) struct StateDto {
     /// `tiles:`. `FORMAT` 54.
     #[serde(default)]
     pub(crate) reached: Vec<bool>,
+    /// Разбирали ли завал хоть раз (§12.449). `FORMAT` 57.
+    #[serde(default)]
+    pub(crate) rubble_met: bool,
     /// Журнал сработавших событий: `(индекс события, была ли база готова)`.
     pub(crate) chronicle: Vec<(usize, bool)>,
     /// Взятые цели: `(индекс цели, тик взятия)` (§12.58).
@@ -1032,6 +1038,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
             recruits_met: world.resource::<RecruitsMet>().0.clone(),
             mastery: world.resource::<Mastery>().0.clone(),
             reached: world.resource::<Reached>().0.clone(),
+            rubble_met: world.resource::<RubbleMet>().0,
             chronicle: chronicle.0.iter().map(|h| (h.def, h.ready)).collect(),
             goals: world
                 .resource::<Goals>()
@@ -1226,6 +1233,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
             mastery.raise(skill, level);
         }
     }
+    world.resource_mut::<RubbleMet>().0 = s.rubble_met;
     {
         let mut reached = world.resource_mut::<Reached>();
         for (tile, &r) in s.reached.iter().enumerate() {

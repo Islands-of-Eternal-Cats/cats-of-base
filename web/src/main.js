@@ -353,17 +353,18 @@ onPanelClick(
     b.classList.contains("off") ||
     sendAction({ type: "fix", x: Number(b.dataset.x), y: Number(b.dataset.y) }),
 );
-// Завал (§12.381): «Разобрать» — тот же снос, что ластиком на клетке.
-onPanelClick(cellEl, ".rubble-clear", (b) => {
-  // ...и берёт в руку «Разбор завала» (§12.432): соседние завалы размечают
-  // следующими кликами или рамкой, а не ходкой «клетка → панель» на каждый.
+// Завал (§12.381): «Расчистить» (до §12.448 «Разобрать») — тот же снос, что ластиком на клетке.
+// Только эту клетку (§12.449, отменяет «берёт в руку» §12.432): инструмент в
+// руке молча меняет смысл следующего клика по карте — клик по коту размечал бы
+// завал под ним. Инструмент на всю базу предлагает кнопка в тулбаре, которая
+// встаёт с кольцом «новое» после первого разбора.
+onPanelClick(cellEl, ".rubble-clear", (b) =>
   sendAction({
     type: "dismantle",
     x: Number(b.dataset.x),
     y: Number(b.dataset.y),
-  });
-  takeRubbleTool();
-});
+  }),
+);
 onPanelClick(cellEl, ".store-mark", (b) =>
   sendAction({
     type: "store",
@@ -1200,10 +1201,19 @@ let itemColors = []; // number[] — цвет предмета по индекс
 let mapCells = null; // Int-массив состояния карты
 let mode = "cursor"; // 'cursor' | 'build'
 let buildTile = 0; // индекс палитры, или -1 = разобрать (в режиме build)
-// «Разбор завала» (§12.432): ластик только по завалу, тайл `-2`. Тот же код в
-// воркере: им он выбирает `clear_rubble_rect` и маску `rubble_mask`.
+// «Расчистить» (§12.432, §12.448; до неё «Разбор завала»): ластик только по
+// завалу, тайл `-2`. Тот же код в воркере: им он выбирает `clear_rubble_rect` и маску `rubble_mask`.
 const RUBBLE_TOOL = -2;
-let rubbleBtn = null; // кнопка инструмента в палитре — её берёт и «Разобрать» в панели
+let rubbleBtn = null; // плоская кнопка «Расчистить» — её берёт и «Расчистить» в панели
+let eraseBtn = null; // плоская кнопка «Снести» — видна вместе с «Постройкой» (§12.449)
+// Двери-инструменты в рейке и блок правил в «Приказах» (§12.451).
+let buildDoor = null;
+let ordersDoor = null;
+let rulesBox = null;
+// `rubble_met` прошлого снимка (§12.449): `null` — снимка этого мира ещё не
+// было. Кольцо «новое» зажигает только переход `false → true` на глазах
+// игрока: загруженная партия, где завал давно разбирали, кольца не получит.
+let rubbleSeen = null;
 // Объект-штамп в руке (§12.162): -1 = игрок держит тайл или ластик. Тайл и
 // объект взаимно исключают друг друга — в руке всегда одно.
 let buildStruct = -1;
@@ -1488,6 +1498,7 @@ worker.onmessage = (e) => {
     soundQuiet = true;
     awaySeen = null;
     knownSeen = -1;
+    rubbleSeen = null;
     teachSeen = null;
     meta = m.meta;
     paletteColors = meta.palette.map((p) => hex(p.color));
@@ -3280,6 +3291,28 @@ function days(n) {
 
 function renderSnapshot(snap) {
   lastSnap = snap;
+  // Первый разбор завала на глазах игрока (§12.449): кнопка «Расчистить»
+  // встаёт с кольцом «новое». Помним по снимкам, а не по `lastSnap` на
+  // `ready`: тот ещё держит прошлый мир.
+  const rubbleFirst = snap.rubble_met && rubbleSeen === false;
+  if (rubbleFirst) rubbleBtn?.classList.add("fresh");
+  rubbleSeen = !!snap.rubble_met;
+  syncRubbleTool();
+  // Тем же первым разбором раскрываются «Приказы», и «Расчистить» в них
+  // вспыхивает (§12.452): игрок видит, где живёт инструмент на всю базу, ровно
+  // когда узнал действие на одной клетке. Только если ничего не открыто —
+  // чужую панель или окно не отбираем; инструмент в руку не кладём (§12.449).
+  if (rubbleFirst && rubbleBtn && !rubbleBtn.hidden) {
+    if (openSection === null && !topWindow()) openOnly("Приказы");
+    rubbleBtn.classList.remove("flash");
+    void rubbleBtn.offsetWidth;
+    rubbleBtn.classList.add("flash");
+    rubbleBtn.addEventListener(
+      "animationend",
+      () => rubbleBtn.classList.remove("flash"),
+      { once: true },
+    );
+  }
   noteWikiOpened();
   // Тик сменился — доля тика начинается заново. Отметка общая на всех: тикают
   // коты вместе, и второй такой счётчик на каждого разошёлся бы с этим.
@@ -3722,6 +3755,7 @@ function renderSnapshot(snap) {
   syncNewsMarks();
   syncStockWindow();
   syncTileButtons(snap.techs, snap.tiles_open, snap.structures_open);
+  syncToolbarBare();
   syncRuins();
   renderNotePanel(snap.notes, snap.tick);
   renderGoalsPanel(snap.goals, snap.goals_required, snap);
@@ -5470,7 +5504,7 @@ function renderCellPanel(snap) {
       1,
       0,
       `<button class="tool primary rubble-clear" data-key="dismantle@${x}, ${y}"` +
-        ` data-x="${x}" data-y="${y}">Разобрать ${def.cost ? `→ ${costChips(def.cost)}` : ""}</button>`,
+        ` data-x="${x}" data-y="${y}">Расчистить ${def.cost ? `→ ${costChips(def.cost)}` : ""}</button>`,
     );
   }
 
@@ -8752,8 +8786,9 @@ const HAND_WORDS = {
   // Руина отвечает работой над собой (§12.379): пойдёт именно этот кот.
   examine: "исследовать",
   repair: "починить",
-  // Завал отвечает разбором (§12.395): тот же снос, что у кнопки «Разобрать».
-  dismantle: "разобрать завал",
+  // Завал отвечает разбором (§12.395): тот же снос, что у кнопки «Расчистить»
+  // (§12.448 — глагол один на кнопку в панели и на инструмент в тулбаре).
+  dismantle: "расчистить завал",
   site: "отнести на стройку",
   shop: "отнести к станку",
 };
@@ -8917,13 +8952,18 @@ function modeChrome() {
     if (buildTile === RUBBLE_TOOL) {
       return {
         key: "erase",
-        label: "РАЗБОР ЗАВАЛА: клик или рамка · Esc — выход",
+        label: "РАСЧИСТКА: клик или рамка · Esc — выход",
         color: COLORS.erase,
         tint: null,
       };
     }
     if (buildTile < 0) {
-      return { key: "erase", label: "РАЗБОР", color: COLORS.erase, tint: null };
+      return {
+        key: "erase",
+        label: "СНОС: клик или рамка · Esc — выход",
+        color: COLORS.erase,
+        tint: null,
+      };
     }
     const p = meta?.palette?.[buildTile];
     return {
@@ -9016,7 +9056,7 @@ function askBuildMask(r) {
   const key = `${tile}:${structure}:${buildRot}:${rect.join(",")}`;
   if (key === maskAsked) return;
   maskAsked = key;
-  // Курсор и ластик правилу не подчиняются. «Разбор завала» — подчиняется
+  // Курсор и ластик правилу не подчиняются. «Расчистить» — подчиняется
   // (§12.432): его маска — неразмеченный завал.
   if (tile < 0 && tile !== RUBBLE_TOOL && structure < 0 && buildMask) {
     buildMask = null;
@@ -9204,7 +9244,7 @@ function handTipFor() {
   const def = meta.palette[mapCells[i]];
   const mute = (lastSnap?.ruins_mute ?? []).includes(i);
   const verb = isRubble(def)
-    ? "Разобрать"
+    ? "Расчистить"
     : def?.examine
       ? "Исследовать"
       : def?.repair && !mute
@@ -9881,6 +9921,10 @@ window.addEventListener("keydown", (e) => {
     if (mode !== "cursor") {
       if (toolInHand() && openSection === "Постройка") {
         selectBuildIdle();
+      } else if (toolInHand() && openSection === "Приказы") {
+        // «Расчистить» и «Снести» (§12.451): инструмент кладётся, панель
+        // «Приказов» остаётся — её свернёт следующее нажатие.
+        selectCursor();
       } else {
         openOnly(null);
         if (mode !== "cursor") selectCursor();
@@ -9988,7 +10032,9 @@ let openSection = null;
 // «Лом» здесь вместе с «Постройкой» намеренно: рамка на склад — та же разметка,
 // и гонять игрока через курсор между двумя рамками было бы налогом на ровном
 // месте.
-const TOOL_SECTIONS = new Set(["Постройка"]);
+// С §12.451 разделов два и оба — инструменты: «Приказы» держат «Расчистить» и
+// «Снести», то есть ту же разметку, и глушить их на время разметки нельзя.
+const TOOL_SECTIONS = new Set(["Постройка", "Приказы"]);
 
 // `sw` — класс образца слева от заголовка, как у кнопок-дверей выше: раздел
 // стоит в одном столбце с ними, и заголовок без значка выпадает из ряда. Ряд
@@ -10089,6 +10135,17 @@ function openOnly(title) {
     s.head.classList.toggle("active", on);
     s.body.hidden = !on;
   }
+  syncToolbarBare();
+}
+
+// Двери-инструменты в рейке (§12.451): «Постройки» и «Приказы» раскрывают
+// свою панель рядом с рейкой, а не окно — в режиме стройки карта обязана быть
+// видна (§12.101). Открытое окно дверь снимает: игрок пошёл к карте. Повторный
+// клик по открытой — свернуть, то есть вернуться на «Базу».
+function toggleToolDoor(title) {
+  const shown = openSection === title && !topWindow();
+  closeAllWindows();
+  openOnly(shown ? null : title);
 }
 
 // Кнопка верхнего уровня складывает раскрытый раздел (§12.194). Тулбар — один
@@ -10140,6 +10197,8 @@ document.addEventListener(
     // значило бы уронить столбец под мышью: «Вылазки» уезжали вверх до
     // отпускания кнопки, и клик не доходил ни до какой двери.
     if (document.getElementById("toolbar")?.contains(t)) return;
+    // Рейка тоже (§12.451): двери-инструменты переключают панель сами, кликом.
+    if (screenBarEl?.contains(t)) return;
     // Раскрытая «Постройка» — это режим, поэтому уходит он вместе с ней.
     if (openSection === "Постройка") openOnly(null);
     else selectCursor();
@@ -10183,6 +10242,21 @@ function buildToolbar() {
   // единственный раздел-инструмент, то есть то, чем размечают карту, и держать
   // его в конце списка значило бы уводить самый частый клик за три двери.
   const build = mkSection(el, "Постройка", "sw-build");
+  // С §12.451 заголовков разделов на экране нет: раздел открывает дверь в
+  // рейке, а колонка тулбара — его выезжающая панель.
+  buildDoor = mkTool(doorHtml("build", "Постройки"), () =>
+    toggleToolDoor("Постройка"),
+  );
+  liveTitle(buildDoor, "Что поставить на базе и почём");
+  buildDoor.hidden = true;
+  // «Приказы» (§12.451): разовые работы на карте — «Расчистить», «Снести» — и
+  // постоянные приказы котам, «Правила».
+  const orders = mkSection(el, "Приказы");
+  ordersDoor = mkTool(doorHtml("orders", "Приказы"), () =>
+    toggleToolDoor("Приказы"),
+  );
+  liveTitle(ordersDoor, "Расчистить, снести и правила для котов");
+  ordersDoor.hidden = true;
 
   // Ещё две двери, по тому же доводу (§12.118): реестр живёт окном, инструмент
   // — разделом. Раздел из одной кнопки был бы лишним кликом, а выбирать в нём
@@ -10339,23 +10413,40 @@ function buildToolbar() {
     build.appendChild(b);
   });
 
-  // «Разбор завала» (§12.432): ластик только по завалу — постройку им не
-  // снести. Стоит перед полным ластиком и виден, пока на карте есть завал
-  // (`syncRubbleTool`). Его же берёт в руку «Разобрать» в панели завала.
+  // **Разбор вынесен из «Постройки» двумя плоскими кнопками** (§12.448):
+  // «поставить» и «убрать» — разные намерения, а первое дело партии — расчистка,
+  // когда палитра ещё пуста (§12.372). Стоят сразу под разделом, без своего
+  // заголовка: раздел ради двух кнопок — лишний клик. Режим держится на
+  // инструменте в руке, а не на раскрытом разделе: кнопка сворачивает
+  // «Постройку» и берёт инструмент, повторный клик кладёт его — режима без
+  // инструмента у них нет (`putDownTool`).
+  //
+  // «Расчистить» (§12.432): ластик только по завалу — постройку им не снести.
+  // Виден, пока на карте есть завал, — и только после первого разбора с
+  // клетки (§12.449, `syncRubbleTool`): кнопка в панели завала размечает одну
+  // клетку, а эта встаёт рядом с кольцом «новое» — инструмент предлагают, а не
+  // суют в руку.
   const rb = mkTool(
-    '<span class="sw sw-rubble"></span><span>Разбор завала</span>',
-    () => selectBuild(RUBBLE_TOOL, rb),
+    '<span class="sw sw-rubble"></span><span>Расчистить</span>',
+    () => takeFlatTool(RUBBLE_TOOL, rb),
   );
   liveTitle(rb, "Только завал: клик или рамка. Постройки не трогает");
   rubbleBtn = rb;
-  build.appendChild(rb);
+  orders.appendChild(rb);
   syncRubbleTool();
 
+  // «Снести» — полный ластик: снимает один слой с чего угодно (§12.237).
   const er = mkTool(
-    '<span class="sw sw-erase"></span><span>Разобрать</span>',
-    () => selectBuild(-1, er),
+    '<span class="sw sw-erase"></span><span>Снести</span>',
+    () => takeFlatTool(-1, er),
   );
-  build.appendChild(er);
+  liveTitle(er, "Снимает верхний слой: постройку до пола, пол до пустоты");
+  // Прячется вместе с «Постройкой» (§12.449, `syncTileButtons`): что нельзя
+  // построить, того нельзя и разобрать (§12.372), и при пустой палитре
+  // сносить нечего — кнопка отвечала бы на клик ничем.
+  er.hidden = true;
+  eraseBtn = er;
+  orders.appendChild(er);
 
   // Вылазки — **дверь, а не раздел** (сужает §12.66): щелчок ведёт прямо в штаб
   // (§12.71), где рядом стоят состав, прогноз и причина отказа словом. Раздел
@@ -10415,7 +10506,13 @@ function buildToolbar() {
 
   // Правила симуляции — не режимы ввода, а тумблеры поведения котов, поэтому
   // они живут отдельно от инструментов и своей подсветкой их не сбивают.
-  const rules = mkSection(el, "Правила");
+  // С §12.451 — блок внутри «Приказов»: правило и есть приказ, только
+  // постоянный. Прячется целиком, пока переключать нечего (§12.387).
+  const rules = document.createElement("div");
+  rules.className = "sec-body";
+  rules.innerHTML = '<div class="tt">Правила</div>';
+  orders.appendChild(rules);
+  rulesBox = rules;
 
   // Подсветку кнопки ведёт снимок, а не сам клик (§12.96): правда о правиле
   // живёт в ядре и переживает загрузку партии, а зеркало в виде — нет.
@@ -11357,6 +11454,21 @@ function syncTileButtons(techs, open, structOpen) {
   for (const { btn, def } of structButtons) {
     btn.hidden = (structOpen ?? [])[def] === false;
     syncWikiMark(btn, `structure:${(meta.structures ?? [])[def]?.id}`);
+  }
+  // Пустая палитра — нет и раздела (§12.448): до осмотра входа строить нечего
+  // (§12.372), а заголовок «Постройка» над пустотой звал бы туда, где ничего
+  // нет. Ворота палитры монотонны (технологии и журналы не забываются),
+  // поэтому раздел появляется один раз — вместе с новостью о первой постройке.
+  const buildSec = sections.find((sec) => sec.title === "Постройка");
+  if (buildSec) {
+    const empty = ![...tileButtons, ...structButtons].some(
+      (b) => !b.btn.hidden,
+    );
+    const wrap = buildSec.head.parentElement;
+    if (wrap.hidden !== empty) wrap.hidden = empty;
+    if (buildDoor && buildDoor.hidden !== empty) buildDoor.hidden = empty;
+    if (eraseBtn && eraseBtn.hidden !== empty) eraseBtn.hidden = empty;
+    if (empty && openSection === "Постройка") openOnly(null);
   }
 }
 
@@ -13060,7 +13172,7 @@ function openNewsTarget(kind, def) {
     if (door === "rules") {
       readNews("rule", [def]);
       closeOtherWindows();
-      openOnly("Правила");
+      openOnly("Приказы");
     } else if (door === "raid") openRaidWindow();
     else if (door === "dossier") openDossier();
     else openStockWindow();
@@ -13699,14 +13811,12 @@ function syncDoors(snap) {
   // про лежанку («Беречь себя»), и пока ни того, ни другого на базе не
   // стояло, переключать там нечего. Журнал застройки монотонен: снесённый
   // склад раздел обратно не прячет.
-  const rulesSec = sections.find((sec) => sec.title === "Правила");
-  if (rulesSec) {
+  if (rulesBox) {
     const built = snap.tiles_built ?? [];
     const hide = !(meta?.palette ?? []).some(
       (p, i) => built[i] && (p.capacity > 0 || p.rest > 0),
     );
-    rulesSec.head.parentElement.hidden = hide;
-    if (hide && openSection === "Правила") openOnly(null);
+    if (rulesBox.hidden !== hide) rulesBox.hidden = hide;
   }
   // Шестой случай пропажи двери (§12.380): база не видела ещё ни одного
   // предмета — окно «Ресурсы» пусто целиком (строки прячет тот же `seen`,
@@ -13781,8 +13891,14 @@ function syncNewsMarks() {
   // У палитры окна нет, метку носит заголовок раздела — и гаснет она на
   // **закрытии** раздела, как у окон (§12.120): пока раздел раскрыт,
   // подсвеченная кнопка и есть весь ответ на «что нового».
-  const build = sections.find((sec) => sec.title === "Постройка");
-  build?.head.classList.toggle("fresh", newsPending("tile").length > 0);
+  // С §12.451 — на двери «Постройки» в рейке; у «Приказов» — от кольца на
+  // «Расчистить» (§12.449) и от нового правила, которое живёт в них.
+  buildDoor?.classList.toggle("fresh", newsPending("tile").length > 0);
+  ordersDoor?.classList.toggle(
+    "fresh",
+    !!rubbleBtn?.classList.contains("fresh") ||
+      newsPending("rule", ruleDefsAt("rules")).length > 0,
+  );
   const fresh = newlyOpen("tile");
   for (const { btn, def } of tileButtons) {
     btn.classList.toggle("fresh", fresh.has(def));
@@ -15716,7 +15832,14 @@ const wikiAnnounced = new Map();
 // ждут в справочнике. Навык, параметр и перк игрок и так видит у кота —
 // полоской, которая растёт у него на глазах; заказ сам встаёт карточкой в
 // штабе, первой, мимо неё не пройти. Выжимка о них повторяла бы экран.
-const WIKI_SILENT = new Set(["skill", "stat", "perk", "raid"]);
+// Фракции, репутация и известность (§12.450) — тоже: о них говорит заказ в
+// штабе (заказчик, «нужна репутация 30», «нужна известность 20»), а
+// всплывали они на возвращении отряда пачкой, поверх его доклада.
+const WIKI_SILENT = new Set(["skill", "stat", "perk", "raid", "faction"]);
+// Статьи лора, которые открываются тихо (§12.450): шкалы из шапки и
+// «Вылазки» — их открывает стол брифинга (§12.386), а дорога от него одна — в
+// штаб, где сила, сложность и прогноз стоят на карточке заказа.
+const WIKI_SILENT_KEYS = new Set(["lore:standing", "lore:fame", "lore:raids"]);
 
 /// Открывается ли статья молча (§12.445, §12.446). Сверх видов из
 /// `WIKI_SILENT` молчит постройка, которая встаёт **только ремонтом руины**
@@ -15727,7 +15850,7 @@ const WIKI_SILENT = new Set(["skill", "stat", "perk", "raid"]);
 /// ремонтом, но она постройка палитры, и о ней выжимка законна.
 function wikiSilent(key) {
   const [kind, id] = key.split(":");
-  if (WIKI_SILENT.has(kind)) return true;
+  if (WIKI_SILENT.has(kind) || WIKI_SILENT_KEYS.has(key)) return true;
   if (kind !== "tile") return false;
   const pal = meta?.palette ?? [];
   return (
@@ -16661,6 +16784,9 @@ function noteWikiOpened() {
   wikiDigest = wikiQueue;
   wikiQueue = [];
   openWiki(WIKI_DIGEST, null);
+  // Всплывшее окно звучит (§12.453): оно ставит партию на паузу, и тихое
+  // появление легко принять за зависание.
+  play("entry");
   wikiHeld = true;
 }
 
@@ -16787,10 +16913,17 @@ let baseTab = null;
 function buildScreenBar() {
   if (!screenBarEl) return;
   screenBarEl.innerHTML = "";
-  baseTab = mkTool(doorHtml("base", "База"), () => closeAllWindows());
+  // «База» — то, куда возвращает Escape (§12.451): снимает и окна, и
+  // раскрытую панель «Построек» или «Приказов».
+  baseTab = mkTool(doorHtml("base", "База"), () => {
+    closeAllWindows();
+    openOnly(null);
+  });
   liveTitle(baseTab, "Карта базы: стройка и коты (Escape — назад сюда)");
   screenBarEl.appendChild(baseTab);
   screenTabs = [
+    ["build", buildDoor],
+    ["orders", ordersDoor],
     ["raid", raidDoor],
     ["stock", stockDoor],
     ["sci", sciDoor],
@@ -16837,11 +16970,17 @@ function syncScreenBar() {
   if (!baseTab) return;
   const open = topWindow()?.[0];
   // У «Ящика» двери нет: под ним горит штаб, если игрок пришёл из него.
+  // Окна нет — горит дверь раскрытой панели (§12.451), а «База» только когда
+  // нет ни того, ни другого.
   const lit = screenTabs.some(({ key }) => key === open)
     ? open
     : raidWinOpen
       ? "raid"
-      : null;
+      : openSection === "Постройка"
+        ? "build"
+        : openSection === "Приказы"
+          ? "orders"
+          : null;
   if (baseTab.classList.contains("active") !== !lit) {
     baseTab.classList.toggle("active", !lit);
   }
@@ -20457,24 +20596,62 @@ function selectBuildIdle() {
   askBuildMask(null);
 }
 
-// «Разобрать» в панели завала берёт инструмент «Разбор завала» (§12.432):
-// раскрывает «Постройку» (это и есть режим, §12.288) и кладёт его в руку.
-// Повторно не кладёт из рук — `selectBuild` по активной кнопке её снял бы.
-function takeRubbleTool() {
-  if (!rubbleBtn) return;
-  if (openSection !== "Постройка") openOnly("Постройка");
-  if (mode === "build" && buildTile === RUBBLE_TOOL) return;
-  selectBuild(RUBBLE_TOOL, rubbleBtn);
+// Плоская кнопка разбора (§12.448): сворачивает «Постройку» (`openOnly` кладёт
+// её инструмент) и берёт свой. Повторный клик по взятой — выход из режима
+// целиком: раздела под ней нет, и «режим без инструмента» тут ничего не значит.
+function takeFlatTool(tile, btn) {
+  // Кольцо «новое» (§12.449) гаснет на первом клике по самой кнопке.
+  btn.classList.remove("fresh");
+  if (btn.classList.contains("active")) {
+    selectCursor();
+    return;
+  }
+  selectBuild(tile, btn);
 }
 
-// Кнопка «Разбор завала» видна, пока на карте есть завал (§12.432): без него
-// инструменту нечего брать, и строка палитры отвечала бы кликом «ничего».
+// Положить инструмент из рук: в раскрытой «Постройке» остаётся режим без
+// инструмента, вне её — режима нет вовсе (§12.448).
+function putDownTool() {
+  if (openSection === "Постройка") selectBuildIdle();
+  else selectCursor();
+}
+
+// Пустой тулбар не рисуется вовсе (§12.449): на старте в нём не видно ни
+// одного раздела и ни одной кнопки — «Постройка» ждёт палитры, «Расчистить»
+// первого разбора, «Правила» склада или лежанки, — и пустая рамка читалась
+// как сломанное меню. Прячем `visibility`, а не `hidden`: место под ним
+// `layout` по-прежнему вычитает, и карта не прыгнет под курсором, когда
+// первая кнопка появится. Пишем только на изменении (§12.84).
+function syncToolbarBare() {
+  const bar = document.getElementById("toolbar");
+  if (!bar) return;
+  // Дверь «Приказы» (§12.451): видна, пока в панели есть хоть что-то.
+  if (ordersDoor) {
+    const none = [rubbleBtn, eraseBtn, rulesBox].every((b) => !b || b.hidden);
+    if (ordersDoor.hidden !== none) ordersDoor.hidden = none;
+    if (none && openSection === "Приказы") openOnly(null);
+  }
+  // С §12.451 тулбар — панель открытой двери: без раздела его нет.
+  const bare =
+    openSection === null || ![...bar.children].some((c) => !c.hidden);
+  if (bar.classList.contains("bare") !== bare)
+    bar.classList.toggle("bare", bare);
+}
+
+// Кнопка «Расчистить» видна, пока на карте есть завал (§12.432): без него
+// инструменту нечего брать, и кнопка отвечала бы кликом «ничего».
 // Ушёл последний — инструмент кладётся из рук.
+//
+// И только после первого разбора завала (§12.449, `rubble_met` из ядра):
+// расчистку узнают с одной клетки — панель или приказ коту, — а инструмент на
+// всю базу приходит следом. Признак монотонный, кнопка не пропадает.
 function syncRubbleTool() {
   if (!rubbleBtn || !meta || !mapCells) return;
+  const met = rubbleSeen === true;
   const any = mapCells.some((t) => isRubble(meta.palette[t]));
-  rubbleBtn.hidden = !any;
-  if (!any && mode === "build" && buildTile === RUBBLE_TOOL) selectBuildIdle();
+  const hide = !(met && any);
+  if (rubbleBtn.hidden !== hide) rubbleBtn.hidden = hide;
+  if (!any && mode === "build" && buildTile === RUBBLE_TOOL) putDownTool();
 }
 
 function toolInHand() {
