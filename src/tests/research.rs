@@ -764,6 +764,51 @@ fn the_shipped_ruleset_opens_one_building_by_the_first_find() {
     );
 }
 
+/// **Боевой рулсет: лабораторию открывает пришедшая Антенна — наймом, а не
+/// отметкой** (§12.434). Сторож выше ставит `Seen` анализатора руками, а в
+/// партии он туда не попадает никогда: личную вещь `note_seen` пропускает
+/// (§12.256), и лаборатория не открывалась у базы, где Антенна уже ходила с
+/// анализатором. Здесь путь настоящий — найм и тик. Плату и пол доверия
+/// снимаем: тест про ворота находки, а не про казну.
+#[test]
+fn the_shipped_ruleset_opens_the_lab_when_antenna_arrives() {
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
+    let lab = sim.tile_index("lab").expect("лаборатория в палитре") as usize;
+    let analyzer = sim.item_index("analyzer").expect("анализатор в палитре");
+    assert!(!sim.tile_is_open(lab), "до Антенны лаборатории нет");
+
+    let antenna = {
+        let mut rules = sim.world.resource_mut::<RecruitRules>();
+        let def = rules
+            .0
+            .iter()
+            .position(|r| r.id == "antenna")
+            .expect("Антенна в рулсете");
+        rules.0[def].cost.clear();
+        rules.0[def].needs.clear();
+        def
+    };
+    let requires = sim.world.resource::<RecruitRules>().0[antenna].requires;
+    sim.set_fame(requires);
+    assert!(sim.hire(antenna), "Антенна нанята");
+    sim.tick();
+
+    assert_eq!(
+        sim.gear_of("antenna"),
+        vec![analyzer],
+        "пришла с анализатором"
+    );
+    assert!(
+        sim.tile_is_open(lab),
+        "Антенна пришла, а лаборатория закрыта"
+    );
+    assert!(
+        !sim.seen(analyzer),
+        "личная вещь ресурсом базы не становится (§12.256)",
+    );
+}
+
 /// **Боевой рулсет: рацию открывает связист, и только её** (§12.290) —
 /// дословно учёный и лаборатория. Связь пришла к базе отдельным котом:
 /// стартовые её не знают, учёный тоже, а первый кандидат со «Связью» —

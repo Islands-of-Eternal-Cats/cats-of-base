@@ -817,6 +817,35 @@ fn an_operator_going_for_his_gear_is_not_pulled_back() {
     );
 }
 
+/// Радист, ушедший поесть, сбор не держит вечно (§12.439): то же, что §12.296
+/// у похода за вещью. Сбор снимал голодного с похода к пайку каждый тик,
+/// `assign_eat` (он раньше `gather_squad`) тут же слал его снова, и кот
+/// дрожал на месте — ни сыт, ни за столом, а брифинг ждал его вечно.
+#[test]
+fn an_operator_going_to_eat_is_not_pulled_back() {
+    const RATION: usize = 1;
+    let (mut sim, first, _) = sim_with_two_radios(2, 2, 200);
+    sim.set_nutrition(RATION, 100);
+    sim.set_food(100, 40, 2);
+    sim.put_item(4, 1, RATION, 1);
+    sim.enlist("a", 1, 2);
+    assert!(sim.launch_node(first, 1, 2, -1));
+    sim.tick_n(1);
+    // Радиста приписали посреди сбора, когда он уже шёл к пайку: сбор зовёт
+    // его за стол, голод — к еде.
+    sim.set_fed("d", 10);
+    sim.tick_n(1);
+    assert!(sim.is_eating("d"), "радист пошёл есть");
+    sim.post_relay("d", 1, 2);
+    let mut t = 0;
+    while !sim.is_away("a") {
+        sim.tick_n(1);
+        t += 1;
+        assert!(t < 150, "отряд так и не ушёл: радист {:?}", sim.pos_of("d"));
+    }
+    assert!(sim.fed_of("d") > 40, "радист поел перед брифингом");
+}
+
 /// Радист, которого посреди сбора отправили учиться, сбор не держит вечно
 /// (§12.286): фасад снимает его с учёбы перед цепочкой, а `assign_study` (он раньше `gather_squad`) тем же
 /// тиком сажал обратно. Кот дрожал на месте, брифинг ждал радиста, класс —

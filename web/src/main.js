@@ -569,6 +569,8 @@ onPanelClick(raidWinEl, ".crew-pick", (b) => {
   const x = Number(b.dataset.x);
   const y = Number(b.dataset.y);
   if (!raidHome && raidWinAt?.x === x && raidWinAt?.y === y) return;
+  // Кот отряда на автомиссии отряд не выбирает (§12.438).
+  if (squadRuled(nodeAt(x, y))) return;
   // Выбранная База переживает смену отряда (§12.355).
   mapHome = atHome();
   raidHome = false;
@@ -847,6 +849,8 @@ onPanelClick(raidWinEl, ".squad-sel", (b, e) => {
   if (e.target.closest(".squad-rename")) return;
   const x = Number(b.dataset.x);
   const y = Number(b.dataset.y);
+  // Отряд правила не выбирается (§12.438): причина — в подсказке шапки.
+  if (squadRuled(nodeAt(x, y))) return;
   // Отряд в деле повторным кликом не снимается (§12.362): его колонка — одна
   // карточка вылазки, и снятый выбор подменял её чужими заказами.
   const again =
@@ -8586,6 +8590,18 @@ function nodeAt(tx, ty) {
   );
 }
 
+// Отряд на работающем правиле автовылазки (§12.400, §12.438) — расписан, а не
+// свободен: в штабе он не выбирается вовсе. Выбрать отряд значит собраться
+// его куда-то отправить, а на чужой заказ ядро его не отпустит
+// (`AutoRaids::claims`); свой заказ правило водит само. Либо правило, либо
+// ручная отправка: вернуть отряд в руки — ⏸ или × в его строке правила.
+function squadRuled(n) {
+  return !!n && n.auto >= 0 && !!n.auto_on;
+}
+const RULED_TIP =
+  "Отряд на автомиссии: его водит правило, вручную его не отправить. " +
+  "Чтобы выбрать отряд, поставьте правило на паузу (⏸) или снимите его (×)";
+
 // Короткое слово «чем отряд занят» (§12.173): одно на строку панели «Отряды»
 // и вкладку штаба (§12.337). У ушедших — стадия из ядра (§12.168), у
 // собирающихся — где они в сборе, у отряда дома — «дома». Вкладка до §12.337
@@ -12606,7 +12622,10 @@ function syncRaidMap() {
     rule.classList.toggle("paused", rs.length > 0 && rs.every((r) => !r.on));
     // Адреса столов — на самой плашке: клик по ней переводит окно на отряд
     // правила (§12.295), а считать их второй раз в обработчике незачем.
+    // Отряд на работающем правиле не выбирается (§12.438) — к нему клик не
+    // ведёт; ведёт к отрядам, чьё правило стоит на паузе.
     const rnodes = rs
+      .filter((r) => !r.on)
       .map((r) => `${nodes[r.n - 1].x},${nodes[r.n - 1].y}`)
       .join(";");
     if (rule.dataset.nodes !== rnodes) rule.dataset.nodes = rnodes;
@@ -17915,7 +17934,8 @@ function soloFreeCat() {
 // ни другого отряда дома, ни свободного кота на базе. Ключ — клетка стола,
 // а не узел: узлы снимка пересоздаются каждым кадром.
 function soloFreeSquad() {
-  const home = nodes.filter((n) => !n.busy);
+  // Отряд правила не в счёт (§12.438): он не выбирается.
+  const home = nodes.filter((n) => !n.busy && !squadRuled(n));
   if (home.length !== 1) return null;
   return anyLooseCat() ? null : `${home[0].x},${home[0].y}`;
 }
@@ -17951,7 +17971,8 @@ function applyJoinFocus() {
     return;
   }
   joinFocus = null;
-  if (anyLooseCat() || !nodeAt(f.x, f.y)) return;
+  if (anyLooseCat() || !nodeAt(f.x, f.y) || squadRuled(nodeAt(f.x, f.y)))
+    return;
   raidWinAt = { x: f.x, y: f.y };
   raidHome = false;
   nearbyPick.clear();
@@ -18195,7 +18216,11 @@ function buildRaidWindow(key) {
     mapCol: q(".raidwin-map"),
     jobsCol: q(".raidwin-jobs"),
     report: q(".home-report"),
-    mapParts: [q(".raidwin-map > .raidwin-h"), q(".map-holder"), q(".map-note")],
+    mapParts: [
+      q(".raidwin-map > .raidwin-h"),
+      q(".map-holder"),
+      q(".map-note"),
+    ],
     note: q(".map-note"),
     // Узлы участков — по индексу. Строятся **вместе с каркасом**, то есть один
     // раз на открытие окна и на смену вкладки: граф от вкладки не зависит, но
@@ -18690,14 +18715,20 @@ function renderRaidWindow() {
   // свободный, иначе первый по порядку. Закрывать окно на снос нельзя: у базы
   // есть другие отряды, а если их нет — причина обязана быть названа словом
   // (§12.53), и говорит её сам штаб.
+  // Отряд на автомиссии выбранным не бывает (§12.438): правило, поставленное
+  // кнопкой ↻ или ▶ у выбранного отряда, тем же кадром снимает выбор, а
+  // запасной узел его не берёт. Выбрать некого — идут отмеченные свободные.
+  const named = raidWinAt && nodeAt(raidWinAt.x, raidWinAt.y);
   const node =
-    (raidWinAt && nodeAt(raidWinAt.x, raidWinAt.y)) ??
-    nodes.find((n) => !n.busy) ??
-    nodes[0];
+    (named && !squadRuled(named) ? named : null) ??
+    nodes.find((n) => !n.busy && !squadRuled(n)) ??
+    nodes.find((n) => !squadRuled(n)) ??
+    null;
+  if (named && squadRuled(named)) raidWinAt = null;
   // Окрестности (§12.349): без столов окно другим не бывает, а со столами —
   // по выбору игрока. Пустое окно с одной причиной осталось рулсету, где
   // нет ни столов, ни заказа без отряда.
-  if (!node && !(meta?.missions ?? []).length) {
+  if (!nodes.length && !(meta?.missions ?? []).length) {
     renderEmptyRaidWindow();
     return;
   }
@@ -19001,6 +19032,7 @@ function crewGroups(sel) {
         y: n.y,
         on,
         busy: n.busy,
+        ruled: squadRuled(n),
         folded,
         // В правке у имени карандаш переименования (§12.359).
         html: squadHeadHtml(
@@ -19198,6 +19230,14 @@ function syncCrewRows(sel) {
       b.dataset.y = g.sel.y;
       b.classList.toggle("on", g.sel.on);
       b.classList.toggle("away", !!g.sel.busy);
+      // Отряд на автомиссии не выбирается (§12.438) — гасим классом, а не
+      // `disabled` (§12.121), чтобы подсказка с дорогой назад показывалась.
+      b.classList.toggle("ruled", !!g.sel.ruled);
+      const stip = g.sel.ruled ? RULED_TIP : "";
+      if ((b.dataset.tip ?? "") !== stip) {
+        if (stip) b.dataset.tip = stip;
+        else delete b.dataset.tip;
+      }
       // Разметка шапки — только на изменении (§12.84), и сравнивается с
       // записанной строкой, а не с `innerHTML`: браузер сериализует его по-своему,
       // и сравнение с ним переписывало бы шапку каждым кадром.
@@ -19214,13 +19254,15 @@ function syncCrewRows(sel) {
       edit.dataset.y = g.sel.y;
       const editing = crewEditing(g.sel.x, g.sel.y);
       edit.classList.toggle("on", editing);
-      edit.classList.toggle("off", !!g.sel.busy);
+      edit.classList.toggle("off", !!g.sel.busy || !!g.sel.ruled);
       head.classList.toggle("editing", editing);
       const etip = g.sel.busy
         ? "Отряд в деле — состав заморожен до возвращения"
-        : editing
-          ? "Закончить правку состава (Escape)"
-          : "Изменить отряд: состав, радист, имя";
+        : g.sel.ruled
+          ? "Отряд на автомиссии — чтобы править его, поставьте правило на паузу (⏸)"
+          : editing
+            ? "Закончить правку состава (Escape)"
+            : "Изменить отряд: состав, радист, имя";
       if (edit.dataset.tip !== etip) edit.dataset.tip = etip;
       const ehtml = editing
         ? "Готово"
@@ -19462,8 +19504,8 @@ function syncRaidCards(raid, node) {
       mapUnmet()
         ? '<div class="cat-sub">кот снаружи — что там, станет ясно, когда вернётся</div>'
         : busyHere || open.some(Boolean)
-        ? `<div class="cat-sub">на участке «${esc(place)}» ${busyHere ? "свободных " : ""}заказов нет — выбери другой на карте</div>`
-        : nothing,
+          ? `<div class="cat-sub">на участке «${esc(place)}» ${busyHere ? "свободных " : ""}заказов нет — выбери другой на карте</div>`
+          : nothing,
     ]);
   }
   // Что игрок здесь видел, — ради гашения новостей на закрытии (§12.243):

@@ -1190,6 +1190,29 @@ impl Sim {
     /// (§12.18), `Seen` только растёт (§12.131), а снесённая постройка… умеет,
     /// и это единственное исключение — но снос обратим тем же кликом, а
     /// закрывшийся тайл в палитре игрок прочтёт как ответ на свой же снос.
+    /// Видела ли база предмет — для ворот находки (`sighted`, §12.210).
+    ///
+    /// Личную вещь (§12.256) `note_seen` в `Seen` не пишет намеренно: она не
+    /// ресурс базы, и строка «Анализатор 0» в «Ресурсах» с новостью «новый
+    /// ресурс» говорили бы о том, чем база не располагает. Но ворота находки
+    /// спрашивают другое — «пришло ли это на базу», — и лабораторию открывает
+    /// именно анализатор Антенны (§12.434). Поэтому личная вещь считается
+    /// виденной, пока её носит кот базы. Монотонность не страдает: личную вещь
+    /// не снять, не сносить и не потерять (§12.256), а котов игра не теряет —
+    /// пленный тоже кот базы, и вещь при нём.
+    fn sighted(&mut self, item: usize) -> bool {
+        if self.world.resource::<Seen>().saw(item) {
+            return true;
+        }
+        if !self.world.resource::<ItemRules>().personal(item) {
+            return false;
+        }
+        self.world
+            .query::<&Gear>()
+            .iter(&self.world)
+            .any(|gear| gear.has(item))
+    }
+
     fn tech_allows(&mut self, tile: i16) -> bool {
         let rules = self.world.resource::<TileRules>();
         let tech_ok = match rules.tech_of(tile) {
@@ -1199,10 +1222,11 @@ impl Sim {
         if !tech_ok {
             return false;
         }
-        let seen = self.world.resource::<Seen>();
-        if !rules.sighted_of(tile).iter().all(|&item| seen.saw(item)) {
+        let sighted = rules.sighted_of(tile).to_vec();
+        if !sighted.iter().all(|&item| self.sighted(item)) {
             return false;
         }
+        let rules = self.world.resource::<TileRules>();
         // Учёный, до которого дорос хоть кто-то (§12.257; с §12.259 так закрыта тема, а не парта): нужен тот,
         // кому есть чему учить. Шкала монотонная — плен учёного парту не уносит.
         let mastery = self.world.resource::<Mastery>();
@@ -7982,12 +8006,18 @@ impl Sim {
     /// (он в цепочке раньше `gather_squad`) тем же тиком слал за вещью снова,
     /// и кот дрожал на месте — ни одет, ни за столом; а со стулом, выданным
     /// заявкой, уходил в поле голым. Поход короткий, брифинг его ждёт.
+    ///
+    /// **Идущего поесть — тоже** (§12.439), по тому же доводу: `assign_eat`
+    /// стоит в цепочке ещё раньше и тем же тиком слал сорванного к пайку снова.
+    /// Бойца сбор отпускает есть с §12.370, радиста — теперь тоже.
     fn summon_operators(&mut self, node: (i32, i32)) {
         let ops: Vec<String> = {
-            let mut q = self.world.query_filtered::<
-                (&Posted, &UnitId),
-                (Without<OnDuty>, Without<Away>, Without<Equipping>),
-            >();
+            let mut q = self.world.query_filtered::<(&Posted, &UnitId), (
+                Without<OnDuty>,
+                Without<Away>,
+                Without<Equipping>,
+                Without<Eating>,
+            )>();
             q.iter(&self.world)
                 .filter(|(p, _)| p.spot == node)
                 .map(|(_, id)| id.0.clone())
