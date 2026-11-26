@@ -1529,6 +1529,7 @@ worker.onmessage = (e) => {
     storyResume = null;
     homeReport = null;
     wikiOpenSeen = null;
+    wikiHiredSeen = null;
     wikiQueue = [];
     wikiAnnounced.clear();
     // Выжимки прошлой партии новому миру ни к чему (§12.442): отпускаем
@@ -16705,6 +16706,10 @@ setArticleTeased((key) => {
 // снимок партии (новой или загруженной) её снимает и новостью не объявляется,
 // ровно как `goalsDoneSeen` и лента §12.120.
 let wikiOpenSeen = null;
+// Нанятые кандидаты, уже виденные выжимкой (§12.454): статья кота всплывает,
+// когда он впервые встал на базе, а не когда откликнулся. `null` — базовой
+// линии ещё нет, её снимает первый снимок, как у `wikiOpenSeen`.
+let wikiHiredSeen = null;
 // Статьи, открывшиеся и ещё не показанные. Показываются **все разом**, одной
 // страницей «Новые записи» (§12.441), и только когда никакое окно не открыто:
 // модал поверх штаба стёр бы ответ, за которым игрок туда пошёл (§12.101).
@@ -16772,11 +16777,30 @@ function noteWikiOpened() {
       const was = wikiOpenSeen.get(k);
       if (was !== undefined || wikiQueue.includes(k)) continue;
       if (wikiSilent(k)) continue;
+      // Кандидат (§12.454): статья открывается откликом, а выжимкой всплывает
+      // найм — ниже. Отклик и так виден точкой на двери «Найм».
+      if (k.startsWith("recruit:")) continue;
       wikiQueue.push(k);
       if (wikiPopups) wikiAnnounced.set(k, lastSnap?.tick ?? 0);
     }
   }
   wikiOpenSeen = open;
+  // Кот встал на базе впервые (§12.454) — нанятый, найденный или пришедший
+  // сам: всё это `hired` у его записи.
+  const hired = new Set();
+  (lastSnap?.recruits ?? []).forEach((r, i) => {
+    if (r?.hired) hired.add(i);
+  });
+  if (wikiHiredSeen !== null) {
+    for (const i of hired) {
+      if (wikiHiredSeen.has(i)) continue;
+      const k = `recruit:${meta?.recruits?.[i]?.id}`;
+      if (!open.has(k) || wikiQueue.includes(k)) continue;
+      wikiQueue.push(k);
+      if (wikiPopups) wikiAnnounced.set(k, lastSnap?.tick ?? 0);
+    }
+  }
+  wikiHiredSeen = hired;
   // Базовую линию ведём и при выключенных модалах: включённые обратно, они
   // не должны вывалить всё, что открылось за это время.
   if (!wikiPopups) wikiQueue = [];
