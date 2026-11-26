@@ -557,6 +557,7 @@ onPanelClick(raidWinEl, ".squad-rename", (b) => {
   if (!crewEditing(x, y)) return;
   startSquadRename(x, y);
 });
+onPanelClick(raidWinEl, ".home-report-go", () => endHomeReport());
 onPanelClick(raidWinEl, ".crew-pick", (b) => {
   // Погашенная классом строка события мыши шлёт — тем и ценна (§12.121), —
   // поэтому отказ проверяем сами; причина написана в подсказке.
@@ -1517,6 +1518,10 @@ worker.onmessage = (e) => {
     portalGfx.clear();
     portalRubbleGfx.clear();
     skillLevelsSeen = null;
+    autoOutSeen = null;
+    autoOutWho.clear();
+    storyResume = null;
+    homeReport = null;
     wikiOpenSeen = null;
     wikiQueue = [];
     wikiFacetsSeen = null;
@@ -1944,10 +1949,6 @@ function drawFurniture(g, id, x, y, tint, n) {
       alpha: 0.35,
     });
   switch (id) {
-    // Завал над найденным ящиком (§12.404) выглядит обычным завалом: находка
-    // видна, только когда его разобрали.
-    case "rubble_bin":
-    case "rubble_table":
     case "rubble": {
       // Завал (§12.367): груда камней на всю клетку — непроходимо, но видно,
       // что это не стена, а то, что можно разобрать. Раскладка камней своя у
@@ -3724,6 +3725,7 @@ function renderSnapshot(snap) {
   renderNotePanel(snap.notes, snap.tick);
   renderGoalsPanel(snap.goals, snap.goals_required, snap);
   noteSkillUps(snap);
+  noteAutoOutings(snap);
   // Последней — подсказка: она читает то, что нарисовали выше, и переприцелится,
   // если её узел уехал вместе с перерисованной лентой.
   refreshLiveTip();
@@ -7953,6 +7955,88 @@ function noteSkillUps(snap) {
   skillLevelsSeen = now;
 }
 
+/// Сюжетный выход кота (§12.435): заказ с `auto` ядро отправляет само, и вид
+/// называет это **поступком кота, а не запуском миссии** — словами самого кота.
+/// Иначе первый же заход в штаб научил бы, что штаб отправляет котов сам.
+/// Первый кадр мира — базовая линия, как у `skillLevelsSeen`: загрузка партии
+/// посреди осмотра не повторяет реплику.
+let autoOutSeen = null;
+// Кто ушёл на сюжетный выход, по заказу: на возвращении заказа в снимке уже
+// нет, а доклад называет кота по имени.
+const autoOutWho = new Map();
+// Темп, с которого сюжетный выход сбросил на ×1 (§12.436): вернётся вместе с
+// докладом. `null` — не сбрасывали (игрок и так шёл на ×1 или на паузе).
+let storyResume = null;
+// Доклад вернувшегося кота (§12.436): `{who, def, resume}` или `null`. Пока он
+// стоит, время на паузе, а в штабе вместо карты и миссий — карточка доклада.
+let homeReport = null;
+// Реплика доклада по заказу — подача, ядро о ней не знает (§12.46).
+const AUTO_REPORT = {
+  inspect: "Снаружи тихо. Вокруг шлюза есть что пошарить",
+};
+
+function noteAutoOutings(snap) {
+  const now = new Set();
+  for (const m of snap.missions ?? []) {
+    if (!meta?.missions?.[m.def]?.auto) continue;
+    now.add(m.def);
+    const who = m.squad?.[0];
+    if (who) autoOutWho.set(m.def, who);
+    if (autoOutSeen === null || autoOutSeen.has(m.def)) continue;
+    if (who) showToast("снаружи", `${who}: «Пойду гляну, что там за шлюзом»`);
+    // Сцена идёт в реальном времени (§12.436): на ×10 выход длиной в
+    // несколько секунд мигал бы и пропадал. Темп вернёт доклад.
+    if (speed > 1) {
+      storyResume = speed;
+      setSpeed(1);
+    }
+  }
+  // Вернулся — пауза и доклад (§12.436): раскрытие мира — действие игрока,
+  // а не кадр, который на ×10 пролетает незамеченным.
+  if (autoOutSeen !== null) {
+    for (const def of autoOutSeen) {
+      if (now.has(def)) continue;
+      const resume = storyResume ?? (speed > 0 ? speed : null);
+      storyResume = null;
+      homeReport = { who: autoOutWho.get(def) ?? "", def, resume };
+      if (speed > 0) setSpeed(0);
+      if (!raidWinOpen) openRaidWindow();
+    }
+  }
+  autoOutSeen = now;
+}
+
+/// Карты в штабе ещё нет (§12.435, §12.436): снаружи никто не был — или
+/// сюжетный выход ещё идёт. Второе не лишнее: осмотр засчитывается на конце
+/// работы (§12.244), и в кадр между ним и возвращением карта вспыхивала бы
+/// раньше доклада.
+function mapUnmet() {
+  return lastSnap?.home_met === false || (autoOutSeen?.size ?? 0) > 0;
+}
+
+/// Доклад выслушан (§12.436): кнопка «Показать карту» или закрытие штаба.
+/// Возвращает темп, с которого сцену начали, — если игрок за это время сам
+/// его не выбрал. Вспышка базы (`homeRevealDue`) ждала доклада и сыграет
+/// следующим кадром карты.
+function endHomeReport() {
+  const r = homeReport;
+  if (!r) return;
+  homeReport = null;
+  if (r.resume !== null && speed === 0) setSpeed(r.resume);
+}
+
+function homeReportHtml(r) {
+  const def = meta?.missions?.[r.def];
+  const line = AUTO_REPORT[def?.id];
+  const loot = def?.loot ? costChips(def.loot) : "";
+  return (
+    `<div class="home-report-h">${esc(r.who)} снова дома</div>` +
+    (line ? `<div class="home-report-say">«${esc(line)}»</div>` : "") +
+    (loot ? `<div class="home-report-loot">принёс: ${loot}</div>` : "") +
+    '<button class="tool primary home-report-go">Показать карту</button>'
+  );
+}
+
 function showToast(kind, label) {
   const node = document.createElement("div");
   node.className = "toast";
@@ -11464,6 +11548,64 @@ function stepWords(i) {
   return `через ${st.step_in} станет ступенью ${st.stage + 1}`;
 }
 
+// Куда поползёт очаг — картинкой на карте штаба (§12.437). Цель и срок
+// считает ядро (`SiteSnap::step == "spread"`, `step_to`, `step_in`) — то же,
+// что `stepWords` говорит словом; вид только рисует: изогнутую пунктирную
+// стрелку от края пятна к соседу и призрачный контур пятна, которое там
+// встанет. Призрак — того же размера, что первая ступень, и пунктиром: очага
+// там ещё нет. Узлы пересобираются только на смене цели, срок пишется в текст.
+function syncSpreads() {
+  const layer = raidUi?.mapCol?.querySelector(".map-spreads");
+  if (!layer) return;
+  const R = SITE_R;
+  const list = sites
+    .map((st, i) => ({ st, i }))
+    .filter(
+      ({ st }) =>
+        st?.step === "spread" && st.step_to != null && siteSpots[st.step_to],
+    );
+  const key = list.map(({ st, i }) => `${i}>${st.step_to}`).join(";");
+  if (layer.dataset.key !== key) {
+    layer.dataset.key = key;
+    layer.innerHTML = list
+      .map(({ st, i }) => {
+        const [ax, ay] = siteSpots[i];
+        const [bx, by] = siteSpots[st.step_to];
+        const dx = bx - ax;
+        const dy = by - ay;
+        const len = Math.hypot(dx, dy) || 1;
+        const ux = dx / len;
+        const uy = dy / len;
+        // Начало — с края пятна, конец — у края призрака: стрелка не лезет
+        // под значки и не прячется под штриховкой.
+        const s0 = Math.min(R * 1.6, len * 0.35);
+        const s1 = Math.min(R * 1.45, len * 0.35);
+        const x0 = ax + ux * s0;
+        const y0 = ay + uy * s0;
+        const x1 = bx - ux * s1;
+        const y1 = by - uy * s1;
+        // Лёгкий изгиб — чтобы не сливаться с пунктиром ребра соседства.
+        const bend = Math.min(26, len * 0.12);
+        const cx = (x0 + x1) / 2 - uy * bend;
+        const cy = (y0 + y1) / 2 + ux * bend;
+        const lx = (x0 + 2 * cx + x1) / 4 - uy * 14;
+        const ly = (y0 + 2 * cy + y1) / 4 + ux * 14;
+        return (
+          `<g class="map-spread">` +
+          `<path class="map-spread-ghost" transform="translate(${bx},${by})" d="${blightBlob(st.step_to, R * 1.3)}"/>` +
+          `<path class="map-spread-arrow" d="M${x0.toFixed(1)} ${y0.toFixed(1)}Q${cx.toFixed(1)} ${cy.toFixed(1)} ${x1.toFixed(1)} ${y1.toFixed(1)}" marker-end="url(#map-spread-head)"/>` +
+          `<text class="map-spread-in" x="${lx.toFixed(1)}" y="${(ly + 4).toFixed(1)}"></text>` +
+          `</g>`
+        );
+      })
+      .join("");
+  }
+  [...layer.querySelectorAll(".map-spread-in")].forEach((t, k) => {
+    const want = `через ${list[k].st.step_in}`;
+    if (t.textContent !== want) t.textContent = want;
+  });
+}
+
 // Недостающие возможности отряда словом (§12.260): «нужен сбор образцов — у
 // Антенны». Кто её несёт, берётся из самого кота (`EntitySnap::abilities`,
 // считает ядро по надетому); пленных и ушедших не называем — их не взять.
@@ -11898,6 +12040,9 @@ let siteTrails = [];
 // пришедший на участок извне, — зачистка очага работает на месте, а не ведёт
 // караван.
 let siteApproaches = [];
+// Центры участков в координатах полотна карты штаба: по ним рисуется стрелка
+// расползания очага (§12.437). Пересобираются вместе с графом.
+let siteSpots = [];
 // Центр базы на полотне карты штаба: вокруг него кружат коты, работающие рядом
 // с базой (§12.396). Ставит `buildSiteGraph`.
 let siteHome = null;
@@ -12329,6 +12474,29 @@ function syncFlashes() {
 // меняются только заливка, ступень, метка отряда и подпись под графом.
 function syncRaidMap() {
   if (!raidUi?.marks?.length) return;
+  // Карты нет, пока снаружи никто не был (§12.435): до осмотра входа штаб —
+  // это состав и идущая вылазка, а карта появляется вместе с вернувшимся
+  // котом, вспышкой базы (`homeRevealDue`).
+  const unmet = mapUnmet();
+  if (raidUi.mapCol.hidden !== unmet) raidUi.mapCol.hidden = unmet;
+  if (unmet) return;
+  // Доклад вернувшегося кота стоит на месте карты (§12.436), а миссии ждут
+  // за ним: новая карточка появляется вместе с картой, по клику.
+  const report = !!homeReport;
+  raidUi.jobsCol.hidden = report;
+  raidUi.report.hidden = !report;
+  for (const n of raidUi.mapParts) n.hidden = report;
+  if (report) {
+    // Сравниваем свою строку, а не `innerHTML`: глифы фишек браузер
+    // нормализует, и `setHtml` пересоздавал бы кнопку каждым кадром — клик по
+    // ней умирал бы (§12.84).
+    const html = homeReportHtml(homeReport);
+    if (raidUi.reportHtml !== html) {
+      raidUi.reportHtml = html;
+      raidUi.report.innerHTML = html;
+    }
+    return;
+  }
   // Выбор мира из прошлой партии сюда не доедет: `ready` сбрасывает `mapPick`
   // в «авто», а число за пределами палитры значило бы чужое место.
   if (mapPick >= raidUi.marks.length) mapPick = -1;
@@ -12494,6 +12662,7 @@ function syncRaidMap() {
     }
   });
 
+  syncSpreads();
   syncRaidTrips();
   raidUi.home?.classList.toggle("on", atHome());
   // Окрестности: подпись про базу (§12.349). Сколько заметных выходов
@@ -17926,6 +18095,9 @@ function onSquadRenamed(m) {
 
 function closeRaidWindow() {
   endSquadRename(true);
+  // Закрыть штаб посреди доклада — тоже «выслушал» (§12.436): иначе время
+  // осталось бы на паузе за закрытым окном. Вспышка базы дождётся входа.
+  endHomeReport();
   // Гасим на закрытии: колонка заказов в штабе видна **всегда**, даже когда
   // отряд в поле, — значит визит и есть «посмотрел» (§12.120). Но с §12.243
   // колонка режется участком, и прочитанным идёт лишь то, что показывалось.
@@ -17998,6 +18170,7 @@ function buildRaidWindow(key) {
     '<div class="raidwin-h">Карта</div>' +
     '<div class="map-holder"></div>' +
     '<div class="map-note"></div>' +
+    '<div class="home-report" hidden></div>' +
     "</div>" +
     '<div class="raidwin-col raidwin-jobs">' +
     '<div class="raidwin-h">Миссии</div>' +
@@ -18020,6 +18193,9 @@ function buildRaidWindow(key) {
     nearby: q(".raid-nearby"),
     cards: q(".raid-cards"),
     mapCol: q(".raidwin-map"),
+    jobsCol: q(".raidwin-jobs"),
+    report: q(".home-report"),
+    mapParts: [q(".raidwin-map > .raidwin-h"), q(".map-holder"), q(".map-note")],
     note: q(".map-note"),
     // Узлы участков — по индексу. Строятся **вместе с каркасом**, то есть один
     // раз на открытие окна и на смену вкладки: граф от вкладки не зависит, но
@@ -18182,6 +18358,7 @@ function buildSiteGraph(holder) {
       : [],
   );
   siteApproaches = all.map((s) => bowedTrail(P(home), P(s.at ?? [0, 0])));
+  siteSpots = all.map((_, i) => [px(i), py(i)]);
   siteTrails = all.map((_, i) => [
     ...siteApproaches[i],
     ...roadLines[i].slice(1),
@@ -18253,6 +18430,10 @@ function buildSiteGraph(holder) {
           `<line class="map-link" x1="${px(a)}" y1="${py(a)}" x2="${px(b)}" y2="${py(b)}"/>`,
       )
       .join("") +
+    // Куда расползётся очаг (§12.437): над рёбрами, под кружками.
+    `<defs><marker id="map-spread-head" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+    `<path class="map-spread-head" d="M0 0 L10 5 L0 10 Z"/></marker></defs>` +
+    `<g class="map-spreads"></g>` +
     `<g class="map-home" transform="translate(${hx},${hy})">` +
     `<path class="map-home-halo" d="${siteHex(SITE_R * 1.75)}"/>` +
     `<path class="map-hex" d="${siteHex(SITE_R * 1.4)}"/>` +
@@ -19191,6 +19372,9 @@ function tripHtml(m, node) {
 // закрытые известностью **прячем, а не удаляем**: удаление вернуло бы
 // перестройку колонки на ровном месте.
 function syncRaidCards(raid, node) {
+  // Пока стоит доклад (§12.436), колонка спрятана — и прочитанной на
+  // закрытии не считается.
+  if (homeReport) return;
   // `raid` — вылазка выбранного отряда в деле, иначе `null`.
   // Заказ, на который уже ушли, из колонки **выброшен целиком** (§12.389) —
   // чей бы ни был поход: отряда, свободных котов или правила. Вылазка говорит
@@ -19273,7 +19457,11 @@ function syncRaidCards(raid, node) {
     const place = base ? "База" : siteLabel(pick);
     want.push([
       "none",
-      busyHere || open.some(Boolean)
+      // Карты ещё нет (§12.435): снаружи никто не был, и звать «на карту»
+      // некуда — ответ на «что дальше» стоит слева, у ушедшего кота.
+      mapUnmet()
+        ? '<div class="cat-sub">кот снаружи — что там, станет ясно, когда вернётся</div>'
+        : busyHere || open.some(Boolean)
         ? `<div class="cat-sub">на участке «${esc(place)}» ${busyHere ? "свободных " : ""}заказов нет — выбери другой на карте</div>`
         : nothing,
     ]);

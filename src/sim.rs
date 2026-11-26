@@ -2329,6 +2329,7 @@ impl Sim {
                     cleanses: blight_index(&m.cleanses),
                     tech: (!m.tech.is_empty()).then(|| m.tech.clone()),
                     once: m.once,
+                    auto: m.auto,
                     raided: (!m.raided.is_empty())
                         .then(|| rs.missions.iter().position(|o| o.id == m.raided))
                         .flatten(),
@@ -5687,6 +5688,46 @@ impl Sim {
         }
     }
 
+    /// Сюжетный выход кота (§12.435): заказ с `auto` уходит сам — первый
+    /// свободный и готовый кот по `id` берётся за него, как только может дойти
+    /// до шлюза.
+    ///
+    /// Это **не правило игрока**, а поступок кота: починили шлюз — кот сам
+    /// выглянул наружу. Поэтому ни тумблера, ни ворот технологии у него нет, а
+    /// заказ обязан быть однократным: выполненный, он перестаёт существовать, и
+    /// правило замолкает навсегда (сторож
+    /// `the_shipped_ruleset_sends_out_only_harmless_one_off_outings`).
+    ///
+    /// Стоит в фасаде рядом с `run_auto_raids` по тому же доводу (§12.67):
+    /// заявка — это `launch_at`, и второго способа уйти в поле нет. Ворота —
+    /// все у `launch_at`: выход, свободный кот, готовность (спящего не будит,
+    /// раненого не поднимает — правило просто ждёт), предел состава. Через
+    /// `scavenge` не идёт, чтобы не писать журнал команд каждый тик: поступок
+    /// кота выводится из мира, и при воспроизведении журнала случится сам.
+    fn run_auto_outings(&mut self) {
+        let defs: Vec<usize> = {
+            let rules = self.world.resource::<MissionRules>();
+            let raids = self.world.resource::<Raids>();
+            rules
+                .0
+                .iter()
+                .enumerate()
+                .filter(|(d, r)| r.auto && !(r.once && raids.0.contains(d)))
+                .map(|(d, _)| d)
+                .collect()
+        };
+        for def in defs {
+            if self.mission_on(def, None).is_some() {
+                continue;
+            }
+            for cat in self.free_cats() {
+                if self.launch_at(def, vec![cat], None, None, true) {
+                    break;
+                }
+            }
+        }
+    }
+
     /// Прогноз исхода заказа для готовых лап узла: `(доля, провал)` (§12.117).
     ///
     /// Та же пара, что уже едет в штаб (`NodeSnap::shares`/`fails`), и тот же
@@ -7736,6 +7777,9 @@ impl Sim {
         // на ровном месте.
         self.drop_orphan_crews();
         self.run_auto_raids();
+        // Кот выходит сам (§12.435) — там же и по тому же доводу: это заявка
+        // `launch_at`, а не изменение данных.
+        self.run_auto_outings();
         // Автопродажа — там же и по той же причине (§12.87): она повторяет клик
         // по кнопке «Продать», а у кнопки трое ворот, второй экземпляр которых
         // открыл бы неотменяемую сделку. Перед тиком, чтобы заявку застал

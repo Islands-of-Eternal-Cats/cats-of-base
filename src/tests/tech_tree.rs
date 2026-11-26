@@ -611,6 +611,10 @@ fn the_shipped_ruleset_keeps_its_three_time_scales_apart() {
 /// Стартовый склад тоже годится в источники: он на базе с нулевого тика, то
 /// есть ворота открыты ещё до первого клика (такие пишут по ошибке, но заперты
 /// они не бывают).
+///
+/// Третий источник — **вещи, с которыми приходят коты** (§12.434): анализатор
+/// Антенны открывает лабораторию. Найм тоже не требует ничего, что закрыто
+/// находкой: известность растёт вылазками, а платит склад, найденный на старте.
 #[test]
 fn the_shipped_ruleset_opens_sighted_gates_by_raiding() {
     let rs = shipped();
@@ -619,6 +623,16 @@ fn the_shipped_ruleset_opens_sighted_gates_by_raiding() {
         .iter()
         .flat_map(|m| m.loot.keys().map(String::as_str))
         .chain(rs.stock.iter().map(|s| s.item.as_str()))
+        .chain(
+            rs.recruits
+                .iter()
+                .flat_map(|r| r.gear.iter().map(String::as_str)),
+        )
+        .chain(
+            rs.units
+                .iter()
+                .flat_map(|u| u.gear.iter().map(String::as_str)),
+        )
         .collect();
     for tile in &rs.tiles {
         for item in &tile.sighted {

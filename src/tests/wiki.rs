@@ -375,7 +375,8 @@ fn open_at_start(rs: &Ruleset, key: &str) -> bool {
         return false;
     };
     // Находки стартовой застройки (§12.424): что встаёт из неё разбором
-    // (`on`) и починкой (`repair`), появляется в первые минуты партии — так
+    // (`on`), обследованием (`examine`, §12.433) и починкой (`repair`),
+    // появляется в первые минуты партии — так
     // же, как ворота `raided` осмотра входа, которых сторож не считает вовсе.
     // `after` на такую находку поэтому не закрывает статью.
     let mut found: BTreeSet<&str> = rs.build.iter().map(|b| b.tile.as_str()).collect();
@@ -384,7 +385,7 @@ fn open_at_start(rs: &Ruleset, key: &str) -> bool {
             .tiles
             .iter()
             .filter(|t| found.contains(t.id.as_str()))
-            .flat_map(|t| [t.on.as_str(), t.repair.as_str()])
+            .flat_map(|t| [t.on.as_str(), t.examine.as_str(), t.repair.as_str()])
             .filter(|t| !t.is_empty() && !found.contains(t))
             .collect();
         if more.is_empty() {

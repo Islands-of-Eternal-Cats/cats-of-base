@@ -33,9 +33,10 @@ fn dig_to_ruin(sim: &mut Sim) {
     assert!(dug, "докопались до сломанного шлюза");
 }
 
-/// Откопать ящик под завалом (§12.415, §12.417): шахта вниз до среднего ряда,
-/// коридор влево и клетка под ящиком, потом сам завал. В ящике детали, без
-/// которых шлюз не чинится.
+/// Докопаться до ящика и обследовать его (§12.415, §12.417, §12.433): шахта
+/// вниз до среднего ряда, коридор влево и клетка под ящиком, потом
+/// «Исследовать» на самой находке. В ящике деталь, без которой шлюз не
+/// чинится.
 fn dig_to_bin(sim: &mut Sim) {
     assert!(sim.plan_demolish_rect(11, 4, 1, 5), "шахта вниз размечена");
     assert!(sim.plan_demolish_rect(9, 8, 2, 1), "коридор размечен");
@@ -43,10 +44,7 @@ fn dig_to_bin(sim: &mut Sim) {
         sim.plan_demolish_rect(8, 8, 1, 1),
         "подход к ящику размечен"
     );
-    assert!(
-        sim.plan_demolish_rect(8, 7, 1, 1),
-        "завал над ящиком размечен"
-    );
+    assert!(sim.fix_at(8, 7), "находка размечена на исследование");
 }
 
 /// Ждать, пока на клетке не встанет тайл `id`.
@@ -135,7 +133,6 @@ fn the_shipped_ruleset_opens_one_verb_at_a_time() {
     assert!(!sim.home_met(), "база на карте — «?» до осмотра (§12.422)");
 
     dig(&mut sim);
-    assert!(sim.scavenge(inspect, vec!["excellent".into()], -1));
     assert!(done(&mut sim, inspect, 2000), "вход осмотрен");
     assert!(sim.home_met(), "осмотр ставит базу на карту (§12.422)");
     assert!(
@@ -170,15 +167,20 @@ fn the_shipped_ruleset_repairs_the_first_squad_with_a_map() {
     let inspect = sim.mission_index("inspect").expect("осмотр");
     let muster = sim.structure_index("muster").expect("место брифинга");
     let map = sim.item_index("map").expect("карта");
-    let hidden = sim.tile_index("rubble_table").expect("завал над столом");
-    assert_eq!(sim.tile(7, 3), hidden, "посреди левой верхней — завал");
+    let hidden = sim
+        .tile_index("unknown_table")
+        .expect("неисследованный стол");
+    assert_eq!(
+        sim.tile(7, 3),
+        hidden,
+        "посреди левой верхней — неисследованная ячейка"
+    );
     assert!(
         sim.node_cells_of().is_empty(),
         "пыльный стол — ещё не отряд"
     );
 
     dig(&mut sim);
-    assert!(sim.scavenge(inspect, vec!["excellent".into()], -1));
     assert!(done(&mut sim, inspect, 3000), "вход осмотрен");
     assert!(sim.scavenge(gatehouse, vec!["excellent".into()], -1));
     assert!(done(&mut sim, gatehouse, 6000), "местность исследована");
@@ -188,9 +190,10 @@ fn the_shipped_ruleset_repairs_the_first_squad_with_a_map() {
     // же ластиком (§12.418), а дорога к ней — коридор от шахты.
     assert!(sim.plan_demolish_rect(9, 3, 2, 1), "коридор размечен");
     assert!(sim.plan_demolish_rect(6, 2, 3, 3), "комнатка размечена");
+    assert!(sim.fix_at(7, 3), "находка размечена на исследование");
     assert!(
         until_tile(&mut sim, 7, 3, "dusty_table", 20000),
-        "под завалом нашли пыльный стол"
+        "обследовали — пыльный стол"
     );
     assert!(!sim.add_blueprint(7, 3, -1), "пыльный стол не сносится");
     assert!(
@@ -273,7 +276,6 @@ fn the_shipped_ruleset_opening_fits_before_hunger() {
         .expect("местность вокруг шлюза");
     dig(&mut sim);
     let dug = sim.world.resource::<SimTime>().tick;
-    assert!(sim.scavenge(inspect, vec!["excellent".into()], -1));
     assert!(done(&mut sim, inspect, 3000));
     let inspected = sim.world.resource::<SimTime>().tick;
     assert!(sim.scavenge(gatehouse, vec!["excellent".into()], -1));
@@ -311,20 +313,21 @@ fn the_shipped_ruleset_starts_in_one_rubble_room() {
     for row in [3, 8, 13] {
         cells.extend([(9, row), (10, row), (12, row), (13, row)]);
     }
-    // Под одной клеткой завала лежит малый ящик (§12.404).
-    let hidden = sim.tile_index("rubble_bin").expect("завал над ящиком");
+    // Находки (§12.433) стоят неисследованными ячейками, а не под завалом:
+    // малый ящик (§12.404), пыльный стол (§12.418), сломанная лежанка и
+    // старый склад в комнатке портала (§12.423).
+    let hidden = sim.tile_index("unknown_bin").expect("неисследованный ящик");
     assert_eq!(sim.tile(8, 7), hidden, "над входом в левую среднюю — ящик");
-    // Посреди левой верхней — завал над пыльным столом (§12.418).
-    let dusty = sim.tile_index("rubble_table").expect("завал над столом");
-    assert_eq!(
-        sim.tile(7, 3),
-        dusty,
-        "посреди левой верхней — завал над столом"
-    );
-    // В комнатке портала — завалы над сломанной лежанкой и старым складом
-    // (§12.423).
-    let bed = sim.tile_index("rubble_bed").expect("завал над лежанкой");
-    let store = sim.tile_index("rubble_storage").expect("завал над складом");
+    let dusty = sim
+        .tile_index("unknown_table")
+        .expect("неисследованный стол");
+    assert_eq!(sim.tile(7, 3), dusty, "посреди левой верхней — стол");
+    let bed = sim
+        .tile_index("unknown_bed")
+        .expect("неисследованная лежанка");
+    let store = sim
+        .tile_index("unknown_storage")
+        .expect("неисследованный склад");
     assert_eq!(sim.tile(16, 2), bed, "в углу комнатки портала — лежанка");
     assert_eq!(sim.tile(14, 4), store, "в другом углу — склад");
     let finds = [(15, 3), (8, 7), (7, 3), (16, 2), (14, 4)];
@@ -343,7 +346,7 @@ fn the_shipped_ruleset_starts_in_one_rubble_room() {
         .count();
     assert_eq!(
         piles, 75,
-        "ещё четыре клетки — завалы над ящиком, столом, лежанкой и складом"
+        "ещё четыре клетки — находки, и завала над ними нет (§12.433)"
     );
     let ruin = sim.tile_index("broken_gate").expect("неисследованный шлюз");
     assert_eq!(
@@ -385,7 +388,6 @@ fn the_shipped_ruleset_builds_nothing_before_the_entrance_is_inspected() {
 
     let inspect = sim.mission_index("inspect").expect("осмотр");
     dig(&mut sim);
-    assert!(sim.scavenge(inspect, vec!["excellent".into()], -1));
     assert!(done(&mut sim, inspect, 3000), "вход осмотрен");
     let open_of = |sim: &mut Sim, id: &str| {
         let t = sim.tile_index(id).expect("тайл в палитре");
@@ -403,15 +405,17 @@ fn the_shipped_ruleset_builds_nothing_before_the_entrance_is_inspected() {
         sim.plan_demolish_rect(14, 2, 3, 3),
         "комнатка портала размечена"
     );
+    assert!(sim.fix_at(14, 4), "склад размечен на исследование");
+    assert!(sim.fix_at(16, 2), "лежанка размечена на исследование");
     assert!(
         until_tile(&mut sim, 14, 4, "storage", 3000),
-        "склад откопан"
+        "склад обследован"
     );
     assert!(open_of(&mut sim, "storage"), "склад не открылся находкой");
     assert!(!open_of(&mut sim, "bed"), "лежанка открылась до починки");
     assert!(
         until_tile(&mut sim, 16, 2, "broken_bed", 3000),
-        "сломанная лежанка откопана"
+        "сломанная лежанка обследована"
     );
     assert!(sim.fix_at(16, 2), "лежанка размечена на ремонт");
     assert!(until_tile(&mut sim, 16, 2, "bed", 3000), "лежанка починена");
@@ -429,9 +433,10 @@ fn the_shipped_ruleset_returns_the_part_spent_before_the_gate() {
         sim.plan_demolish_rect(14, 2, 3, 3),
         "комнатка портала размечена"
     );
+    assert!(sim.fix_at(16, 2), "лежанка размечена на исследование");
     assert!(
         until_tile(&mut sim, 16, 2, "broken_bed", 3000),
-        "сломанная лежанка откопана"
+        "сломанная лежанка обследована"
     );
     assert!(sim.fix_at(16, 2), "лежанка размечена на ремонт");
     assert!(until_tile(&mut sim, 16, 2, "bed", 3000), "лежанка починена");
@@ -702,12 +707,12 @@ fn an_order_keeps_a_planned_rubble_clearing() {
     assert!(sim.has_assignment("excellent"), "разбор не снят");
 }
 
-/// **Под завалом найдётся малый ящик** (§12.404): разбор этой клетки оставляет
-/// не пол, а ящик — с двумя деталями и назначенный на них (§12.415),
+/// **Находка — малый ящик** (§12.404, §12.433): обследование неисследованной
+/// ячейки оставляет ящик — с деталью и назначенный на неё (§12.415),
 /// переназначаемый с первой минуты и до темы «Малый ящик» неразбираемый
 /// (что нельзя построить, того нельзя и разобрать, §12.372).
 #[test]
-fn the_shipped_ruleset_hides_a_small_bin_under_the_rubble() {
+fn the_shipped_ruleset_finds_a_small_bin_by_examining() {
     let mut sim = start();
     let rubble = sim.tile_index("rubble").expect("завал");
     let floor = sim.tile_index("floor").expect("пол");
@@ -724,15 +729,14 @@ fn the_shipped_ruleset_hides_a_small_bin_under_the_rubble() {
             }
         }
     }
-    assert!(
-        sim.plan_demolish_rect(8, 7, 1, 1),
-        "завал над ящиком разбирается"
-    );
+    assert!(!sim.plan_demolish(8, 7), "находку не разбирают");
+    assert_eq!(sim.hand_tag("excellent", 8, 7), "examine");
+    assert!(sim.fix_at(8, 7), "находка размечена на исследование");
     let found = (0..2000).any(|_| {
         sim.tick_n(1);
         sim.tile(8, 7) == bin
     });
-    assert!(found, "под завалом так и не нашёлся ящик");
+    assert!(found, "обследовали, а ящика так и нет");
 
     // Ящик найден не пустым (§12.415): деталь внутри (§12.417, §12.423), и
     // назначен он на них — без назначения коты вынесли бы находку на пол
@@ -760,8 +764,8 @@ fn the_shipped_ruleset_hides_a_small_bin_under_the_rubble() {
     );
 }
 
-/// Рамка «Разобрать» по всей стартовой базе метит **весь** завал (§12.408),
-/// а не одну клетку над ящиком, которая на слой выше прочих.
+/// Рамка «Разобрать» по всей стартовой базе метит **весь** завал (§12.408), а
+/// находки не трогает: их не разбирают, а исследуют (§12.433).
 #[test]
 fn the_shipped_ruleset_erases_all_rubble_with_one_rect() {
     let mut sim = start();
@@ -776,8 +780,8 @@ fn the_shipped_ruleset_erases_all_rubble_with_one_rect() {
         .filter(|&(x, y)| sim.tile(x, y) == rubble && sim.planned_tile(x, y) != Some(-1))
         .collect();
     assert!(missed.is_empty(), "завал без пометки: {missed:?}");
-    assert_eq!(sim.planned_tile(8, 7), Some(-1), "и завал над ящиком тоже");
-    assert_eq!(sim.planned_tile(7, 3), Some(-1), "и над пыльным столом");
+    assert_eq!(sim.planned_tile(8, 7), None, "ящик рамка не трогает");
+    assert_eq!(sim.planned_tile(7, 3), None, "и стол тоже");
     assert_eq!(
         sim.planned_tile(11, 0),
         None,
@@ -852,21 +856,19 @@ fn a_rect_eraser_leaves_the_gate_alone() {
     assert_eq!(sim.planned_tile(11, 0), None);
 }
 
-/// Под завалом в комнатке портала — сломанная лежанка (§12.423): первая
-/// починка партии, раньше шлюза, и платят за неё ломом, который даёт сам
-/// раскоп (`repair_cost`, §12.425). Починенная — обычная лежанка, и снос
+/// В комнатке портала — сломанная лежанка (§12.423, §12.433: находят её
+/// обследованием): первая починка партии, раньше шлюза, и платят за неё
+/// ломом, который даёт раскоп (`repair_cost`, §12.425). Починенная — обычная лежанка, и снос
 /// возвращает её цену целиком, деталь включительно: одна лишняя деталь —
 /// принятая цена простоты.
 #[test]
 fn the_shipped_ruleset_repairs_the_broken_bed_with_scrap() {
     let mut sim = start();
-    assert!(
-        sim.plan_demolish_rect(15, 2, 2, 1),
-        "подход и завал над лежанкой размечены"
-    );
+    assert!(sim.plan_demolish_rect(15, 2, 1, 1), "подход размечен");
+    assert!(sim.fix_at(16, 2), "находка размечена на исследование");
     assert!(
         until_tile(&mut sim, 16, 2, "broken_bed", 3000),
-        "под завалом нашли сломанную лежанку"
+        "обследовали — сломанная лежанка"
     );
     let broken = sim.tile_index("broken_bed").expect("сломанная лежанка");
     assert_eq!(
@@ -900,18 +902,23 @@ fn the_shipped_ruleset_repairs_the_broken_bed_with_scrap() {
     );
 }
 
-/// Склад под завалом (§12.423, §12.425) не чинится: откопали — и коты сами
-/// понесли в него лом с раскопа, урок §12.216 делом. Это обычный склад.
+/// Найденный склад (§12.423, §12.425, §12.433) не чинится: обследовали — и
+/// коты сами понесли в него лом с раскопа, урок §12.216 делом. Это обычный
+/// склад. Обследование растит «Науку» (`skill` у находки), хотя стройка
+/// склада её не растит.
 #[test]
 fn the_shipped_ruleset_finds_a_storage_that_fills_itself() {
     let mut sim = start();
-    assert!(
-        sim.plan_demolish_rect(14, 3, 1, 2),
-        "подход и завал над складом размечены"
-    );
+    let science = sim.skill_index("science").expect("наука");
+    assert!(sim.plan_demolish_rect(14, 3, 1, 1), "подход размечен");
+    assert!(sim.fix_at(14, 4), "находка размечена на исследование");
     assert!(
         until_tile(&mut sim, 14, 4, "storage", 3000),
-        "под завалом нашёлся склад"
+        "обследовали — склад"
+    );
+    assert!(
+        sim.xp_of("excellent", science) > 0,
+        "обследование растит науку"
     );
     assert!(
         sim.plan_demolish_rect(15, 2, 1, 1),
@@ -1042,9 +1049,9 @@ fn the_shipped_ruleset_keeps_far_ruins_out_of_reach() {
 }
 
 /// «Разбор завала» (§12.432) размечает рамкой только завал: на стартовой базе
-/// рамка 3×3 вокруг кота (`(15, 3)` свободен) размечает восемь завалов и не
-/// трогает пол под котом; вторая такая же рамка снимает разметку. Маска
-/// гаснет на размеченном.
+/// рамка 3×3 вокруг кота (`(15, 3)` свободен) размечает шесть завалов и не
+/// трогает ни пол под котом, ни две находки по углам (§12.433); вторая такая
+/// же рамка снимает разметку. Маска гаснет на размеченном.
 #[test]
 fn the_shipped_ruleset_clears_only_rubble_with_the_rubble_tool() {
     let mut sim = start();
@@ -1052,7 +1059,8 @@ fn the_shipped_ruleset_clears_only_rubble_with_the_rubble_tool() {
     assert_eq!(sim.rubble_mask()[(3 * w + 16) as usize], 1);
     assert!(sim.clear_rubble_rect(14, 2, 3, 3));
     for (x, y) in rect_cells(14, 2, 3, 3) {
-        assert_eq!(sim.demolish_planned(x, y), (x, y) != (15, 3), "({x}, {y})");
+        let rubble = ![(15, 3), (16, 2), (14, 4)].contains(&(x, y));
+        assert_eq!(sim.demolish_planned(x, y), rubble, "({x}, {y})");
     }
     assert_eq!(
         sim.rubble_mask()[(3 * w + 16) as usize],
@@ -1088,4 +1096,71 @@ fn the_rubble_tool_never_touches_a_building() {
         .filter(|&(x, y)| sim.demolish_planned(x, y))
         .count();
     assert_eq!(marked, rubble, "размечен ровно весь завал");
+}
+
+/// **Неисследованное выглядит одинаково** (§12.433): у всех тайлов с
+/// `examine` одна подпись, один цвет и одна проходимость, все они не
+/// сносятся, а обследование растит один навык. Разойдись хоть что-то — и
+/// находку узнают раньше обследования: лежанку по проходимости, стол по
+/// цвету. Шлюз в ряду (§12.426) — он первая такая ячейка партии; `surface`
+/// у него про верхний ряд, а не про облик.
+#[test]
+fn the_shipped_ruleset_hides_every_find_behind_one_look() {
+    let rs: crate::ruleset::Ruleset = serde_yaml::from_str(CORE).expect("рулсет читается");
+    let finds: Vec<_> = rs.tiles.iter().filter(|t| !t.examine.is_empty()).collect();
+    assert!(finds.len() >= 5, "находок на старте: {}", finds.len());
+    let first = finds[0];
+    for t in &finds {
+        assert_eq!(t.label, first.label, "`{}` подписан иначе", t.id);
+        assert_eq!(t.color, first.color, "`{}` другого цвета", t.id);
+        assert_eq!(t.solid, first.solid, "`{}` иначе проходим", t.id);
+        assert_eq!(t.skill, first.skill, "`{}` растит другой навык", t.id);
+        assert!(t.fixed && t.internal, "`{}` сносится или в палитре", t.id);
+        assert!(!t.veiled, "`{}` прячется под завал", t.id);
+    }
+    assert_eq!(first.skill, "science", "обследование растит «Науку»");
+}
+
+/// Кот выходит сам (§12.435): шлюз починен — первый свободный кот без
+/// приказа уходит осматривать вход, а заявка игрока на тот же осмотр уже не
+/// нужна и не принимается. Выполненный, осмотр больше не повторяется.
+#[test]
+fn the_shipped_ruleset_sends_the_cat_out_once_the_gate_is_fixed() {
+    let mut sim = start();
+    let inspect = sim.mission_index("inspect").expect("осмотр");
+    sim.tick_n(50);
+    assert!(sim.mission_left().is_none(), "выхода нет — никто не уходит");
+    dig(&mut sim);
+    let went = (0..600).any(|_| {
+        sim.tick_n(1);
+        sim.in_squad("excellent")
+    });
+    assert!(went, "кот сам вышел осмотреть вход");
+    assert!(
+        !sim.scavenge(inspect, vec!["excellent".into()], -1),
+        "второй осмотр разом не уходит"
+    );
+    assert!(done(&mut sim, inspect, 3000), "вход осмотрен");
+    sim.tick_n(200);
+    assert!(sim.mission_left().is_none(), "осмотр не повторяется");
+}
+
+/// Сам уходит только безобидный однократный заказ у шлюза (§12.435): это
+/// поступок кота, а не правило игрока, — провал, раны или вечный круг были бы
+/// решением, которого игрок не принимал.
+#[test]
+fn the_shipped_ruleset_sends_out_only_harmless_one_off_outings() {
+    let sim = start();
+    let rules = &sim.world.resource::<MissionRules>().0;
+    assert!(
+        rules.iter().any(|r| r.auto),
+        "сюжетный выход в рулсете есть"
+    );
+    for r in rules.iter().filter(|r| r.auto) {
+        assert!(r.once, "сам уходит только однократный заказ");
+        assert!(r.nearby, "сам уходит только заказ у шлюза");
+        assert!(r.alone.is_none(), "без названного кота");
+        assert_eq!(r.danger, 0, "не проваливается");
+        assert_eq!(r.harm, 0, "не ранит");
+    }
 }

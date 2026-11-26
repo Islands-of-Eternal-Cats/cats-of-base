@@ -716,9 +716,17 @@ pub(crate) fn work_jobs(
 
         let in_range = (pos.x - bp.x).abs() + (pos.y - bp.y).abs() <= 1;
         if in_range {
-            // Навык — у ставящегося тайла (§12.410): обследование руины растит
-            // «Науку», а не «Стройку». Не назван — общий навык стройки.
-            let work_skill = rules.skill_of(bp.tile).or(build_skill);
+            // Обследование (§12.410, §12.433) растит навык, названный у самой
+            // руины: цель обследования бывает обычной постройкой (склад), чью
+            // стройку «Наука» растить не должна. Прочая работа — навык
+            // ставящегося тайла, не назван — общий навык стройки.
+            let was = map.tile_at(bp.x, bp.y);
+            let examining = bp.tile >= 0 && rules.examine_of(was) == Some(bp.tile);
+            let work_skill = examining
+                .then(|| rules.skill_of(was))
+                .flatten()
+                .or_else(|| rules.skill_of(bp.tile))
+                .or(build_skill);
             let level = work_skill.map_or(0, |s| level_of(&skill_rules, skills, s));
             bp.progress += WORK_RATE + level;
             if let Some(skill) = work_skill {
@@ -728,14 +736,18 @@ pub(crate) fn work_jobs(
                 // Снос возвращает всю цену снесённого тайла, по каждому типу,
                 // и снимает ровно один слой (§12.237): постройку до пола, пол
                 // до пустоты.
+                // Находка (§12.415) открывается и сносом слоя над ней, и
+                // обследованием (§12.433): что лежало в неисследованной ячейке,
+                // ложится в открывшийся ящик.
                 let (refund, found, to): (Vec<(usize, i32)>, Vec<(usize, i32)>, i16) =
                     if bp.tile < 0 {
-                        let was = map.tile_at(bp.x, bp.y);
                         (
                             rules.cost_of(was).to_vec(),
                             rules.holds_of(was).to_vec(),
                             rules.stripped(was),
                         )
+                    } else if examining {
+                        (Vec::new(), rules.holds_of(was).to_vec(), bp.tile)
                     } else {
                         (Vec::new(), Vec::new(), bp.tile)
                     };

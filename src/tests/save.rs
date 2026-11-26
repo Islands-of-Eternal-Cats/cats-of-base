@@ -853,6 +853,31 @@ fn an_old_snapshot_does_not_hide_the_shelves() {
     );
 }
 
+/// Избранное из рулсета не делает предмет виденным (§12.131, §12.112).
+///
+/// Лом и деталь стоят в избранном у новой партии с нулевого тика, а свежая
+/// партия на голом `Sim::new` их не видела. Добор `Seen` по закладкам при
+/// загрузке объявлял их новостью и открывал дверь «Ресурсы» с двумя нулями.
+#[test]
+fn ruleset_favorites_are_not_seen_after_a_load() {
+    let mut live = Sim::new(CORE).expect("рулсет");
+    live.without_timeline();
+    live.tick();
+    let scrap = live.item_index("scrap").expect("предмет `scrap`");
+    assert!(live.is_favorite(scrap), "лом в избранном рулсета");
+    assert!(!live.seen(scrap), "свежая партия лома не видела");
+
+    let json = live.save().expect("снимок");
+    let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
+    loaded.tick();
+
+    assert!(
+        !loaded.seen(scrap),
+        "загрузка сделала лом виденным по одной закладке рулсета",
+    );
+    assert!(loaded.is_favorite(scrap), "избранное при этом цело");
+}
+
 /// Личное дело переживает загрузку. Промах здесь тихий: пустое дело от
 /// настоящего не отличить, и загруженная партия объявила бы всех котов
 /// новобранцами без прошлого.
