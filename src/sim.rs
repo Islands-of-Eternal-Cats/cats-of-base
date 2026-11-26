@@ -33,9 +33,11 @@ use bevy_ecs::system::RunSystemOnce;
 use crate::components::*;
 use crate::gear::OutfitPlan;
 use crate::goals::{WorldFacts, built_counts, progress_of};
-use crate::hauling::{HAND_HOLD, best_tiers, free_space, plan_spend, stock_grid, stored_counts};
+use crate::hauling::{
+    HAND_HOLD, best_tiers, bin_pulls, free_space, plan_spend, stock_grid, stored_counts,
+};
 use crate::jobs::{BUILD_WORK, Plan, build_spot, may_build, site_clutter, work_spot};
-use crate::map::{BaseMap, rect_cells};
+use crate::map::{BaseMap, DIRS, rect_cells};
 use crate::missions::{
     Crew, crew_danger, crew_force, crew_traits, duration, exit_cells, faction_is_met, gather_squad,
     guide_cut, guide_of, guide_value, nearest_exit, node_cells, node_count, numbered_as, outcome,
@@ -382,6 +384,13 @@ impl Sim {
                 .yields
                 .len()
                 .saturating_sub(self.world.resource::<RaidTally>().of(def)),
+            // Круг словами — только когда до него дошли (§12.406): пока идут
+            // `yields`, порция названа как есть и убывает на глазах.
+            circle: if self.world.resource::<RaidTally>().of(def) >= rule.yields.len() {
+                rule.floor_mix()
+            } else {
+                Vec::new()
+            },
             room: self.nearby_room(def),
         }
     }
@@ -1166,6 +1175,29 @@ impl Sim {
         )
     }
 
+    /// Видела ли база предмет — для ворот находки (`sighted`, §12.210).
+    ///
+    /// Личную вещь (§12.256) `note_seen` в `Seen` не пишет намеренно: она не
+    /// ресурс базы, и строка «Анализатор 0» в «Ресурсах» с новостью «новый
+    /// ресурс» говорили бы о том, чем база не располагает. Но ворота находки
+    /// спрашивают другое — «пришло ли это на базу», — и лабораторию открывает
+    /// именно анализатор Антенны (§12.434). Поэтому личная вещь считается
+    /// виденной, пока её носит кот базы. Монотонность не страдает: личную вещь
+    /// не снять, не сносить и не потерять (§12.256), а котов игра не теряет —
+    /// пленный тоже кот базы, и вещь при нём.
+    fn sighted(&mut self, item: usize) -> bool {
+        if self.world.resource::<Seen>().saw(item) {
+            return true;
+        }
+        if !self.world.resource::<ItemRules>().personal(item) {
+            return false;
+        }
+        self.world
+            .query::<&Gear>()
+            .iter(&self.world)
+            .any(|gear| gear.has(item))
+    }
+
     /// Открыта ли постройка этого тайла. **Одно выражение на все ворота**
     /// (§12.27, §12.210): его зовут разметка, маска превью, лента новостей и
     /// палитра вида, и второй экземпляр показал бы кнопку, которую фасад
@@ -1190,10 +1222,11 @@ impl Sim {
         if !tech_ok {
             return false;
         }
-        let seen = self.world.resource::<Seen>();
-        if !rules.sighted_of(tile).iter().all(|&item| seen.saw(item)) {
+        let sighted = rules.sighted_of(tile).to_vec();
+        if !sighted.iter().all(|&item| self.sighted(item)) {
             return false;
         }
+        let rules = self.world.resource::<TileRules>();
         // Учёный, до которого дорос хоть кто-то (§12.257; с §12.259 так закрыта тема, а не парта): нужен тот,
         // кому есть чему учить. Шкала монотонная — плен учёного парту не уносит.
         let mastery = self.world.resource::<Mastery>();
@@ -1368,12 +1401,12 @@ impl Sim {
     }
 
     /// Открыта ли автоматика — по правилу на каждое: `(сбыт, производство,
-    /// вылазки, учёба)`, §12.93, §12.314.
+    /// вылазки, учёба, уборка)`, §12.93, §12.314, §12.401.
     ///
     /// Одно место на снимок и на тесты: снапшот на хосте не собрать, а три
     /// почти одинаковых флага рядом — приглашение перепутать их местами, и
     /// заметить это можно было бы только по молча не работающей строке.
-    pub(crate) fn auto_gates_open(&self) -> (bool, bool, bool, bool) {
+    pub(crate) fn auto_gates_open(&self) -> (bool, bool, bool, bool, bool) {
         let gates = self.world.resource::<AutoRules>();
         let techs = self.world.resource::<Techs>();
         (
@@ -1381,6 +1414,15 @@ impl Sim {
             gates.crafting_open(techs),
             gates.raids_open(techs),
             gates.study_open(techs),
+            gates.tidy_open(techs),
+        )
+    }
+
+    /// Убирают ли коты сами прямо сейчас — тумблер и ворота (§12.401).
+    pub(crate) fn tidies(&self) -> bool {
+        self.world.resource::<AutoRules>().tidies(
+            self.world.resource::<AutoTidy>(),
+            self.world.resource::<Techs>(),
         )
     }
 
@@ -1869,8 +1911,16 @@ impl Sim {
                         .iter()
                         .filter_map(|(id, &lvl)| skill_index(id).map(|s| (s, lvl)))
                         .collect(),
+                    // Предшественник выше по палитре (§12.209) — или вне её
+                    // (§12.418): руину чинят, а не строят, и у починенного
+                    // тайла (`internal`) своих ворот в очереди палитры нет, так
+                    // что цикла через него не сложить. Индексы при этом растут
+                    // только в конец, и выше починенный стол не встать.
+                    // Сам себя тайл называть вправе (§12.425): «такой хоть раз
+                    // стоял» — значит его починили или откопали, и палитра
+                    // открывается находкой (лежанка, склад).
                     after: tile_index_of(&t.after)
-                        .filter(|&prev| prev < def)
+                        .filter(|&prev| prev <= def || rs.tiles[prev].internal)
                         .map(|prev| prev as i16),
                     raided: (!t.raided.is_empty())
                         .then(|| rs.missions.iter().position(|m| m.id == t.raided))
@@ -1879,8 +1929,19 @@ impl Sim {
                         .filter(|&prev| prev < def)
                         .map(|prev| prev as i16),
                     reached: tile_index_of(&t.reached).map(|t| t as i16),
+                    holds: t
+                        .holds
+                        .iter()
+                        .filter_map(|(id, &n)| item_index(id).map(|i| (i, n)))
+                        .collect(),
                     examine: tile_index_of(&t.examine).map(|t| t as i16),
                     repair: tile_index_of(&t.repair).map(|t| t as i16),
+                    repair_cost: t
+                        .repair_cost
+                        .iter()
+                        .filter_map(|(id, &n)| item_index(id).map(|i| (i, n)))
+                        .collect(),
+                    skill: skill_index(&t.skill),
                     fixed: t.fixed,
                     internal: t.internal,
                     quiet: t.quiet,
@@ -1920,9 +1981,40 @@ impl Sim {
                         })
                         .collect(),
                     tech: d.tech.clone(),
+                    internal: d.internal,
+                    grows: Vec::new(),
                 })
                 .collect(),
         ));
+        // Рост клеток штампов (§12.420): раскопка и ремонт — не разборка.
+        {
+            let tiles = world.resource::<TileRules>();
+            let n = tiles.0.len() as i16;
+            let grows: Vec<Vec<(i16, i16)>> = world
+                .resource::<StructureRules>()
+                .0
+                .iter()
+                .map(|r| {
+                    let mut out = Vec::new();
+                    for t in r.cells.iter().flatten().flatten().copied() {
+                        for to in (0..n).filter(|&to| to != t && tiles.grows_into(t, to)) {
+                            if !out.contains(&(t, to)) {
+                                out.push((t, to));
+                            }
+                        }
+                    }
+                    out
+                })
+                .collect();
+            for (r, g) in world
+                .resource_mut::<StructureRules>()
+                .0
+                .iter_mut()
+                .zip(grows)
+            {
+                r.grows = g;
+            }
+        }
         // Стартовые объекты-штампы (§12.279) — после правил штампов, потому
         // что сетку берут у них, и поверх прямоугольников застройки. Ставятся
         // готовыми, как и вся стартовая застройка: это уже стоящая база.
@@ -2165,6 +2257,7 @@ impl Sim {
                                         phases: def.phases.clone(),
                                         requires: def.requires,
                                         needs,
+                                        sell_only: rs.items.get(i).is_some_and(|it| it.unique),
                                     };
                                     (i, line)
                                 })
@@ -2260,6 +2353,7 @@ impl Sim {
                     cleanses: blight_index(&m.cleanses),
                     tech: (!m.tech.is_empty()).then(|| m.tech.clone()),
                     once: m.once,
+                    auto: m.auto,
                     raided: (!m.raided.is_empty())
                         .then(|| rs.missions.iter().position(|o| o.id == m.raided))
                         .flatten(),
@@ -2401,6 +2495,7 @@ impl Sim {
                 .collect(),
         ));
         world.insert_resource(Tickers::default());
+        world.insert_resource(Hidden::default());
         // Что база уже видела своими глазами (§12.131). Пустой заводится, а
         // наполняется ниже — одним прогоном наблюдателя по собранному миру:
         // стартовый склад база видела заведомо, и ждать первого тика тут
@@ -2413,6 +2508,7 @@ impl Sim {
         world.insert_resource(RecruitsMet(vec![false; rs.recruits.len()]));
         world.insert_resource(Mastery::default());
         world.insert_resource(Reached::default());
+        world.insert_resource(RubbleMet::default());
         // Лента новостей (§12.120). Базовой линии у неё пока нет: снимет её
         // первый же `note_news`, и стартовая доступность новостью не станет.
         world.insert_resource(News::default());
@@ -2424,6 +2520,7 @@ impl Sim {
             crafting: rs.automation.crafting.clone(),
             raids: rs.automation.raids.clone(),
             study: rs.automation.study.clone(),
+            tidy: rs.automation.tidy.clone(),
         });
         world.insert_resource(Trace::default());
         world.insert_resource(NeedRules {
@@ -2880,7 +2977,13 @@ impl Sim {
         if !may_build(&plan, self.world.resource::<TileRules>(), (x, y), t) {
             return false;
         }
-        self.spawn_blueprint(x, y, t)
+        let rubble = t < 0 && self.rubble_at(x, y);
+        let placed = self.spawn_blueprint(x, y, t);
+        // Первый разбор завала открывает инструмент «Расчистить» (§12.449).
+        if placed && rubble {
+            self.world.resource_mut::<RubbleMet>().0 = true;
+        }
+        placed
     }
 
     /// Чертёж на клетке без единых ворот: уже стоящий тайл не размечается, а
@@ -2931,18 +3034,135 @@ impl Sim {
             .or_else(|| rules.repair_of(tile).map(|t| (t, false)))
     }
 
+    /// Чего не хватает базе на ремонт руины в клетке (§12.419): цена ремонта
+    /// минус всё, что у базы есть (кучи где угодно и лапы — ремонт это чертёж,
+    /// а чертёж берёт и с пола, §12.130), минус обещанное покупателю.
+    /// Пусто — материал есть (или это обследование: у него цены нет).
+    ///
+    /// Одно выражение на кнопку «Починить», приказ коту по руине и подсказку
+    /// в панели: разойдись они — кнопка горела бы там, где клик не сработает.
+    fn fix_lacks(&mut self, x: i32, y: i32) -> Vec<(usize, i32)> {
+        let Some((t, false)) = self.fix_target(x, y) else {
+            return Vec::new();
+        };
+        let below = self.world.resource::<BaseMap>().tile_at(x, y);
+        let cost = self
+            .world
+            .resource::<TileRules>()
+            .site_cost(below, t)
+            .to_vec();
+        if cost.is_empty() {
+            return cost;
+        }
+        let have = {
+            let mut piles = self.world.query::<&Stack>();
+            let mut loads = self.world.query::<&Carrying>();
+            crate::hauling::on_base_counts(piles.iter(&self.world), loads.iter(&self.world))
+        };
+        let owed = self.owed_for_sale();
+        cost.into_iter()
+            .filter_map(|(item, need)| {
+                let reserved = owed
+                    .iter()
+                    .find(|&&(i, _)| i == item)
+                    .map_or(0, |&(_, n)| n);
+                let free = have.get(item).copied().unwrap_or(0) - reserved;
+                (free < need).then_some((item, need - free.max(0)))
+            })
+            .collect()
+    }
+
+    /// Почему руину в клетке не починить (§12.419), тегом для панели клетки:
+    /// `lacks` — у базы нет материала на ремонт; `built` (§12.424) — нет, но
+    /// недостающее стоит в постройке на карте, и снос её вернёт (снос
+    /// возвращает цену, `work_jobs`). Пусто — можно (или клетка не руина, или
+    /// ремонт уже размечен).
+    ///
+    /// `built` — это не отказ мягче, а отказ с дорогой назад: единственную
+    /// деталь дебюта можно поставить в склад раньше шлюза, и «нет материала»
+    /// без слова о складе было бы причиной наполовину (§12.53).
+    ///
+    /// Раньше обоих — **знакомство** (§12.426): `unseen` — база не видела ни
+    /// одного предмета из цены ремонта (кнопки нет вовсе: чем чинить, пока
+    /// неясно), `unknown` — видела не все (кнопка погашена, незнакомое — «??»).
+    /// Шкала та же, что у строки склада, `Seen` (§12.131): цена руины — тоже
+    /// находка, и называть деталь раньше, чем её принесли, — спойлер.
+    pub fn fix_why(&mut self, x: i32, y: i32) -> String {
+        if self.blueprint_at(x, y).is_some() {
+            return String::new();
+        }
+        if let Some((t, false)) = self.fix_target(x, y) {
+            let below = self.world.resource::<BaseMap>().tile_at(x, y);
+            let cost = self
+                .world
+                .resource::<TileRules>()
+                .site_cost(below, t)
+                .to_vec();
+            let seen = self.world.resource::<Seen>();
+            let known = cost.iter().filter(|&&(i, _)| seen.saw(i)).count();
+            if !cost.is_empty() && known == 0 {
+                return "unseen".to_string();
+            }
+            if known < cost.len() {
+                return "unknown".to_string();
+            }
+        }
+        let lacks = self.fix_lacks(x, y);
+        if lacks.is_empty() {
+            String::new()
+        } else if self.held_in_buildings(&lacks) {
+            "built".to_string()
+        } else {
+            "lacks".to_string()
+        }
+    }
+
+    /// Вернёт ли снос стоящих построек хоть что-то из недостающего (§12.424):
+    /// клетка, которую можно разобрать (`may_dismantle` — те же ворота, что у
+    /// ластика), и в цене её тайла есть нужный предмет.
+    fn held_in_buildings(&mut self, lacks: &[(usize, i32)]) -> bool {
+        let (w, h) = {
+            let map = self.world.resource::<BaseMap>();
+            (map.width, map.height)
+        };
+        for y in 0..h {
+            for x in 0..w {
+                let tile = self.world.resource::<BaseMap>().tile_at(x, y);
+                if tile < 0 {
+                    continue;
+                }
+                let holds = self
+                    .world
+                    .resource::<TileRules>()
+                    .cost_of(tile)
+                    .iter()
+                    .any(|&(item, _)| lacks.iter().any(|&(l, _)| l == item));
+                if holds && self.may_dismantle(x, y) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Чертёж работы над руиной: уже размеченный или новый (§12.379).
+    /// Новый ремонт без материала на базе не размечается (§12.419): работа,
+    /// которую нечем сделать, висела бы молча — та же молчащая кнопка.
     fn fix_blueprint(&mut self, x: i32, y: i32) -> Option<Entity> {
+        if self.blueprint_at(x, y).is_none() && !self.fix_lacks(x, y).is_empty() {
+            return None;
+        }
         let (t, _) = self.fix_target(x, y)?;
         // Руина стоит, где стоит: доступ, зонирование и верхний ряд — ворота
         // **новой** постройки, а не работы над старой. Спросить их значило бы
         // отказать «?» за шахтой, ещё заваленной, — без причины, которую
         // игрок мог бы понять (§12.53): работа просто ждёт, пока до руины
-        // докопаются, как любой чертёж. Слой спрашиваем: он про то, что во что
-        // превращается, и это свойство рулсета, а не места.
-        let below = self.world.resource::<BaseMap>().tile_at(x, y);
-        if !self.world.resource::<TileRules>().rests_on(below, t) || !self.spawn_blueprint(x, y, t)
-        {
+        // докопаются, как любой чертёж. Слой тоже не спрашиваем (§12.425): что
+        // во что превращается, руина уже сказала сама (`examine` · `repair`), а
+        // `on` у тайла про **стройку** — сломанная лежанка чинится в обычную,
+        // которую строят на полу, и с `on: broken_bed` её нельзя было бы
+        // поставить из палитры.
+        if !self.spawn_blueprint(x, y, t) {
             return None;
         }
         self.blueprint_at(x, y)
@@ -3033,9 +3253,13 @@ impl Sim {
     ) -> bool {
         let Some((tile, supplied, other)) = ({
             let rules = self.world.resource::<TileRules>();
-            self.world
-                .get::<Blueprint>(bp_e)
-                .map(|bp| (bp.tile, missing(rules, bp).is_empty(), bp.assignee))
+            self.world.get::<Blueprint>(bp_e).map(|bp| {
+                (
+                    bp.tile,
+                    missing(rules, self.world.resource::<BaseMap>(), bp).is_empty(),
+                    bp.assignee,
+                )
+            })
         }) else {
             return false;
         };
@@ -3185,6 +3409,11 @@ impl Sim {
         let Some(rule) = self.world.resource::<StructureRules>().0.get(def).cloned() else {
             return false;
         };
+        // Штамп стартовой застройки (§12.418) не строится вовсе: пыльный стол
+        // чинят картой, а новые столы ставят обычным местом брифинга.
+        if rule.internal {
+            return false;
+        }
         if !rule.tech.is_empty() && !self.world.resource::<Techs>().knows(&rule.tech) {
             return false;
         }
@@ -3324,6 +3553,74 @@ impl Sim {
     /// запланирована, один жест половину снял бы, а половину поставил, и результат
     /// зависел бы от того, что игрок делал раньше. Порядок «сначала отмена» ещё и
     /// безопаснее — отмена ничего не разрушает.
+    /// Инструмент «Разбор завала» (§12.432): ластик, который берёт **только
+    /// завал** (`TileRules::is_rubble`), — постройку им не снести, сколько рамкой
+    /// ни задень. Работает переключателем: есть в рамке неразмеченный завал —
+    /// размечаются все такие; весь уже размечен — разметка снимается. Снос тот
+    /// же, что у ластика и кнопки «Разобрать» (`add_blueprint(.., -1)`).
+    pub fn clear_rubble_rect(&mut self, x: i32, y: i32, w: i32, h: i32) -> bool {
+        note(&mut self.world, format!("clear_rubble {x} {y} {w} {h}"));
+        let rubble: Vec<(i32, i32)> = {
+            let (map, rules) = (
+                self.world.resource::<BaseMap>(),
+                self.world.resource::<TileRules>(),
+            );
+            rect_cells(x, y, w, h)
+                .filter(|&(cx, cy)| rules.is_rubble(map.tile_at(cx, cy)))
+                .collect()
+        };
+        let (marked, fresh): (Vec<_>, Vec<_>) = rubble
+            .into_iter()
+            .partition(|&(cx, cy)| self.demolish_planned(cx, cy));
+        let mut changed = false;
+        if fresh.is_empty() {
+            for (cx, cy) in marked {
+                changed |= self.cancel_blueprint(cx, cy);
+            }
+        } else {
+            for (cx, cy) in fresh {
+                changed |= self.add_blueprint(cx, cy, -1);
+            }
+        }
+        changed
+    }
+
+    /// Маска инструмента «Разбор завала» (§12.432): 1 там, где завал ещё не
+    /// размечен на разбор. Вид красит её теми же зелёными клетками, что маску
+    /// постройки (§12.302).
+    pub fn rubble_mask(&mut self) -> Vec<u8> {
+        let (w, h) = (self.width, self.height);
+        // Размеченный снос собираем разом: маска считается каждым кадром, пока
+        // инструмент в руке, и опрос чертежей на каждую клетку стоил бы
+        // клетки × чертежи.
+        let planned: std::collections::HashSet<(i32, i32)> = {
+            let mut q = self.world.query::<&Blueprint>();
+            q.iter(&self.world)
+                .filter(|bp| bp.tile < 0)
+                .map(|bp| (bp.x, bp.y))
+                .collect()
+        };
+        let (map, rules) = (
+            self.world.resource::<BaseMap>(),
+            self.world.resource::<TileRules>(),
+        );
+        let mut mask = vec![0u8; (w * h) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                if rules.is_rubble(map.tile_at(x, y)) && !planned.contains(&(x, y)) {
+                    mask[(y * w + x) as usize] = 1;
+                }
+            }
+        }
+        mask
+    }
+
+    /// Размечен ли на клетке снос (чертёж с тайлом `-1`).
+    pub(crate) fn demolish_planned(&mut self, x: i32, y: i32) -> bool {
+        self.blueprint_at(x, y)
+            .is_some_and(|e| self.world.get::<Blueprint>(e).is_some_and(|bp| bp.tile < 0))
+    }
+
     pub fn plan_demolish_rect(&mut self, x: i32, y: i32, w: i32, h: i32) -> bool {
         note(&mut self.world, format!("erase_rect {x} {y} {w} {h}"));
         // Объект убирается **целиком и одним решением** (§12.160): половина
@@ -3348,6 +3645,18 @@ impl Sim {
             let Some((e, whole)) = self.structure_at(cx, cy) else {
                 continue;
             };
+            // Стартовый штамп (`internal`, §12.418) целиком не сносится: его
+            // клетки лежат под завалом, и ластик снимает с них по слою, как с
+            // любого завала (§12.420). Объект при этом живёт —
+            // `prune_structures` считает раскопку и ремонт ростом клетки.
+            let internal = self
+                .world
+                .get::<Structure>(e)
+                .and_then(|s| self.world.resource::<StructureRules>().0.get(s.def))
+                .is_some_and(|r| r.internal);
+            if internal {
+                continue;
+            }
             self.world.despawn(e);
             for (xy, tile) in whole {
                 changed |= self.cancel_blueprint(xy.0, xy.1);
@@ -3364,9 +3673,28 @@ impl Sim {
 
         // Остальная рамка — прежним правилом: сперва отмена, и только если
         // снимать было нечего, планируем снос.
-        let cells: Vec<(i32, i32)> = rect_cells(x, y, w, h)
-            .filter(|c| !done.contains(c))
-            .collect();
+        //
+        // Выход наверх (`surface`: шлюз и его руины) рамка не трогает вовсе
+        // (§12.411): без него нет ни вылазок, ни новых котов, и сносят его
+        // только кликом по одной клетке — осознанно, а не заодно с завалом.
+        // Завал над шлюзом (§12.418) — не выход, а завал: он `surface` лишь
+        // потому, что лежит в верхнем ряду, и рамка берёт его, как любой
+        // другой. Отличает его то же, что любой завал: вне палитры и не
+        // `fixed` (шлюз и руины `fixed`).
+        let single = w.abs() <= 1 && h.abs() <= 1;
+        let cells: Vec<(i32, i32)> = {
+            let (map, rules) = (
+                self.world.resource::<BaseMap>(),
+                self.world.resource::<TileRules>(),
+            );
+            rect_cells(x, y, w, h)
+                .filter(|c| !done.contains(c))
+                .filter(|&(cx, cy)| {
+                    let t = map.tile_at(cx, cy);
+                    single || !rules.is_surface(t) || (rules.is_internal(t) && !rules.is_fixed(t))
+                })
+                .collect()
+        };
         let mut cancelled = false;
         for &(cx, cy) in &cells {
             cancelled |= self.cancel_blueprint(cx, cy);
@@ -3385,7 +3713,21 @@ impl Sim {
                 self.world.resource::<BaseMap>(),
                 self.world.resource::<TileRules>(),
             );
-            let level = |&(cx, cy): &(i32, i32)| rules.level(map.tile_at(cx, cy));
+            // Завал (`internal` и `solid`, §12.372) — всегда верхний слой,
+            // сколько бы под ним ни лежало (§12.408): завал над найденным ящиком
+            // (§12.404) на уровень выше голого завала, и рамка по всей базе
+            // брала только его. Только завал (§12.411): шлюз тоже `internal`,
+            // но он постройка, а не обломки. Неснимаемое (`fixed`: пыльный и
+            // починенный стол, §12.418) завалом не считается — иначе рамка
+            // целилась бы в него и не снимала больше ничего.
+            let level = |&(cx, cy): &(i32, i32)| {
+                let t = map.tile_at(cx, cy);
+                if rules.is_rubble(t) {
+                    usize::MAX
+                } else {
+                    rules.level(t)
+                }
+            };
             let top = cells.iter().map(level).max().unwrap_or(0);
             cells.iter().copied().filter(|c| level(c) == top).collect()
         };
@@ -3479,9 +3821,9 @@ impl Sim {
     ///
     /// **Ящик — обычный тайл с ненулевым `priority`**, и в этом всё правило:
     /// материал ходит только вверх по ярусам, а набор говорит, какой именно
-    /// материал сюда пускают. Записи нет — клетка принимает всё, поэтому первый
-    /// включённый предмет **сужает**, а снятие последнего возвращает «принимает
-    /// всё»: два представления одного состояния однажды разъехались бы.
+    /// материал сюда пускают. Записи нет — ящик не принимает ничего (§12.402):
+    /// что в нём держать, решает игрок, а снятие последнего предмета
+    /// возвращает ящик в это состояние.
     ///
     /// Ворота одни — **у клетки должен быть ярус**. Настроить склад нельзя
     /// намеренно: он и так вместительнее (20 против 10), и адресный склад побил
@@ -3506,6 +3848,20 @@ impl Sim {
             return false;
         }
         self.world.resource_mut::<Bins>().set(x, y, item, on);
+        // Сменили назначение — то, чего ящик больше не принимает, помечено на
+        // вывоз тем же кликом (§12.402): это решение игрока, и ждать
+        // «Автоуборки» ему незачем. Дальше всё делает обычная уборка — везёт
+        // туда, где примут, а некуда — выносит на пол рядом (`unload_spot`).
+        let mut q = self.world.query::<(Entity, &Position, &Stack)>();
+        let bins = self.world.resource::<Bins>();
+        let evicted: Vec<Entity> = q
+            .iter(&self.world)
+            .filter(|(_, p, s)| (p.x, p.y) == (x, y) && !bins.accepts(true, x, y, s.item))
+            .map(|(e, ..)| e)
+            .collect();
+        for e in evicted {
+            self.world.entity_mut(e).insert(ToStore);
+        }
         true
     }
 
@@ -3601,8 +3957,8 @@ impl Sim {
             return false;
         }
         // Отряд на автомиссии расписан (§12.400, отменяет автопаузу §12.72):
-        // на **другой** заказ его не отпускают, пока игрок сам не поставил
-        // правило на паузу или не снял его. Прежде приказ усыплял правило
+        // на **другой** заказ его не отпускают, пока игрок сам не снял правило
+        // (паузы у правила с §12.440 нет). Прежде приказ усыплял правило
         // молча, и рутина вставала без решения игрока — вернувшийся отряд
         // оставался дома, и об этом говорил только приглушённый значок.
         // Свой заказ правила не держит: правило уходит через эту же кнопку.
@@ -4241,7 +4597,6 @@ impl Sim {
                 .collect(),
             busy: !self.node_is_free(x, y),
             auto: auto.map_or(-1, |def| def as i32),
-            auto_on: self.world.resource::<AutoRaids>().is_on(x, y),
             auto_share,
             auto_fail,
             fit,
@@ -4708,11 +5063,10 @@ impl Sim {
     /// недетерминирован — по номеру отзывался бы то один отряд, то другой. Двух
     /// вылазок по одному заказу не бывает, заказ их и различает (§12.55).
     ///
-    /// Отзыв **усыпляет правило автовылазки** этого узла (§12.77): без этого
-    /// «Отозвать» у автоматического отряда не значит ничего — правило заводит
-    /// заявку заново тем же тиком, и кнопка читается как сломанная. Стирать
-    /// правило тоже нельзя: отзывают ради разового дела на базе, а круг после
-    /// него тот же самый.
+    /// Отзыв **снимает правило автовылазки** этого узла (§12.440; до неё
+    /// усыплял, §12.77): без этого «Отозвать» у автоматического отряда не
+    /// значит ничего — правило заводит заявку заново тем же тиком, и кнопка
+    /// читается как сломанная.
     ///
     /// Вернёт false, если такой вылазки нет или отряд уже ушёл.
     pub fn cancel_mission(&mut self, def: usize) -> bool {
@@ -4769,8 +5123,10 @@ impl Sim {
                     .collect()
             })
             .unwrap_or_default();
+        // Отзыв автоотряда снимает правило (§12.440, до него — усыплял,
+        // §12.77): оставленное, оно завело бы заявку заново тем же тиком.
         for (x, y) in nodes {
-            self.world.resource_mut::<AutoRaids>().set_on(x, y, false);
+            self.world.resource_mut::<AutoRaids>().clear(x, y);
         }
         self.disband(mission_e);
         true
@@ -5257,32 +5613,6 @@ impl Sim {
         String::new()
     }
 
-    /// Приостановить правило узла `(x, y)` или вернуть его в строй (§12.77).
-    ///
-    /// **Пауза — не снятие**, и в этом весь смысл: отряд привёз гору лома, её
-    /// надо разгрести, а через сотню тиков вернуться к тому же кругу. Снятое
-    /// правило пришлось бы ставить заново — то есть искать заказ среди
-    /// карточек и принимать решение, которого игрок не менял. Усыплённое помнит
-    /// заказ и будится тем же тумблером.
-    ///
-    /// Усыпляет правило, кроме игрока, только отзыв собравшегося отряда
-    /// (`cancel_mission`): решение взамен ближайшего круга. Приказ на **другой**
-    /// заказ с §12.400 правило не усыпляет, а отклоняется — отряд на
-    /// автомиссии расписан, и прервать рутину игрок обязан сам, этим тумблером.
-    ///
-    /// Идущую вылазку пауза **не отзывает**, ровно как и снятие: отряд уже в
-    /// поле, а оттуда не отзывают вовсе (§12.22).
-    ///
-    /// Вернёт false, если в клетке не гараж или правила на нём нет: будить
-    /// нечего, а заводить правило умеет только `set_auto_raid`.
-    pub fn set_auto_raid_on(&mut self, x: i32, y: i32, on: bool) -> bool {
-        note(&mut self.world, format!("auto_raid_on {x} {y} {on}"));
-        if !self.is_node_at(x, y) {
-            return false;
-        }
-        self.world.resource_mut::<AutoRaids>().set_on(x, y, on)
-    }
-
     /// Правило автовылазки: повторить за игроком клик по кнопке заказа (§12.67).
     ///
     /// **Стоит в фасаде, а не в цепочке систем** — и это единственное правило,
@@ -5316,19 +5646,15 @@ impl Sim {
         // Очередь — в порядке отрядов (§12.284): два отряда на одном заказе
         // уходят по номерам, а не по тому, кто выше на карте.
         let order = self.node_cells_of();
-        rules.sort_by_key(|&(x, y, ..)| {
+        rules.sort_by_key(|&(x, y, _)| {
             order
                 .iter()
                 .position(|&c| c == (x, y))
                 .unwrap_or(usize::MAX)
         });
-        for (x, y, def, on) in rules {
+        for (x, y, def) in rules {
             if !self.is_node_at(x, y) {
                 self.world.resource_mut::<AutoRaids>().clear(x, y);
-                continue;
-            }
-            // Усыплённое правило помнит заказ, но заявок не заводит (§12.77).
-            if !on {
                 continue;
             }
             if !self.node_is_free(x, y) || !self.squad_is_fit(x, y) {
@@ -5360,6 +5686,46 @@ impl Sim {
             // кнопку» и стало «держи район чистым», — а самая запущенная
             // ступень и есть та, что вот-вот расползётся.
             self.launch_node(def, x, y, -1);
+        }
+    }
+
+    /// Сюжетный выход кота (§12.435): заказ с `auto` уходит сам — первый
+    /// свободный и готовый кот по `id` берётся за него, как только может дойти
+    /// до шлюза.
+    ///
+    /// Это **не правило игрока**, а поступок кота: починили шлюз — кот сам
+    /// выглянул наружу. Поэтому ни тумблера, ни ворот технологии у него нет, а
+    /// заказ обязан быть однократным: выполненный, он перестаёт существовать, и
+    /// правило замолкает навсегда (сторож
+    /// `the_shipped_ruleset_sends_out_only_harmless_one_off_outings`).
+    ///
+    /// Стоит в фасаде рядом с `run_auto_raids` по тому же доводу (§12.67):
+    /// заявка — это `launch_at`, и второго способа уйти в поле нет. Ворота —
+    /// все у `launch_at`: выход, свободный кот, готовность (спящего не будит,
+    /// раненого не поднимает — правило просто ждёт), предел состава. Через
+    /// `scavenge` не идёт, чтобы не писать журнал команд каждый тик: поступок
+    /// кота выводится из мира, и при воспроизведении журнала случится сам.
+    fn run_auto_outings(&mut self) {
+        let defs: Vec<usize> = {
+            let rules = self.world.resource::<MissionRules>();
+            let raids = self.world.resource::<Raids>();
+            rules
+                .0
+                .iter()
+                .enumerate()
+                .filter(|(d, r)| r.auto && !(r.once && raids.0.contains(d)))
+                .map(|(d, _)| d)
+                .collect()
+        };
+        for def in defs {
+            if self.mission_on(def, None).is_some() {
+                continue;
+            }
+            for cat in self.free_cats() {
+                if self.launch_at(def, vec![cat], None, None, true) {
+                    break;
+                }
+            }
         }
     }
 
@@ -5927,6 +6293,19 @@ impl Sim {
     pub fn set_favorite(&mut self, item: usize, on: bool) -> bool {
         note(&mut self.world, format!("favorite {item} {on}"));
         self.world.resource_mut::<Favorites>().set(item, on);
+        true
+    }
+
+    /// Скрыть строку предмета в окне «Ресурсы» или вернуть её (§12.418).
+    ///
+    /// Ворот нет по доводу избранного: это порядок и видимость строк, а не
+    /// механика. Правила на скрытом предмете продолжают работать.
+    pub fn set_hidden(&mut self, item: usize, on: bool) -> bool {
+        note(&mut self.world, format!("hide {item} {on}"));
+        if item >= self.world.resource::<Seen>().0.len() {
+            return false;
+        }
+        self.world.resource_mut::<Hidden>().set(item, on);
         true
     }
 
@@ -7070,7 +7449,13 @@ impl Sim {
             return tag.to_string();
         }
         // Руина отвечает работой над собой (§12.379): `examine` · `repair`.
+        // Ремонт без материала на базе — отказ (§12.419): тем же `fix_why`,
+        // что гасит кнопку «Починить».
         if let Some((_, examine)) = self.fix_target(x, y) {
+            let why = self.fix_why(x, y);
+            if !why.is_empty() {
+                return why;
+            }
             return if examine { "examine" } else { "repair" }.to_string();
         }
         // Завал отвечает разбором (§12.395): пойдёт именно этот кот.
@@ -7168,7 +7553,14 @@ impl Sim {
             .map(|(e, bp)| {
                 (
                     e,
-                    need_has(&missing(self.world.resource::<TileRules>(), bp), item),
+                    need_has(
+                        &missing(
+                            self.world.resource::<TileRules>(),
+                            self.world.resource::<BaseMap>(),
+                            bp,
+                        ),
+                        item,
+                    ),
                 )
             });
         if let Some((e, needed)) = site {
@@ -7198,7 +7590,8 @@ impl Sim {
         if rules.capacity_of(map.tile_at(x, y)) <= 0 {
             return None;
         }
-        if !self.world.resource::<Bins>().accepts(x, y, item) {
+        let tiered = rules.priority_of(map.tile_at(x, y)) > 0;
+        if !self.world.resource::<Bins>().accepts(tiered, x, y, item) {
             return Some(HandVerb::Refuse("refuses"));
         }
         let mut stacks = self.world.query::<(&Position, &Stack)>();
@@ -7308,7 +7701,7 @@ impl Sim {
         let tier = rules.priority_of(tile);
         for (item, top) in best {
             let misplaced = rules.capacity_of(tile) <= 0
-                || !bins.accepts(x, y, item)
+                || !bins.accepts(tier > 0, x, y, item)
                 || top.is_some_and(|t| t > tier);
             if !misplaced {
                 continue;
@@ -7317,11 +7710,14 @@ impl Sim {
                 .iter()
                 .any(|&(at, i, _, m)| at == (x, y) && i == item && m);
             let any_store = map.cells.iter().any(|&c| rules.capacity_of(c) > 0);
-            return if !marked && !self.world.resource::<AutoTidy>().0 {
+            // Выселенное из ящика (§12.402) уезжает и без места на складе: его
+            // выносят на пол рядом.
+            let evicted = tier > 0 && !bins.accepts(true, x, y, item);
+            return if !marked && !self.tidies() && !bin_pulls(tier, top) {
                 "untidy"
             } else if !any_store {
                 "nostore"
-            } else if top.is_none() {
+            } else if top.is_none() && !evicted {
                 "noroom"
             } else {
                 "waiting"
@@ -7382,6 +7778,9 @@ impl Sim {
         // на ровном месте.
         self.drop_orphan_crews();
         self.run_auto_raids();
+        // Кот выходит сам (§12.435) — там же и по тому же доводу: это заявка
+        // `launch_at`, а не изменение данных.
+        self.run_auto_outings();
         // Автопродажа — там же и по той же причине (§12.87): она повторяет клик
         // по кнопке «Продать», а у кнопки трое ворот, второй экземпляр которых
         // открыл бы неотменяемую сделку. Перед тиком, чтобы заявку застал
@@ -7415,6 +7814,98 @@ impl Sim {
         // Лента новостей — **после** цепочки (§12.120): новость читает
         // сложившийся тик и мир не меняет, дословно `check_goals`.
         self.note_news();
+    }
+
+    /// База разведана (§12.422): выполнен заказ `outskirts.raided`. Пока нет,
+    /// вид рисует её на карте штаба силуэтом «?» — первая вылазка («Осмотреть
+    /// вход снаружи») иначе не меняла на карте ничего. Монотонно: журнал `Raids`.
+    /// Руины, с которыми ничего нельзя сделать (§12.427): ремонт, цену которого
+    /// база ещё не видела целиком (`unseen` и, с §12.428, `unknown`), — тем же
+    /// `fix_why`, каким панель прячет и гасит «Починить». Индексы клеток
+    /// row-major.
+    pub(crate) fn ruins_mute(&mut self) -> Vec<u32> {
+        let (w, h) = {
+            let map = self.world.resource::<BaseMap>();
+            (map.width, map.height)
+        };
+        let mut out = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let tile = self.world.resource::<BaseMap>().tile_at(x, y);
+                if self.world.resource::<TileRules>().repair_of(tile).is_some()
+                    && matches!(self.fix_why(x, y).as_str(), "unseen" | "unknown")
+                {
+                    out.push((y * w + x) as u32);
+                }
+            }
+        }
+        out
+    }
+
+    /// Клетки, до которых сейчас не дотянется ни один кот на базе (§12.431):
+    /// ни сама клетка, ни сосед с полом не достижимы тем же `Reach`, каким
+    /// раздатчики ищут место работы (`work_spot`). Вид не пульсирует рамкой над
+    /// такой руиной или «?» — приглашение звало бы туда, куда не дойти. Пустота
+    /// в список не идёт. Индексы клеток row-major.
+    pub(crate) fn cells_far(&mut self) -> Vec<u32> {
+        let cats: Vec<(i32, i32)> = {
+            let mut q = self
+                .world
+                .query_filtered::<&Position, (With<UnitId>, Without<Away>)>();
+            q.iter(&self.world).map(|p| (p.x, p.y)).collect()
+        };
+        let map = self.world.resource::<BaseMap>();
+        let rules = self.world.resource::<TileRules>();
+        let (w, h) = (map.width, map.height);
+        let mut reached = vec![false; (w * h) as usize];
+        for at in cats {
+            let reach = Reach::all(map, rules, at);
+            for y in 0..h {
+                for x in 0..w {
+                    if reach.dist_at(x, y).is_some() {
+                        reached[(y * w + x) as usize] = true;
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                if !map.has_floor(x, y) {
+                    continue;
+                }
+                let near = std::iter::once((x, y))
+                    .chain(DIRS.iter().map(|(dx, dy)| (x + dx, y + dy)))
+                    .any(|(cx, cy)| {
+                        cx >= 0
+                            && cy >= 0
+                            && cx < w
+                            && cy < h
+                            && reached[(cy * w + cx) as usize]
+                            && map.walkable(rules, cx, cy)
+                    });
+                if !near {
+                    out.push((y * w + x) as u32);
+                }
+            }
+        }
+        out
+    }
+
+    /// Разбирали ли завал хоть раз (§12.449) — то, что едет в снимок.
+    pub(crate) fn rubble_met(&self) -> bool {
+        self.world.resource::<RubbleMet>().0
+    }
+
+    pub(crate) fn home_met(&self) -> bool {
+        let id = &self.outskirts.raided;
+        if id.is_empty() {
+            return true;
+        }
+        self.missions
+            .iter()
+            .position(|m| &m.id == id)
+            .is_none_or(|def| self.world.resource::<Raids>().0.contains(&def))
     }
 
     /// Выход открыт (§12.367): хоть один кот на базе может дойти до шлюза —
@@ -7497,12 +7988,18 @@ impl Sim {
     /// (он в цепочке раньше `gather_squad`) тем же тиком слал за вещью снова,
     /// и кот дрожал на месте — ни одет, ни за столом; а со стулом, выданным
     /// заявкой, уходил в поле голым. Поход короткий, брифинг его ждёт.
+    ///
+    /// **Идущего поесть — тоже** (§12.439), по тому же доводу: `assign_eat`
+    /// стоит в цепочке ещё раньше и тем же тиком слал сорванного к пайку снова.
+    /// Бойца сбор отпускает есть с §12.370, радиста — теперь тоже.
     fn summon_operators(&mut self, node: (i32, i32)) {
         let ops: Vec<String> = {
-            let mut q = self.world.query_filtered::<
-                (&Posted, &UnitId),
-                (Without<OnDuty>, Without<Away>, Without<Equipping>),
-            >();
+            let mut q = self.world.query_filtered::<(&Posted, &UnitId), (
+                Without<OnDuty>,
+                Without<Away>,
+                Without<Equipping>,
+                Without<Eating>,
+            )>();
             q.iter(&self.world)
                 .filter(|(p, _)| p.spot == node)
                 .map(|(_, id)| id.0.clone())
@@ -8096,7 +8593,7 @@ impl Sim {
                 self.world.resource::<BaseMap>(),
                 self.world.resource::<TileRules>(),
                 self.world.resource::<Bins>(),
-                self.world.resource::<AutoTidy>().0,
+                self.tidies(),
                 &piled,
             );
             let mut q = self.world.query::<&Blueprint>();
@@ -8118,13 +8615,23 @@ impl Sim {
                     total: BUILD_WORK,
                     // Полоска подвоза показывает набор целиком: сколько всего
                     // штук нужно и сколько уже лежит на площадке.
-                    need: rules.cost_of(bp.tile).iter().map(|&(_, n)| n).sum(),
+                    need: rules
+                        .site_cost(
+                            self.world.resource::<BaseMap>().tile_at(bp.x, bp.y),
+                            bp.tile,
+                        )
+                        .iter()
+                        .map(|&(_, n)| n)
+                        .sum(),
                     delivered: bp.delivered.iter().map(|&(_, n)| n).sum(),
                     // А панель клетки называет недостачу поимённо: цена
                     // упорядочена по имени предмета (инвариант 12), значит и
                     // список детерминирован.
                     missing: rules
-                        .cost_of(bp.tile)
+                        .site_cost(
+                            self.world.resource::<BaseMap>().tile_at(bp.x, bp.y),
+                            bp.tile,
+                        )
                         .iter()
                         .filter_map(|&(item, n)| {
                             let got = bp
@@ -8650,6 +9157,7 @@ impl Sim {
         // отсортированы по предмету, — потому что от него зависит порядок строк
         // на экране, а обход ECS недетерминирован (§11).
         let favorites: Vec<usize> = self.world.resource::<Favorites>().0.clone();
+        let hidden: Vec<usize> = self.world.resource::<Hidden>().0.clone();
         let tickers: Vec<TickerSnap> = self
             .world
             .resource::<Tickers>()
@@ -8689,6 +9197,9 @@ impl Sim {
         };
         let exits = self.exit_cells_of().len() as i32;
         let exit_open = self.exit_open();
+        let home_met = self.home_met();
+        let ruins_mute = self.ruins_mute();
+        let cells_far = self.cells_far();
         // Отряды поимённо: с §12.152 у каждого гаража свой состав, и панель
         // обязана называть его словом — иначе кнопка вылазки берёт отряд ниоткуда.
         let nodes: Vec<NodeSnap> = {
@@ -9082,6 +9593,10 @@ impl Sim {
             musters,
             exits,
             exit_open,
+            home_met,
+            rubble_met: self.rubble_met(),
+            ruins_mute,
+            cells_far,
             nodes,
             nearby,
             free: free_ids,
@@ -9100,6 +9615,7 @@ impl Sim {
             prices,
             sales,
             favorites,
+            hidden,
             tickers,
             posts,
             post_free,
@@ -9110,6 +9626,7 @@ impl Sim {
             auto_crafting: auto_open.1,
             auto_raids: auto_open.2,
             auto_study: auto_open.3,
+            auto_tidy_open: auto_open.4,
             auto_tidy: self.world.resource::<AutoTidy>().0,
             recruits,
             research,

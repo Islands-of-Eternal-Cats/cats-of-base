@@ -274,6 +274,9 @@ fn a_saved_game_continues_identically() {
 
     let json = live.save().expect("снимок");
     let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
+    // Правила в снимок не идут (§12.45): ворота, снятые `opened`, снимаем и
+    // у загруженного — автоуборка за темой (§12.401).
+    loaded.open_rules();
     assert_eq!(
         state_of(&loaded),
         before,
@@ -342,6 +345,23 @@ fn bookmarks_survive_a_save() {
         "загруженная партия забыла тикер",
     );
     assert!(loaded.is_favorite(item), "и избранное тоже");
+}
+
+/// Скрытая строка «Ресурсов» — третья закладка, и загрузку она переживает
+/// так же (§12.418). Снятие возвращает строку, чужой индекс отклоняется.
+#[test]
+fn hidden_rows_survive_a_save() {
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
+    let item = live.item_index("ration").expect("паёк");
+    assert!(live.set_hidden(item, true));
+    assert!(!live.set_hidden(usize::MAX, true), "предмета нет");
+
+    let json = live.save().expect("снимок");
+    let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
+    assert!(loaded.is_hidden(item), "загруженная партия забыла скрытое");
+
+    assert!(loaded.set_hidden(item, false));
+    assert!(!loaded.is_hidden(item), "строка не вернулась");
 }
 
 /// Ссылки на сущности переживают загрузку: claim остаётся за тем же котом.
@@ -694,9 +714,6 @@ fn an_auto_raid_rule_survives_a_save() {
     assert!(!crew.is_empty(), "стартовый отряд гаража");
     live.set_tech("callsigns"); // ворота автоматики (§12.93)
     assert!(live.set_auto_raid(0, node.0, node.1), "правило поставлено");
-    // Пауза — такое же решение игрока, как само правило (§12.77): забудь её
-    // снимок, и загрузка молча вернула бы отряд в поле.
-    assert!(live.set_auto_raid_on(node.0, node.1, false), "и усыплено");
 
     let json = live.save().expect("снимок");
     let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
@@ -706,14 +723,42 @@ fn an_auto_raid_rule_survives_a_save() {
         Some(0),
         "правило на месте",
     );
-    assert!(
-        !loaded.auto_raid_is_on(node.0, node.1),
-        "и по-прежнему неактивно",
-    );
     assert_eq!(
         loaded.roster_at(node.0, node.1),
         crew,
         "и отряд, которому оно адресовано",
+    );
+}
+
+/// Паузы у правила больше нет (§12.440), а форма снимка прежняя: правило,
+/// стоявшее на паузе в старом автосейве, читается снятым — отряд в руках
+/// игрока, как и был, и в поле сам не уходит.
+#[test]
+fn a_paused_rule_from_an_old_save_loads_lifted() {
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
+    live.add_squad();
+    live.without_timeline();
+    let node = live
+        .node_cells_of()
+        .first()
+        .copied()
+        .expect("отряд в застройке");
+    live.set_tech("callsigns");
+    assert!(live.set_auto_raid(0, node.0, node.1), "правило поставлено");
+
+    let json = live.save().expect("снимок");
+    let mut file: serde_json::Value = serde_json::from_str(&json).expect("разбор");
+    let rules = file["state"]["auto_raids"]
+        .as_array_mut()
+        .expect("правила в снимке");
+    assert_eq!(rules.len(), 1, "одно правило");
+    rules[0][3] = serde_json::Value::Bool(false); // так старый снимок писал паузу
+    let older = serde_json::to_string(&file).expect("сборка");
+    let mut loaded = Sim::load_from(CORE, &older).expect("загрузка");
+
+    assert!(
+        loaded.auto_raid_at(node.0, node.1).is_none(),
+        "усыплённое правило снято",
     );
 }
 
@@ -831,6 +876,31 @@ fn an_old_snapshot_does_not_hide_the_shelves() {
         "старый снимок спрятал строку лома: линию надо добирать по миру, \
          а не доверять пустому полю",
     );
+}
+
+/// Избранное из рулсета не делает предмет виденным (§12.131, §12.112).
+///
+/// Лом и деталь стоят в избранном у новой партии с нулевого тика, а свежая
+/// партия на голом `Sim::new` их не видела. Добор `Seen` по закладкам при
+/// загрузке объявлял их новостью и открывал дверь «Ресурсы» с двумя нулями.
+#[test]
+fn ruleset_favorites_are_not_seen_after_a_load() {
+    let mut live = Sim::new(CORE).expect("рулсет");
+    live.without_timeline();
+    live.tick();
+    let scrap = live.item_index("scrap").expect("предмет `scrap`");
+    assert!(live.is_favorite(scrap), "лом в избранном рулсета");
+    assert!(!live.seen(scrap), "свежая партия лома не видела");
+
+    let json = live.save().expect("снимок");
+    let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
+    loaded.tick();
+
+    assert!(
+        !loaded.seen(scrap),
+        "загрузка сделала лом виденным по одной закладке рулсета",
+    );
+    assert!(loaded.is_favorite(scrap), "избранное при этом цело");
 }
 
 /// Личное дело переживает загрузку. Промах здесь тихий: пустое дело от

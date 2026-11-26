@@ -472,11 +472,12 @@ fn the_shipped_ruleset_counts_its_lab_cells() {
     );
 }
 
-/// **Боевой рулсет: лаборатория открывается учёным, парта — темой
-/// «Наставничество», а тема — учёным третьего уровня** (§12.259, §12.260).
+/// **Боевой рулсет: лаборатория открывается анализатором, парта — темой
+/// «Наставничество», а тема — учёным третьего уровня** (§12.259, §12.434).
 ///
-/// Лаборатория ждёт того, кто в ней будет работать: находка без учёного её не
-/// открывает, а первая тема («Полевая методика») образца не просит. Тема
+/// Лаборатория ждёт прибора, которому она нужна (§12.434): ни образец, ни
+/// учёный её не открывают — «Науку» с §12.433 растит обследование находок, и
+/// доросший на раскопе Excellent открыл бы комнату, где делать нечего. Тема
 /// парты — того, кому есть чему учить: «Наука» 3 при потолке парты 2. Ворота
 /// монотонные — доросший и потом ушедший (или, как здесь, «разучившийся»)
 /// учёный тему не закрывает. Сама парта технологией и открывается.
@@ -501,12 +502,21 @@ fn the_shipped_ruleset_opens_its_classroom_by_the_first_find() {
     sim.sight("sample");
     assert!(
         !sim.add_blueprint(7, 8, lab),
-        "находка без учёного лабораторию не открывает"
+        "образец лабораторию не открывает"
     );
 
-    sim.set_xp("sp3", science, 200); // первый уровень «Науки»
+    sim.set_xp("sp3", science, 200); // первый уровень «Науки», как с раскопа
     sim.tick_n(1);
-    assert!(sim.add_blueprint(7, 8, lab), "учёный открыл лабораторию");
+    assert!(
+        !sim.add_blueprint(7, 8, lab),
+        "учёный без анализатора лабораторию не открывает"
+    );
+
+    sim.sight("analyzer");
+    assert!(
+        sim.add_blueprint(7, 8, lab),
+        "анализатор открыл лабораторию"
+    );
     sim.force_tile(7, 8, lab as i16);
     sim.set_tech("materials");
     assert!(!sim.topic_is_open(topic), "без учёного темы нет");
@@ -596,15 +606,17 @@ fn the_shipped_ruleset_never_locks_its_way_back() {
     // заказ без отряда, которому нужен один шлюз. Стол теперь закрыт (его
     // открывает первое выполнение), а дорога назад — шлюз за лом (снос пола
     // лом даёт всегда) и окрестности, в чьём круге пола есть деталь на стол.
-    let garage = sim.tile_index("garage").expect("шлюз");
-    let part = sim.item_index("part").expect("деталь");
+    // Шлюз за деталь (§12.417) законен, только пока он не сносится: снесённый
+    // вернул бы деталь кучей, а потраченная на другое — база без выхода, без
+    // вылазок и без способа добыть деталь. Правила — боевые, мимо `opened`
+    // (тот снимает с шлюза неснимаемость ради прежних тестов).
+    let raw = Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет");
+    let garage = raw.tile_index("garage").expect("шлюз");
+    let part = raw.item_index("part").expect("деталь");
+    let rules = raw.world.resource::<TileRules>();
     assert!(
-        !sim.world
-            .resource::<TileRules>()
-            .cost_of(garage)
-            .iter()
-            .any(|&(i, _)| i == part),
-        "шлюз стоит деталь: база без деталей его не отстроит",
+        !rules.cost_of(garage).iter().any(|&(i, _)| i == part) || rules.is_fixed(garage),
+        "шлюз стоит деталь и сносится: база без деталей его не отстроит",
     );
     let scavenge = sim.mission_index("scavenge").expect("«Пошарить рядом»");
     let rule = sim.world.resource::<MissionRules>().0[scavenge].clone();
@@ -698,8 +710,8 @@ fn the_shipped_ruleset_opens_the_bed_it_already_built() {
     );
 }
 
-/// **Боевой рулсет: первая вылазка не открывает построек, а учёный — ровно
-/// одну** (§12.223, §12.260).
+/// **Боевой рулсет: первая вылазка не открывает построек, а анализатор —
+/// ровно одну** (§12.223, §12.434).
 ///
 /// Стопка тикеров гаснет по тикам и не выстраивается в очередь (§12.120):
 /// сколько новостей пришло разом, столько игрок и читает сразу. После первой
@@ -708,11 +720,13 @@ fn the_shipped_ruleset_opens_the_bed_it_already_built() {
 /// постом до постройки склада всё равно нечем было воспользоваться (§12.215,
 /// §12.69).
 ///
-/// Остаться должна одна, и та — лаборатория. С §12.260 её приводит учёный, а
-/// не находка: пришёл тот, кто умеет спрашивать «что это», — и ему названо
-/// ровно одно дело. Ошибка тут
-/// тихая — новые ворота у тайла законны, дерево связно, ни один другой сторож
-/// не шелохнётся, — а начало партии снова расползается в список.
+/// Остаться должна одна, и та — лаборатория. С §12.434 её приводит прибор
+/// Антенны, а не находка и не учёный (§12.260 открывал её «Наукой» 1, а ту с
+/// §12.433 даёт обследование находок): пришло то, с чем есть что делать в
+/// лаборатории, — и названо ровно одно дело. Учёный сам по себе построек не
+/// открывает. Ошибка тут тихая — новые ворота у тайла законны, дерево
+/// связно, ни один другой сторож не шелохнётся, — а начало партии снова
+/// расползается в список.
 #[test]
 fn the_shipped_ruleset_opens_one_building_by_the_first_find() {
     let mut sim =
@@ -727,7 +741,13 @@ fn the_shipped_ruleset_opens_one_building_by_the_first_find() {
         .collect();
     assert!(found.is_empty(), "находка открыла постройки: {found:?}");
 
-    sim.master("science", 1); // пришёл учёный
+    sim.master("science", 1); // учёный с раскопа (§12.433)
+    let taught: Vec<usize> = (0..sim.palette.len())
+        .filter(|&def| sim.tile_is_open(def) && !before[def])
+        .collect();
+    assert!(taught.is_empty(), "учёный открыл постройки: {taught:?}");
+
+    sim.sight("analyzer"); // пришла Антенна с анализатором
 
     let fresh: Vec<usize> = (0..sim.palette.len())
         .filter(|&def| sim.tile_is_open(def) && !before[def])
@@ -739,8 +759,53 @@ fn the_shipped_ruleset_opens_one_building_by_the_first_find() {
     assert_eq!(
         opened,
         ["lab"],
-        "учёный открывает {opened:?} — стопка тикеров снова список, \
+        "анализатор открывает {opened:?} — стопка тикеров снова список, \
          а не одно названное дело",
+    );
+}
+
+/// **Боевой рулсет: лабораторию открывает пришедшая Антенна — наймом, а не
+/// отметкой** (§12.434). Сторож выше ставит `Seen` анализатора руками, а в
+/// партии он туда не попадает никогда: личную вещь `note_seen` пропускает
+/// (§12.256), и лаборатория не открывалась у базы, где Антенна уже ходила с
+/// анализатором. Здесь путь настоящий — найм и тик. Плату и пол доверия
+/// снимаем: тест про ворота находки, а не про казну.
+#[test]
+fn the_shipped_ruleset_opens_the_lab_when_antenna_arrives() {
+    let mut sim =
+        opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
+    let lab = sim.tile_index("lab").expect("лаборатория в палитре") as usize;
+    let analyzer = sim.item_index("analyzer").expect("анализатор в палитре");
+    assert!(!sim.tile_is_open(lab), "до Антенны лаборатории нет");
+
+    let antenna = {
+        let mut rules = sim.world.resource_mut::<RecruitRules>();
+        let def = rules
+            .0
+            .iter()
+            .position(|r| r.id == "antenna")
+            .expect("Антенна в рулсете");
+        rules.0[def].cost.clear();
+        rules.0[def].needs.clear();
+        def
+    };
+    let requires = sim.world.resource::<RecruitRules>().0[antenna].requires;
+    sim.set_fame(requires);
+    assert!(sim.hire(antenna), "Антенна нанята");
+    sim.tick();
+
+    assert_eq!(
+        sim.gear_of("antenna"),
+        vec![analyzer],
+        "пришла с анализатором"
+    );
+    assert!(
+        sim.tile_is_open(lab),
+        "Антенна пришла, а лаборатория закрыта"
+    );
+    assert!(
+        !sim.seen(analyzer),
+        "личная вещь ресурсом базы не становится (§12.256)",
     );
 }
 
@@ -808,12 +873,16 @@ fn the_shipped_ruleset_opens_the_radio_by_its_operator() {
 
 /// **Боевой рулсет: цепочка палитры идёт вперёд.** Предшественник ниже по
 /// списку не разрешится вовсе — тайл просто откроется сразу, и замысел цепочки
-/// развалится молча (§12.210).
+/// развалится молча (§12.210). Исключение — предшественник вне палитры
+/// (§12.418): починенный пыльный стол чинят, а не строят, и стоит он в конце.
 #[test]
 fn the_shipped_ruleset_chains_its_palette_forward() {
     let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     for (def, prev) in sim.tile_order().iter().enumerate() {
         let Some(prev) = *prev else { continue };
+        if sim.world.resource::<TileRules>().is_internal(prev) {
+            continue;
+        }
         assert!(
             (prev as usize) < def,
             "тайл {def} ждёт тайл {prev}, стоящий ниже",
@@ -830,7 +899,11 @@ fn the_shipped_ruleset_can_reach_its_automation() {
     let sim = opened(Sim::new(include_str!("../../assets/rulesets/core.yaml")).expect("рулсет"));
     let cap = sim.taught_cap("science");
     let gates = sim.auto_gates();
-    assert_eq!(gates.len(), 4, "ворота названы у всех четырёх правил");
+    assert_eq!(
+        gates.len(),
+        4,
+        "ворота названы у четырёх правил: уборка открыта с начала (§12.414)"
+    );
 
     for gate in gates {
         let topic = sim

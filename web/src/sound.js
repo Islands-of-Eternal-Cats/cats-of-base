@@ -283,6 +283,19 @@ const SOUNDS = {
       tone(d, t + 0.09, { f: 1319, peak: 0.12, decay: 0.35 });
     },
   },
+  // Новая запись справочника (§12.453): шелест страницы и мягкий двузвучный
+  // подъём — заметнее клика окна, но тише и короче `research`: это подсказка,
+  // а не событие мира.
+  entry: {
+    bus: "ui",
+    max: 1,
+    gap: 400,
+    synth(d, t) {
+      noise(d, t, { filter: "highpass", f: 2500, f2: 5000, peak: 0.05, decay: 0.12 });
+      tone(d, t + 0.04, { type: "triangle", f: 659, peak: 0.11, decay: 0.3 });
+      tone(d, t + 0.14, { type: "triangle", f: 988, peak: 0.1, decay: 0.45 });
+    },
+  },
   squad: {
     bus: "ui",
     max: 1,

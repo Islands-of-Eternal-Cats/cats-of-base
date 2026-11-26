@@ -31,6 +31,7 @@ const READ_ONLY = new Set([
   "trace",
   "setBuildTile",
   "setHandAim",
+  "setHoverAim",
   "setNearbyPick",
   "setSquadPick",
 ]);
@@ -44,6 +45,9 @@ let lastMapVersion = -1;
 // она зависит и от карты, и от чертежей, а те меняются между кадрами, поэтому
 // считается каждым кадром заново. -1 = игрок не строит, считать нечего.
 let maskTile = -1;
+// Инструмент «Разбор завала» (§12.432): тайл `-2` в руке — ластик только по
+// завалу. Тот же код в `main.js` (`RUBBLE_TOOL`).
+const RUBBLE_TOOL = -2;
 // Рамка, которую игрок тянет прямо сейчас; нулевая ширина = рамки нет. Внутри
 // неё правило считается с накоплением, как при самой разметке: иначе превью
 // обещало бы девять полок из мазка три на три, а разметилось бы восемь.
@@ -153,6 +157,9 @@ function loop() {
       mask = structMask;
     } else if (maskTile >= 0) {
       mask = sim.buildable(maskTile, ...maskRect);
+    } else if (maskTile === RUBBLE_TOOL) {
+      // «Разбор завала» (§12.432): зелёным — неразмеченный завал.
+      mask = sim.rubble_mask();
     }
     postMessage({
       type: "snapshot",
@@ -164,6 +171,14 @@ function loop() {
         key: handAim.key,
         verb: handAim.id ? sim.hand_tag(handAim.id, handAim.x, handAim.y) : "",
         why: sim.pile_why(handAim.x, handAim.y),
+        // Чем чинить руину (§12.419, §12.426): `lacks` · `built` · `unseen` · `unknown`.
+        fix: sim.fix_why(handAim.x, handAim.y),
+      },
+      // Что значил бы приказ по клетке под курсором: им красится рамка
+      // наведения, пока выбран кот. Тот же `hand_tag`, что у выбранной клетки.
+      hover: hoverAim && {
+        key: hoverAim.key,
+        verb: sim.hand_tag(hoverAim.id, hoverAim.x, hoverAim.y),
       },
     });
   }
@@ -171,6 +186,7 @@ function loop() {
 }
 
 let handAim = null;
+let hoverAim = null;
 
 onmessage = (e) => {
   const m = e.data;
@@ -190,6 +206,8 @@ onmessage = (e) => {
     sim?.set_squad_pick(new Int32Array(m.cells));
   } else if (m.type === "setHandAim") {
     handAim = m.aim;
+  } else if (m.type === "setHoverAim") {
+    hoverAim = m.aim;
   } else if (m.type === "setBuildTile") {
     // Инструмент в руке игрока — состояние вида, и живёт оно здесь: ядру он не
     // нужен ни для чего, кроме ответа «где этот тайл поставить можно».
@@ -203,6 +221,7 @@ onmessage = (e) => {
     // сначала снимает чертежи в рамке, и только если снимать было нечего —
     // планирует снос, который выполняют коты (см. `plan_demolish_rect` в ядре).
     if (m.tile >= 0) sim.add_blueprint_rect(m.x, m.y, m.w, m.h, m.tile);
+    else if (m.tile === RUBBLE_TOOL) sim.clear_rubble_rect(m.x, m.y, m.w, m.h);
     else sim.plan_demolish_rect(m.x, m.y, m.w, m.h);
   } else if (m.type === "place" && sim) {
     // Объект ставится **одним кликом**, без рамки: размер у него свой, и
@@ -255,11 +274,6 @@ onmessage = (e) => {
     // поле отряд отправляет ядро — каждым тиком, пока отряд готов. Отсюда и
     // отсутствие пары «отменить»: `-1` и есть снятие, как ноль у порога.
     sim.set_auto_raid(m.mission, m.x, m.y);
-  } else if (m.type === "setAutoRaidOn" && sim) {
-    // Пауза, а не снятие (§12.77): заказ остаётся на узле, но отряд по нему не
-    // уходит. Так рутину прерывают на разовое дело — разгрести привезённое, —
-    // не выбирая потом тот же заказ второй раз.
-    sim.set_auto_raid_on(m.x, m.y, m.on);
   } else if (m.type === "renameSquad" && sim) {
     // Имя отряда (§12.300). Ворота имени — в ядре: ответ уезжает обратно тегом,
     // и вид называет отказ словом у самого поля, а не гасит его молча.
@@ -349,6 +363,10 @@ onmessage = (e) => {
     // окна «Склад» и больше ничего не делает. Ворот у неё нет вовсе, поэтому
     // закрепить можно и то, чем не торгует никто.
     sim.set_favorite(m.item, m.on);
+  } else if (m.type === "setHidden" && sim) {
+    // Третья закладка «Ресурсов» (§12.418): глазик уводит строку в группу
+    // «Скрытые». Механики не трогает, ворот нет — как у избранного.
+    sim.set_hidden(m.item, m.on);
   } else if (m.type === "setTicker" && sim) {
     // Тикер — вторая закладка и другой вопрос (§12.100): строка уезжает лентой
     // на главный экран, и там по ней торгуют в один клик. Сторона поэтому

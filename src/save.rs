@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 55;
+pub(crate) const FORMAT: u32 = 57;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -160,6 +160,8 @@ pub(crate) const SAVED: &[&str] = &[
     // уже пробовали с «Убирать сам», и зеркало врало (§12.96).
     "Favorites",
     "Tickers",
+    // Скрытые строки «Ресурсов» (§12.418) — та же закладка игрока.
+    "Hidden",
     "Fame",
     "Money",
     // Отметки по условиям связки (§12.159): с какого тика держится каждое.
@@ -185,6 +187,9 @@ pub(crate) const SAVED: &[&str] = &[
     // До каких тайлов кот хоть раз мог дойти (§12.376): без этого загруженная
     // партия убрала бы шлюз из палитры, если путь к руине с тех пор перекрыт.
     "Reached",
+    // Разбирали ли завал хоть раз (§12.449): без этого загруженная партия
+    // снова спрятала бы инструмент «Расчистить».
+    "RubbleMet",
     "Chronicle",
     "Goals",
     "Raids",
@@ -314,10 +319,11 @@ pub(crate) struct StateDto {
     /// Пороги автопроизводства по индексу рецепта (§12.65).
     #[serde(default)]
     pub(crate) stocking: Vec<i32>,
-    /// Автовылазки: клетка узла, заказ, на который он ходит сам, и работает ли
-    /// правило прямо сейчас (§12.67, §12.77). Усыплённое правило — такое же
-    /// решение игрока, как активное, и партия обязана его помнить: иначе
-    /// загрузка молча возвращает отряд в поле.
+    /// Автовылазки: клетка узла и заказ, на который он ходит сам (§12.67).
+    /// Четвёртое поле — бывший признак паузы (§12.77); паузы с §12.440 нет,
+    /// пишется всегда `true`, а правило с `false` из старого снимка читается
+    /// снятым. Форму не меняем, чтобы старые автосейвы грузились, и `FORMAT`
+    /// поэтому не двигается.
     #[serde(default)]
     pub(crate) auto_raids: Vec<(i32, i32, usize, bool)>,
     /// Наборы ящиков: клетка и что игрок велел в ней держать (§12.195). Пустых
@@ -354,6 +360,9 @@ pub(crate) struct StateDto {
     /// Избранные предметы: их строки стоят наверху окна «Склад» (§12.100).
     #[serde(default)]
     pub(crate) favorites: Vec<usize>,
+    /// Скрытые строки окна «Ресурсы» (§12.418).
+    #[serde(default)]
+    pub(crate) hidden: Vec<usize>,
     /// Тикеры: предмет и сторона, с которой по нему торгуют в один клик
     /// (§12.100). Пара, а не тройка: порога у тикера нет — он не правило.
     #[serde(default)]
@@ -387,6 +396,9 @@ pub(crate) struct StateDto {
     /// `tiles:`. `FORMAT` 54.
     #[serde(default)]
     pub(crate) reached: Vec<bool>,
+    /// Разбирали ли завал хоть раз (§12.449). `FORMAT` 57.
+    #[serde(default)]
+    pub(crate) rubble_met: bool,
     /// Журнал сработавших событий: `(индекс события, была ли база готова)`.
     pub(crate) chronicle: Vec<(usize, bool)>,
     /// Взятые цели: `(индекс цели, тик взятия)` (§12.58).
@@ -987,7 +999,12 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
             auto_tidy: world.resource::<AutoTidy>().0,
             auto_rest: world.resource::<AutoRest>().0,
             stocking: world.resource::<Stocking>().0.clone(),
-            auto_raids: world.resource::<AutoRaids>().0.clone(),
+            auto_raids: world
+                .resource::<AutoRaids>()
+                .0
+                .iter()
+                .map(|&(x, y, def)| (x, y, def, true))
+                .collect(),
             bins: world.resource::<Bins>().0.clone(),
             blights: world
                 .resource::<Blights>()
@@ -1009,6 +1026,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
                 })
                 .collect(),
             favorites: world.resource::<Favorites>().0.clone(),
+            hidden: world.resource::<Hidden>().0.clone(),
             tickers: world.resource::<Tickers>().0.clone(),
             fame: world.resource::<Fame>().0,
             money: world.resource::<Money>().0,
@@ -1020,6 +1038,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
             recruits_met: world.resource::<RecruitsMet>().0.clone(),
             mastery: world.resource::<Mastery>().0.clone(),
             reached: world.resource::<Reached>().0.clone(),
+            rubble_met: world.resource::<RubbleMet>().0,
             chronicle: chronicle.0.iter().map(|h| (h.def, h.ready)).collect(),
             goals: world
                 .resource::<Goals>()
@@ -1076,8 +1095,11 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
 /// Из `file`, а не из мира: компоненты сущностей вставляются **после** этого
 /// места, и мир на момент вызова ещё пуст.
 ///
-/// Закладка — второй источник и не менее надёжный: закрепить строку можно
-/// только у предмета, чья строка была на экране.
+/// Тикер — второй источник и не менее надёжный: поставить его можно только у
+/// предмета, чья строка была на экране. **Избранное источником не служит**:
+/// его кладёт ещё и рулсет (`favorite:` у предмета, §12.112), то есть оно
+/// стоит у новой партии раньше, чем база что-либо видела, — и добор по нему
+/// объявлял после первой же загрузки «новый ресурс — Лом» на пустой базе.
 fn restore_seen(world: &mut World, file: &SaveFile) {
     let s = &file.state;
     let mut seen = world.resource_mut::<Seen>();
@@ -1102,9 +1124,6 @@ fn restore_seen(world: &mut World, file: &SaveFile) {
                 seen.mark(item);
             }
         }
-    }
-    for &item in &s.favorites {
-        seen.mark(item);
     }
     for &(item, _) in &s.tickers {
         seen.mark(item);
@@ -1166,7 +1185,12 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
     world.resource_mut::<AutoTidy>().0 = s.auto_tidy;
     world.resource_mut::<AutoRest>().0 = s.auto_rest;
     world.resource_mut::<Stocking>().0 = s.stocking.clone();
-    world.resource_mut::<AutoRaids>().0 = s.auto_raids.clone();
+    world.resource_mut::<AutoRaids>().0 = s
+        .auto_raids
+        .iter()
+        .filter(|&&(.., on)| on)
+        .map(|&(x, y, def, _)| (x, y, def))
+        .collect();
     world.resource_mut::<Bins>().0 = s.bins.clone();
     // Длину держит рулсет, а не снимок: у мира ровно столько участков, сколько
     // их в `sites:`, и приехавший список кладётся поверх — короткий не укоротит
@@ -1197,6 +1221,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
         })
         .collect();
     world.resource_mut::<Favorites>().0 = s.favorites.clone();
+    world.resource_mut::<Hidden>().0 = s.hidden.clone();
     world.resource_mut::<Tickers>().0 = s.tickers.clone();
     world.resource_mut::<Fame>().0 = s.fame;
     world.resource_mut::<Money>().0 = s.money;
@@ -1208,6 +1233,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
             mastery.raise(skill, level);
         }
     }
+    world.resource_mut::<RubbleMet>().0 = s.rubble_met;
     {
         let mut reached = world.resource_mut::<Reached>();
         for (tile, &r) in s.reached.iter().enumerate() {

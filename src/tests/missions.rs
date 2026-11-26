@@ -1173,7 +1173,7 @@ fn the_rule_waits_for_gear_the_base_does_not_have() {
 
     sim.tick_n(10);
     assert_eq!(sim.raid_count(), 0, "надеть нечего — правило стоит");
-    assert!(sim.auto_raid_is_on(1, 2), "и не снимается");
+    assert_eq!(sim.auto_raid_at(1, 2), Some(def), "и не снимается");
 
     sim.put_item(4, 2, 0, 1);
     sim.tick_n(40);
@@ -1258,10 +1258,10 @@ fn the_rule_waits_until_the_odds_are_full() {
 
 /// Отряд на автомиссии расписан (§12.400, отменяет автопаузу §12.72): приказ
 /// на **другой** заказ отклоняется, правило не трогается. Прервать рутину —
-/// решение игрока, и принимается оно паузой или снятием, а не побочным
-/// эффектом клика по чужой карточке.
+/// решение игрока, и принимается оно снятием правила (паузы с §12.440 нет), а
+/// не побочным эффектом клика по чужой карточке.
 #[test]
-fn an_auto_squad_refuses_a_launch_elsewhere_until_paused() {
+fn an_auto_squad_refuses_a_launch_elsewhere_until_the_rule_is_lifted() {
     let mut sim = sim_with_nodes(1);
     let usual = sim.set_mission(1, 30, &[(0, 5)]);
     let other = sim.set_mission(1, 30, &[(0, 5)]);
@@ -1273,22 +1273,16 @@ fn an_auto_squad_refuses_a_launch_elsewhere_until_paused() {
         !sim.launch_node(other, 1, 2, -1),
         "на чужой заказ не пускают"
     );
-    assert!(sim.auto_raid_is_on(1, 2), "правило работает как работало");
+    assert_eq!(sim.auto_raid_at(1, 2), Some(usual), "правило на месте");
     assert!(
         !sim.launch_nodes(other, vec![1, 2], vec![], -1),
         "и в общую вылазку тоже",
     );
 
-    assert!(sim.set_auto_raid_on(1, 2, false), "игрок поставил на паузу");
+    assert!(sim.set_auto_raid(-1, 1, 2), "игрок снял правило");
     assert!(sim.launch_node(other, 1, 2, -1), "и теперь отряд свободен");
-    assert_eq!(
-        sim.auto_raid_at(1, 2),
-        Some(usual),
-        "заказ правила помнится"
-    );
 
-    // Вернувшись, отряд остаётся дома: пауза — решение игрока, и снять её
-    // может только он.
+    // Вернувшись, отряд остаётся дома: правила больше нет.
     sim.tick_n(200);
     assert!(sim.raids_done().contains(&other), "ручная вылазка сходила");
     assert_eq!(sim.raid_count(), 0, "а новую заводить больше некому");
@@ -1304,36 +1298,14 @@ fn an_auto_squad_may_be_sent_on_its_own_order() {
     sim.set_auto_raid(usual as i32, 1, 2);
 
     assert!(sim.launch_node(usual, 1, 2, -1), "свой заказ — можно");
-    assert!(sim.auto_raid_is_on(1, 2), "правило не тронуто");
+    assert_eq!(sim.auto_raid_at(1, 2), Some(usual), "правило не тронуто");
 }
 
-/// Пауза в чистом виде (§12.77): игрок прервал рутину, разгрёб базу и вернул
-/// правило в строй — не выбирая заказ второй раз.
+/// Отзыв собравшегося отряда снимает правило (§12.440, до него — усыплял,
+/// §12.77). Без этого «Отозвать» у автоматического отряда не значит ничего:
+/// заявка заводится заново тем же тиком, и кнопка читается как сломанная.
 #[test]
-fn a_paused_rule_stays_home_and_resumes_by_the_same_switch() {
-    let mut sim = sim_with_nodes(1);
-    let def = sim.set_mission(1, 30, &[(0, 5)]);
-    sim.enlist("a", 1, 2);
-    sim.set_auto_raid(def as i32, 1, 2);
-
-    assert!(sim.set_auto_raid_on(1, 2, false), "правило усыплено");
-    sim.tick_n(50);
-    assert_eq!(sim.raid_count(), 0, "неактивное правило в поле не гонит");
-    assert_eq!(sim.auto_raid_at(1, 2), Some(def), "но заказ помнится");
-
-    assert!(
-        sim.set_auto_raid_on(1, 2, true),
-        "и будится тем же тумблером"
-    );
-    sim.tick_n(10);
-    assert!(sim.is_away("a"), "отряд снова ушёл сам");
-}
-
-/// Отзыв собравшегося отряда усыпляет правило (§12.77). Без этого «Отозвать» у
-/// автоматического отряда не значит ничего: заявка заводится заново тем же
-/// тиком, и кнопка читается как сломанная.
-#[test]
-fn recalling_an_auto_squad_pauses_the_rule() {
+fn recalling_an_auto_squad_lifts_the_rule() {
     let mut sim = sim_with_nodes(1);
     let def = sim.set_mission(1, 30, &[(0, 5)]);
     // Кот подальше от шлюза: отозвать можно только тех, кто ещё на базе
@@ -1344,20 +1316,10 @@ fn recalling_an_auto_squad_pauses_the_rule() {
     assert_eq!(sim.raid_count(), 1, "правило подало заявку");
 
     assert!(sim.cancel_mission(def), "игрок отозвал отряд");
-    assert!(!sim.auto_raid_is_on(1, 2), "правило усыплено отзывом");
-    assert_eq!(sim.auto_raid_at(1, 2), Some(def), "но заказ помнится");
+    assert!(sim.auto_raid_at(1, 2).is_none(), "правило снято отзывом");
 
     sim.tick_n(50);
     assert_eq!(sim.raid_count(), 0, "и заявка заново не заводится");
-}
-
-/// Будить нечего — правила нет: тумблер сам правил не заводит, это делает
-/// только `set_auto_raid` (§12.77).
-#[test]
-fn switching_a_missing_rule_changes_nothing() {
-    let mut sim = sim_with_nodes(1);
-    assert!(!sim.set_auto_raid_on(1, 2, true), "правила на узле нет");
-    assert!(sim.auto_raid_at(1, 2).is_none(), "и тумблер его не завёл");
 }
 
 /// Граница снятия: правило уходит в поле **через ту же кнопку**, поэтому

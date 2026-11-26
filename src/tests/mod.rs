@@ -165,6 +165,7 @@ fn sim_from(rows: &[&str]) -> Sim {
     // закрепил. Заводят их `set_favorite` и `set_ticker`.
     world.insert_resource(Favorites::default());
     world.insert_resource(Tickers::default());
+    world.insert_resource(Hidden::default());
     // Шкала «что база видела» (§12.131) заводится всегда и пустой, как лента
     // новостей: это не контент, а память мира о случившемся, и наблюдатель
     // пишет в неё независимо от того, смотрит ли на неё хоть один экран.
@@ -175,6 +176,7 @@ fn sim_from(rows: &[&str]) -> Sim {
     world.insert_resource(RecruitsMet::default());
     world.insert_resource(Mastery::default());
     world.insert_resource(Reached::default());
+    world.insert_resource(RubbleMet::default());
     world.insert_resource(PerkRules::default());
     world.insert_resource(AbilityRules::default());
     // Лента новостей (§12.120) заводится всегда, как три журнала целей: она не
@@ -252,6 +254,8 @@ fn sim_from(rows: &[&str]) -> Sim {
             // Улучшений у схемы нет (§12.238): всё стоит на основании, если
             // оно есть. Включает `set_on`.
             on: String::new(),
+            holds: BTreeMap::new(),
+            veiled: false,
             // Контейнера у схемы нет: ноль — без предела (§12.90), сделки в
             // синтетических мирах любого размера. Включает `set_lot`.
             lot: 0,
@@ -272,6 +276,8 @@ fn sim_from(rows: &[&str]) -> Sim {
             reached: String::new(),
             examine: String::new(),
             repair: String::new(),
+            repair_cost: BTreeMap::new(),
+            skill: String::new(),
             fixed: false,
         }],
         // Штампов у схемы нет (§12.160): объекты ставит только `set_structure`,
@@ -632,6 +638,8 @@ impl Sim {
             cells,
             slots: Vec::new(),
             tech: String::new(),
+            internal: false,
+            grows: Vec::new(),
         });
         rules.0.len() - 1
     }
@@ -860,12 +868,15 @@ impl Sim {
                 // Избранного в синтетическом мире нет, как нет тикеров и
                 // правил сбыта (§12.112): закладку ставит рулсет или игрок.
                 favorite: false,
+                keepsake: false,
                 // Приборов сбора и личных вещей тоже нет (§12.256): их
                 // включает `set_item_traits`.
                 collects: 0,
                 sweeps: false,
                 grants: Vec::new(),
                 collected: String::new(),
+                // Уникальных тоже нет (§12.416): синтетический прайс продаёт всё.
+                unique: false,
                 personal: false,
                 // Слотов тоже нет (§12.293): вещи не спорят друг с другом —
                 // слот ставит `set_slot`.
@@ -1461,6 +1472,16 @@ impl Sim {
         self.world.resource_mut::<AutoRules>().study = tech.to_string();
     }
 
+    /// Ворота автоуборки (§12.401) — так же отдельно от трёх старых.
+    fn set_tidy_gate(&mut self, tech: &str) {
+        self.world.resource_mut::<AutoRules>().tidy = tech.to_string();
+    }
+
+    /// Убирают ли коты сами прямо сейчас — тумблер и ворота (§12.401).
+    fn tidies_now(&self) -> bool {
+        self.tidies()
+    }
+
     /// Проступили ли детали события — то же, что уходит в снапшот (§12.28).
     fn note_revealed(&self, event: usize) -> bool {
         let tick = self.world.resource::<SimTime>().tick;
@@ -1823,16 +1844,17 @@ impl Sim {
         )
     }
 
-    /// Отметить предмет виденным (§12.131) — открывает ворота по находке
-    /// (§12.210). Тестам чужих механик короче, чем везти образец с вылазки.
     /// Отметить, что кот базы хоть раз дорастал до `level` в домене `skill`
-    /// (§12.257) — как `sight` для предмета. Так открывается лаборатория
-    /// (§12.260): её приводит учёный.
+    /// (§12.257) — как `sight` для предмета. Так открываются рация (§12.290)
+    /// и тема «Наставничество» (§12.259).
     fn master(&mut self, skill: &str, level: i32) {
         let skill = self.skill_index(skill).expect("навык в палитре");
         self.world.resource_mut::<Mastery>().raise(skill, level);
     }
 
+    /// Отметить предмет виденным (§12.131) — открывает ворота по находке
+    /// (§12.210). Тестам чужих механик короче, чем везти образец с вылазки.
+    /// Так открывается и лаборатория — анализатором Антенны (§12.434).
     fn sight(&mut self, id: &str) {
         let item = self.item_index(id).expect("предмет в палитре");
         self.world.resource_mut::<Seen>().mark(item);
@@ -1853,6 +1875,12 @@ impl Sim {
     /// С §12.372 так же сняты ворота стройки: пол, склад, шлюз и лежанка были
     /// открыты с нулевого тика, а теперь их открывает «Осмотреть вход».
     fn open_rules(&mut self) {
+        // Сюжетный выход кота (§12.435) — часть нового начала: прежняя
+        // застройка открыта с первого тика, и кот уходил бы на осмотр сам
+        // посреди чужой механики.
+        for rule in &mut self.world.resource_mut::<MissionRules>().0 {
+            rule.auto = false;
+        }
         if let Some(scavenge) = self.mission_index("scavenge") {
             self.world.resource_mut::<MissionRules>().0[scavenge].raided = None;
         }
@@ -1863,6 +1891,14 @@ impl Sim {
                 }
             }
         }
+        // Склад и лежанку с §12.424 открывает находка (`after` на себя,
+        // §12.425): прежняя застройка их не содержит, а тесты механик строят
+        // их сразу.
+        for id in ["bed", "storage"] {
+            if let Some(t) = self.tile_index(id) {
+                self.world.resource_mut::<TileRules>().0[t as usize].after = None;
+            }
+        }
         // Шлюз на прежней застройке — без руины под ним (§12.376): ставится в
         // скалу верхнего ряда и сносится в неё, как до сломанного шлюза, и
         // строится из палитры, а не ремонтом (§12.379).
@@ -1871,7 +1907,13 @@ impl Sim {
             rule.reached = None;
             rule.on = None;
             rule.internal = false;
+            // И сносится (§12.417 сделал починенный шлюз неснимаемым): тесты
+            // прежней застройки разбирают его ради лома.
+            rule.fixed = false;
         }
+        // Автоуборка за темой (§12.401): прежние тесты механик писались под
+        // базу, где коты свозят кучи сами с нулевого тика.
+        self.world.resource_mut::<AutoRules>().tidy.clear();
     }
 
     ///
@@ -1983,6 +2025,12 @@ impl Sim {
     /// Возвращает якорь стола.
     fn add_squad(&mut self) -> (i32, i32) {
         let def = self.structure_index("muster").expect("место брифинга");
+        // Палитровый стол открывается только починенным (§12.418), и Свалку
+        // с §12.421 открывает тоже он: в живой партии без него второго стола
+        // не бывает, — отмечаем его в журнале застройки.
+        if let Some(fixed) = self.tile_index("briefing_table") {
+            self.world.resource_mut::<BaseMap>().note_erected(fixed);
+        }
         self.force_structure(def, 3, 10);
         let node = self.node_cells_of()[0];
         for id in ["excellent", "sp2", "sp3"] {
@@ -3034,6 +3082,7 @@ impl Sim {
                     phases: phases.to_vec(),
                     requires: 0,
                     needs: Vec::new(),
+                    sell_only: false,
                 },
             ));
             rule.prices.sort_unstable_by_key(|(i, _)| *i);
@@ -3204,6 +3253,11 @@ impl Sim {
     /// (§12.100). Стороны у избранного нет — это порядок, а не торговля.
     fn is_favorite(&self, item: usize) -> bool {
         self.world.resource::<Favorites>().has(item)
+    }
+
+    /// Скрыта ли строка предмета в окне «Ресурсы» (§12.418).
+    fn is_hidden(&self, item: usize) -> bool {
+        self.world.resource::<Hidden>().has(item)
     }
 
     /// Сторона тикера по предмету; `None` — тикера нет (§12.100). Спрашивают
@@ -3615,12 +3669,6 @@ impl Sim {
     /// Правило автовылазки на этой клетке, если оно есть (§12.67).
     fn auto_raid_at(&mut self, x: i32, y: i32) -> Option<usize> {
         self.world.resource::<AutoRaids>().of(x, y)
-    }
-
-    /// Работает ли правило автовылазки прямо сейчас (§12.77): усыплённое
-    /// помнит заказ, но отряд сам не уводит.
-    fn auto_raid_is_on(&mut self, x: i32, y: i32) -> bool {
-        self.world.resource::<AutoRaids>().is_on(x, y)
     }
 
     /// Почему правило узла стоит (§12.116, §12.117) — ровно теми выражениями,

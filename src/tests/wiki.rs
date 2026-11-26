@@ -40,7 +40,7 @@ const WIKI: &[&str] = &[
 
 /// Правила игрока (§12.93). Палитра у них не в рулсете, а в `automation:`, и
 /// ключи те же, что у `AutoRules::gates`.
-const RULE_KEYS: [&str; 4] = ["sales", "crafting", "raids", "study"];
+const RULE_KEYS: [&str; 5] = ["sales", "crafting", "raids", "study", "tidy"];
 
 fn shipped() -> Ruleset {
     serde_yaml::from_str(CORE).expect("рулсет читается")
@@ -300,6 +300,7 @@ fn wiki_owner(rs: &Ruleset, key: &str) -> Option<String> {
                 ("crafting", &a.crafting),
                 ("raids", &a.raids),
                 ("study", &a.study),
+                ("tidy", &a.tidy),
             ] {
                 if tech == id {
                     opens.push(Some(format!("rule:{k}")));
@@ -373,13 +374,32 @@ fn open_at_start(rs: &Ruleset, key: &str) -> bool {
     let Some((kind, id)) = key.split_once(':') else {
         return false;
     };
+    // Находки стартовой застройки (§12.424): что встаёт из неё разбором
+    // (`on`), обследованием (`examine`, §12.433) и починкой (`repair`),
+    // появляется в первые минуты партии — так
+    // же, как ворота `raided` осмотра входа, которых сторож не считает вовсе.
+    // `after` на такую находку поэтому не закрывает статью.
+    let mut found: BTreeSet<&str> = rs.build.iter().map(|b| b.tile.as_str()).collect();
+    loop {
+        let more: Vec<&str> = rs
+            .tiles
+            .iter()
+            .filter(|t| found.contains(t.id.as_str()))
+            .flat_map(|t| [t.on.as_str(), t.examine.as_str(), t.repair.as_str()])
+            .filter(|t| !t.is_empty() && !found.contains(t))
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        found.extend(more);
+    }
     let tile_free = |t: &str| {
         rs.tiles.iter().any(|x| {
             x.id == t
                 && x.tech.is_empty()
                 && x.sighted.is_empty()
                 && x.mastered.is_empty()
-                && x.after.is_empty()
+                && (x.after.is_empty() || found.contains(x.after.as_str()))
         })
     };
     match kind {
@@ -484,6 +504,7 @@ fn tech_gate(rs: &Ruleset, key: &str) -> Option<BTreeSet<String>> {
                 "sales" => &a.sales,
                 "crafting" => &a.crafting,
                 "study" => &a.study,
+                "tidy" => &a.tidy,
                 _ => &a.raids,
             };
             one(t)
@@ -675,6 +696,49 @@ fn a_bare_link_never_names_what_opens_later() {
     assert!(
         bad.is_empty(),
         "голые ссылки на то, что откроется позже статьи:\n{}",
+        bad.join("\n")
+    );
+}
+
+/// У каждой статьи есть выжимка — строка `:: …` (§12.441), и у статьи с
+/// маркером `---понято---` — у **обеих** версий. Выжимку показывает окно
+/// «Новые записи» вместо всей статьи; без неё вид берёт первый абзац, а тот
+/// обычно лор, а не правило, — и ошибка эта тихая: окно не пустое, просто
+/// снова длинное.
+#[test]
+fn every_article_has_a_gist() {
+    let mut bad = Vec::new();
+    for file in WIKI {
+        let mut key: Option<String> = None;
+        let mut has = false;
+        let close = |key: &Option<String>, has: bool, bad: &mut Vec<String>, part: &str| {
+            if let Some(k) = key
+                && !has
+            {
+                bad.push(format!("{k}{part}"));
+            }
+        };
+        for line in file.lines() {
+            if let Some(k) = article_key(line) {
+                close(&key, has, &mut bad, "");
+                key = Some(k);
+                has = false;
+                continue;
+            }
+            if line.trim().starts_with("---понято") {
+                close(&key, has, &mut bad, " (до понимания)");
+                has = false;
+                continue;
+            }
+            if line.starts_with("::") {
+                has = true;
+            }
+        }
+        close(&key, has, &mut bad, "");
+    }
+    assert!(
+        bad.is_empty(),
+        "статьи без выжимки `::`:\n{}",
         bad.join("\n")
     );
 }

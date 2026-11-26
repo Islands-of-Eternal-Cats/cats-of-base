@@ -80,6 +80,11 @@ fn item_stages(rs: &Ruleset, depth: &BTreeMap<&str, u32>) -> BTreeMap<String, (u
     for s in &rs.stock {
         note(&s.item, 0); // стартовый склад — самое раннее, что бывает
     }
+    for t in &rs.tiles {
+        for id in t.holds.keys() {
+            note(id, 0); // находка под стартовым завалом (§12.415)
+        }
+    }
     for m in &rs.missions {
         // Обычная вылазка технологиями не закрыта (§12.43); вылазка-урок
         // приносит добычу только после своей темы (§12.260).
@@ -91,7 +96,9 @@ fn item_stages(rs: &Ruleset, depth: &BTreeMap<&str, u32>) -> BTreeMap<String, (u
         }
     }
     for f in &rs.factions {
-        for id in f.prices.keys() {
+        // Уникальный продукт не продаёт никто (§12.416): источником он не
+        // считается, прайс его только берёт.
+        for id in f.prices.keys().filter(|id| !is_unique(rs, id)) {
             note(id, 0); // купить можно с первого тика
         }
     }
@@ -306,6 +313,10 @@ fn the_shipped_ruleset_names_only_items_it_has() {
         rs.stock.iter().map(|s| &s.item).collect(),
     );
     check(
+        "находка под завалом",
+        rs.tiles.iter().flat_map(|t| t.holds.keys()).collect(),
+    );
+    check(
         "снаряжение стартовых котов",
         rs.units.iter().flat_map(|u| &u.gear).collect(),
     );
@@ -331,7 +342,7 @@ fn the_shipped_ruleset_opens_early_items_without_fame() {
         free.insert(s.item.as_str());
     }
     for f in &rs.factions {
-        for id in f.prices.keys() {
+        for id in f.prices.keys().filter(|id| !is_unique(&rs, id)) {
             free.insert(id.as_str());
         }
     }
@@ -600,6 +611,10 @@ fn the_shipped_ruleset_keeps_its_three_time_scales_apart() {
 /// Стартовый склад тоже годится в источники: он на базе с нулевого тика, то
 /// есть ворота открыты ещё до первого клика (такие пишут по ошибке, но заперты
 /// они не бывают).
+///
+/// Третий источник — **вещи, с которыми приходят коты** (§12.434): анализатор
+/// Антенны открывает лабораторию. Найм тоже не требует ничего, что закрыто
+/// находкой: известность растёт вылазками, а платит склад, найденный на старте.
 #[test]
 fn the_shipped_ruleset_opens_sighted_gates_by_raiding() {
     let rs = shipped();
@@ -608,6 +623,16 @@ fn the_shipped_ruleset_opens_sighted_gates_by_raiding() {
         .iter()
         .flat_map(|m| m.loot.keys().map(String::as_str))
         .chain(rs.stock.iter().map(|s| s.item.as_str()))
+        .chain(
+            rs.recruits
+                .iter()
+                .flat_map(|r| r.gear.iter().map(String::as_str)),
+        )
+        .chain(
+            rs.units
+                .iter()
+                .flat_map(|u| u.gear.iter().map(String::as_str)),
+        )
         .collect();
     for tile in &rs.tiles {
         for item in &tile.sighted {
@@ -723,4 +748,79 @@ fn the_shipped_ruleset_opens_the_big_desk_after_big_labs_and_tutoring() {
         1,
         "одно место учителя"
     );
+}
+
+/// Уникальный ли предмет (§12.416): его добывают только коты базы, и прайс его
+/// берёт, но не продаёт — купить его нельзя, значит прайс ему не источник.
+fn is_unique(rs: &Ruleset, id: &str) -> bool {
+    rs.items.iter().any(|i| i.id == id && i.unique)
+}
+
+/// Ремонт — часть цены постройки (§12.423): чинить находку не дороже, чем
+/// строить такую же вещь из палитры, ни по одному материалу. Иначе игрок,
+/// починивший лежанку за два лома, увидел бы в палитре новую за один и решил,
+/// что ремонт его обманул.
+///
+/// Цена ремонта — `repair_cost` руины, а без него цена тайла, который встаёт
+/// (§12.425, `TileRules::site_cost`). Сравнивается она с ценой самого этого
+/// тайла и любого другого той же роли (лежанка, склад, лазарет, место
+/// брифинга, выход). Ключ-находка вроде карты (`keepsake`) — не материал, а
+/// знание, и с ценой постройки не сравнивается.
+#[test]
+fn the_shipped_ruleset_repairs_cheaper_than_it_builds() {
+    let rs = shipped();
+    let role = |t: &crate::ruleset::TileDef| -> Option<&str> {
+        if t.rest > 0 {
+            Some("rest")
+        } else if t.capacity > 0 {
+            Some("store")
+        } else if t.heal > 0 {
+            Some("heal")
+        } else if t.muster {
+            Some("muster")
+        } else if t.gate {
+            Some("gate")
+        } else {
+            None
+        }
+    };
+    let keepsake = |id: &str| rs.items.iter().any(|i| i.id == id && i.keepsake);
+    let mut checked = 0;
+    let mut bad = Vec::new();
+    for ruin in rs.tiles.iter().filter(|t| !t.repair.is_empty()) {
+        let Some(target) = rs.tiles.iter().find(|t| t.id == ruin.repair) else {
+            bad.push(format!(
+                "{}: чинится в несуществующий {}",
+                ruin.id, ruin.repair
+            ));
+            continue;
+        };
+        let price = if ruin.repair_cost.is_empty() {
+            &target.cost
+        } else {
+            &ruin.repair_cost
+        };
+        let Some(r) = role(target) else { continue };
+        for twin in rs
+            .tiles
+            .iter()
+            .filter(|t| role(t) == Some(r) && !t.cost.is_empty())
+        {
+            checked += 1;
+            for (item, &n) in price {
+                if keepsake(item) {
+                    continue;
+                }
+                let built = twin.cost.get(item).copied().unwrap_or(0);
+                if n > built {
+                    bad.push(format!(
+                        "{}: ремонт {item} ×{n} дороже постройки {} ({built})",
+                        ruin.id, twin.id
+                    ));
+                }
+            }
+        }
+    }
+    assert!(checked > 0, "сторожу нечего сравнивать — роли разъехались");
+    assert!(bad.is_empty(), "ремонт дороже постройки: {bad:?}");
 }

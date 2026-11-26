@@ -1239,27 +1239,39 @@ fn each_automation_gate_answers_for_itself() {
     let (mut sim, _) = sim_with_market();
     sim.set_auto_gates("logistics", "planning", "callsigns");
     sim.set_study_gate("curriculum");
+    sim.set_tidy_gate("tidying");
     assert_eq!(
         sim.auto_gates_open(),
-        (false, false, false, false),
+        (false, false, false, false, false),
         "закрыто всё"
     );
 
     sim.set_tech("planning");
     assert_eq!(
         sim.auto_gates_open(),
-        (false, true, false, false),
+        (false, true, false, false, false),
         "изучили «Автопроизводство» — открылось только производство",
     );
 
     sim.set_tech("logistics");
-    assert_eq!(sim.auto_gates_open(), (true, true, false, false), "и сбыт");
+    assert_eq!(
+        sim.auto_gates_open(),
+        (true, true, false, false, false),
+        "и сбыт"
+    );
 
     sim.set_tech("curriculum");
     assert_eq!(
         sim.auto_gates_open(),
-        (true, true, false, true),
+        (true, true, false, true, false),
         "и учёба в простое (§12.314)",
+    );
+
+    sim.set_tech("tidying");
+    assert_eq!(
+        sim.auto_gates_open(),
+        (true, true, false, true, true),
+        "и автоуборка (§12.401)",
     );
 }
 
@@ -1528,6 +1540,32 @@ fn the_shipped_ruleset_never_pays_for_taking_a_bought_thing_apart() {
             spend > earn,
             "«{id}»: вход стоит {spend}, а содержимое продаётся за {earn} — \
              купил, разобрал, продал, и мастерская печатает деньги",
+        );
+    }
+}
+
+/// **Образец не купить нигде** (§12.416): это уникальный продукт котов базы.
+/// Сторона, которая им торгует, его только берёт — курс продажи есть, покупки
+/// нет, и заявка на покупку отклоняется, как товар вне прайса.
+#[test]
+fn the_shipped_ruleset_never_sells_samples() {
+    let mut sim = shipped();
+    let sample = sim.item_index("sample").expect("образец в палитре");
+    let sides = sim.faction_spans().len();
+    assert!(
+        (0..sides).any(|f| sim.quote(f, sample, false).is_some()),
+        "образец по-прежнему продаётся хоть кому-то",
+    );
+    sim.set_money(100_000);
+    for f in 0..sides {
+        assert_eq!(
+            sim.quote(f, sample, true),
+            None,
+            "сторона {f} продаёт образец"
+        );
+        assert!(
+            !sim.trade(f, sample, 1, true),
+            "сторона {f} приняла заявку на образец"
         );
     }
 }

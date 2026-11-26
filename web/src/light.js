@@ -187,6 +187,7 @@ const ROLE_LIGHT = {
   desk: { color: 0xffe6b0, radius: 2.4, alpha: 0.8 },
   lectern: { color: 0xffe6b0, radius: 2.0, alpha: 0.65 },
   muster_table: { color: 0xffc070, radius: 2.4, alpha: 0.75 },
+  briefing_table: { color: 0xffc070, radius: 2.4, alpha: 0.75 },
 };
 /// Потолочная лампа над полом: не ближе `CEIL_STEP` шагов по полу к соседней
 /// (`ceilingSpots`). По общей сетке их ставить нельзя: узкий коридор, не

@@ -259,6 +259,20 @@ main#stage.mode-cursor {
    Остальные разделы тулбара и все кнопки правых панелей приглушены на месте:
    спрятать их значило бы менять высоту тулбара на каждом переключении режима, а
    бледное и неподатливое читается как «не сейчас», а не «пропало». */
+/* Пустой тулбар (§12.449): места не отдаёт, но и рамкой не рисуется —
+   `layout` вычитает его ширину, и карта не прыгает, когда кнопка появится. */
+#toolbar.bare {
+  visibility: hidden;
+}
+/* С §12.451 раздел открывает дверь в рейке («Постройки», «Приказы»), а тулбар —
+   его выезжающая панель: заголовок раздела повторял бы дверь рядом. */
+#toolbar .sec-head {
+  display: none;
+}
+#toolbar .sec-body {
+  padding-top: 0;
+}
+
 body.marking #toolbar .gated,
 body.marking #side button {
   opacity: 0.35;
@@ -478,6 +492,20 @@ main#stage.mode-cursor #mode-banner {
   background: #3e3c34;
 }
 
+/* Главное дело клетки (§12.431): «Разобрать» у завала, «Исследовать» и
+   «Починить» у руины. Стоит в панели первой и обведена акцентом с мягким
+   свечением — без него игрок кнопку не замечал и не знал, что делать с
+   завалом. От `.active` отличается свечением: заливка у них разная по силе,
+   а «в руках» — про палитру, где `.primary` не бывает. */
+.tool.primary {
+  border-color: var(--accent);
+  background: rgba(255, 200, 87, 0.1);
+  box-shadow: 0 0 10px rgba(255, 200, 87, 0.25);
+}
+.tool.primary:hover {
+  background: rgba(255, 200, 87, 0.18);
+}
+
 .sw {
   width: 14px;
   height: 14px;
@@ -511,6 +539,10 @@ main#stage.mode-cursor #mode-banner {
 }
 .sw-erase {
   background: repeating-linear-gradient(45deg, #7a2b3a 0 3px, #40151d 3px 6px);
+}
+/* «Разбор завала» (§12.432): цвет завала под косой штриховкой ластика. */
+.sw-rubble {
+  background: repeating-linear-gradient(45deg, #7a2b3a 0 2px, #4a4036 2px 6px);
 }
 .sw-cursor {
   background: #6cf0a0;
@@ -929,6 +961,14 @@ main#stage.mode-cursor #mode-banner {
 .squad-sel.on {
   border-color: var(--accent);
   color: var(--accent);
+}
+/* Отряд на автомиссии (§12.438) не выбирается: его водит правило. Шапка
+   читается как обычно (сила, состав), но не нажимается — без подсветки. */
+.squad-sel.ruled {
+  cursor: default;
+}
+.squad-sel.ruled:hover {
+  border-color: var(--line);
 }
 /* Карандаш правки состава (§12.359) — левее стрелки свёртки. В режиме он
    становится словом «Готово» в акценте, а шапка — двойной рамкой: режим
@@ -1820,6 +1860,32 @@ body.crew-dragging * {
   display: none;
 }
 
+/* Подсказка у курсора (§12.431): что сделает клик. Сквозная для мыши, как
+   `#livetip`, и ниже модалов — над окном её нет вовсе (`handTipFor`). */
+#handtip {
+  position: fixed;
+  z-index: 9;
+  padding: 3px 8px;
+  background: rgba(21, 23, 31, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+#handtip.act {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+#handtip.no {
+  color: var(--muted, #9aa0ad);
+}
+#handtip[hidden] {
+  display: none;
+}
+
 #toasts {
   position: fixed;
   top: calc(var(--header-h) + 12px);
@@ -1983,24 +2049,13 @@ body.crew-dragging * {
   font-size: 11px;
   color: var(--accent);
 }
-.raid-rule .raid-auto,
-.raid-rule .raid-pause {
+.raid-rule .raid-auto {
   font-size: 11px;
   padding: 2px 8px;
 }
-/* Неактивное правило — тем же тусклым, что и кот, который никуда не идёт
-   (§12.77): «помню, но не веду» обязано читаться со строки, а не из подсказки.
-   Тускнеет только надпись: «Возобновить» — это доступное действие, и
-   приглушённая кнопка читается как запрещённая (тот же довод, что запретил
-   `disabled` в §12.71). */
-.raid-rule.off > span {
-  opacity: 0.55;
-}
 /* Правило живо, а заказ закрылся (§12.78): это не «выключено» и не «идёт» —
-   это тревога, и цвет у неё тот же, что у остальных отказов. Стоит и поверх
-   `.off`: усыплённое правило будят, чтобы отряд пошёл, — и «Возобновить», после
-   которого ничего не происходит, читается как поломка ровно так же. Кнопки не
-   трогаем: «Пауза» и «Снять» остаются доступны. */
+   это тревога, и цвет у неё тот же, что у остальных отказов. Кнопку не
+   трогаем: «Снять» остаётся доступна. */
 .raid-rule.blocked > span {
   color: var(--bad);
   opacity: 1;
@@ -2012,11 +2067,6 @@ body.crew-dragging * {
 .raid-rule.holding > span {
   color: var(--warn);
   opacity: 1;
-}
-.raid-pause {
-  flex: 0 0 auto;
-  padding: 0 8px;
-  font-size: 13px;
 }
 
 /* Штаб вылазок (§12.71): состав и заказы рядом, в одном модальном окне.
@@ -2394,6 +2444,18 @@ body.rail-wide #screenbar .door-label {
   margin-left: 0;
   padding-left: 0;
 }
+/* Круг пола словами (§12.406): «обычно ▤ 1 иногда ⚙ 1» — одной группой
+   справа, как фишки обычной добычи. */
+.raidwin-loot .loot-mix {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.raidwin-loot .loot-mix .cost {
+  margin-left: 0;
+  padding-left: 0;
+}
 /* Образцы, которые принесёт отряд (§12.264), — своей строкой и акцентом:
    ради них с прибором и ходят, и в общей добыче фишка терялась. */
 .raidwin-gather {
@@ -2724,6 +2786,43 @@ body.rail-wide #screenbar .door-label {
 .tool.ware-fav.on {
   color: var(--accent);
   border-color: var(--accent);
+}
+/* ★ и глазик — одна клетка сетки (§12.418): колонки строк не сдвигаются. */
+.ware-marks {
+  display: flex;
+  gap: 4px;
+}
+.tool.ware-eye {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  color: var(--muted);
+}
+.tool.ware-eye .eye-slash {
+  display: none;
+}
+/* Скрытая строка: глаз перечёркнут — «сейчас не на виду». */
+.tool.ware-eye.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.tool.ware-eye.on .eye-slash {
+  display: inline;
+}
+/* Заголовок группы «Скрытые»: подпись-кнопка, а не строка таблицы. */
+.tool.ware-hidden-head {
+  align-self: flex-start;
+  margin-top: 8px;
+  padding: 3px 8px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.tool.ware-hidden-head:hover {
+  color: var(--fg, inherit);
 }
 .ware-name {
   display: flex;
@@ -3542,6 +3641,57 @@ body.rail-wide #screenbar .door-label {
   stroke-opacity: 0.65;
   pointer-events: none;
 }
+/* Куда расползётся очаг (§12.437): стрелка и призрак будущего пятна —
+   пунктиром, потому что очага там ещё нет. Пульс говорит «скоро». */
+.map-spread {
+  pointer-events: none;
+}
+.map-spread-arrow {
+  fill: none;
+  stroke: var(--bad);
+  stroke-width: 2.5;
+  stroke-dasharray: 7 5;
+  stroke-linecap: round;
+  animation: map-spread-crawl 1.2s linear infinite;
+}
+.map-spread-head {
+  fill: var(--bad);
+}
+.map-spread-ghost {
+  fill: var(--bad);
+  fill-opacity: 0.07;
+  stroke: var(--bad);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  stroke-opacity: 0.8;
+  animation: map-spread-pulse 1.6s ease-in-out infinite;
+}
+.map-spread-in {
+  fill: var(--bad);
+  font-size: 12px;
+  font-weight: 600;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: #0c1517;
+  stroke-width: 3px;
+}
+@keyframes map-spread-crawl {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+@keyframes map-spread-pulse {
+  50% {
+    fill-opacity: 0.16;
+    stroke-opacity: 0.4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-spread-arrow,
+  .map-spread-ghost {
+    animation: none;
+  }
+}
 .map-hatch-line {
   stroke: var(--bad);
   stroke-width: 2.5;
@@ -3668,6 +3818,49 @@ body.rail-wide #screenbar .door-label {
   fill: rgba(130, 215, 225, 0.28);
   stroke: rgba(130, 215, 225, 0.8);
 }
+/* База до осмотра входа (§12.422) — силуэт «?», как неразведанный участок
+   (§12.320), но кликается: осмотр и есть её заказ. Проявляется вспышкой. */
+.map-home.fog .map-fog-mark {
+  display: inline;
+}
+.map-home.fog .map-glyph,
+.map-home.fog .map-name,
+.map-home.fog .map-plate {
+  display: none;
+}
+.map-home.fog .map-hex {
+  stroke: var(--muted);
+  stroke-dasharray: 3 4;
+}
+.map-home.fog .map-home-halo {
+  fill: none;
+  stroke-dasharray: 3 4;
+}
+.map-home-flash {
+  fill: none;
+  stroke: #82d7e1;
+  stroke-width: 2.5;
+  opacity: 0;
+  pointer-events: none;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.map-home.reveal .map-home-flash {
+  animation: map-flash 1.4s ease-out 2;
+}
+.map-home.reveal .map-glyph,
+.map-home.reveal .map-name,
+.map-home.reveal .map-plate {
+  animation: home-reveal 1.2s ease-out;
+}
+@keyframes home-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
 /* Участок-дорога (§12.292): караван ведут вдоль неё, и длина её — часть срока.
    Шире и плотнее ребра соседства: это путь, а не «куда может пойти очаг». */
 .map-road {
@@ -3714,12 +3907,6 @@ body.rail-wide #screenbar .door-label {
   font-size: 11px;
   font-weight: 700;
   text-anchor: middle;
-}
-.rule-tag {
-  cursor: pointer;
-}
-.rule-tag.paused {
-  opacity: 0.45;
 }
 /* Участок без дела (§12.319) — тусклым: прозрачностью, а не `filter`, по
    доводу `.map-halo`. Выбранный держит рамку выбора в полную силу. */
@@ -3890,21 +4077,51 @@ body.rail-wide #screenbar .door-label {
   height: 48px;
   color: rgba(0, 0, 0, 0.55) !important;
 }
+/* План объекта-штампа (§12.447): клетки цветом тайла, слоты — стульями. */
+/* Клетка — доля от `--plan` по длинной стороне: размер задан числом, иначе
+   глиф внутри раздувает строки сетки, и план вытягивается в столбы. */
+.wiki-plan {
+  --plan: 72px;
+  --cell: calc(var(--plan) / var(--n));
+  display: inline-grid;
+  grid-template-columns: repeat(var(--cols), var(--cell));
+  grid-template-rows: repeat(var(--rows), var(--cell));
+}
+.wiki-plan-cell,
+.wiki-plan-seat {
+  margin: 1px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+}
+.wiki-plan-seat {
+  background: rgba(255, 255, 255, 0.06);
+}
+.wiki-plan-seat::after {
+  content: "";
+  width: 45%;
+  height: 45%;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.28);
+}
+.wiki-plan-glyph {
+  width: 70%;
+  height: 70%;
+  color: rgba(0, 0, 0, 0.55) !important;
+}
+.wiki-gist .wiki-plan {
+  --plan: 44px;
+}
 .wiki-portrait {
   width: 96px;
   height: 96px;
   object-fit: cover;
   border-radius: 4px;
 }
-.wiki-fresh {
-  margin-left: auto;
-  color: var(--accent);
-  font-size: 11px;
-  border: 1px solid var(--accent);
-  border-radius: 3px;
-  padding: 1px 6px;
-}
-/* Метка поздней грани (§12.265): тот же акцент, что у «Новой записи», но
+/* Метка поздней грани (§12.265): акцентная рамка, но
    мельче — это строка в статье, а не статья. */
 .wiki-added {
   margin-left: 6px;
@@ -3914,6 +4131,78 @@ body.rail-wide #screenbar .door-label {
   border-radius: 3px;
   padding: 0 4px;
 }
+/* Страница «Новые записи» (§12.441): строка на запись — картинка, имя с
+   выжимкой и «Подробнее». Картинка здесь не плавает, как в статье, а стоит
+   колонкой: текста две строки, и обтекать нечего. */
+.wiki-gist {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+}
+.wiki-digest .win-list {
+  margin-top: 0;
+}
+.wiki-gist + .wiki-gist {
+  border-top: 1px solid var(--line);
+}
+.wiki-gist .wiki-pic {
+  float: none;
+  margin: 0;
+  padding: 4px;
+}
+.wiki-gist .wiki-pic .wiki-glyph {
+  width: 40px;
+  height: 40px;
+}
+.wiki-gist .wiki-tile {
+  width: 44px;
+  height: 44px;
+}
+.wiki-gist .wiki-tile .wiki-glyph {
+  width: 30px;
+  height: 30px;
+}
+.wiki-gist .wiki-portrait {
+  width: 52px;
+  height: 52px;
+}
+.wiki-gist-main {
+  flex: 1;
+  min-width: 0;
+}
+.wiki-gist-text {
+  margin-top: 2px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.wiki-gist-text b {
+  color: var(--accent);
+  font-weight: 600;
+}
+.wiki-more {
+  flex: none;
+}
+.wiki-gist-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.wiki-gist-foot .wiki-mute {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.wiki-ok {
+  min-width: 64px;
+  justify-content: center;
+}
+
 .wiki-back {
   min-width: 24px;
   padding: 0 6px;
@@ -4282,6 +4571,9 @@ body.rail-wide #screenbar .door-label {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .map-home.reveal * {
+    animation: none;
+  }
   .map-trip-mark {
     transition: none;
   }
@@ -4289,5 +4581,54 @@ body.rail-wide #screenbar .door-label {
   .near-face,
   .map-trip-radio {
     animation: none;
+  }
+}
+
+/* Доклад вернувшегося кота (§12.436): стоит на месте карты, пока игрок его не
+   выслушал, — по центру колонки, одной карточкой. */
+.home-report:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 260px;
+  text-align: center;
+}
+.home-report-h {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.home-report-say {
+  color: var(--text);
+  font-style: italic;
+  max-width: 360px;
+}
+.home-report-loot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.home-report-go {
+  margin-top: 6px;
+}
+
+/* Первая встреча с инструментом «Расчистить» (§12.452): короткая вспышка, когда
+   «Приказы» раскрылись сами. Кольцо `fresh` остаётся до клика — вспышка только
+   показывает, куда смотреть. */
+#toolbar .tool.flash {
+  animation: tool-flash 0.6s ease-out 3;
+}
+@keyframes tool-flash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(224, 192, 96, 0.9);
+    background: rgba(224, 192, 96, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(224, 192, 96, 0);
+    background: transparent;
   }
 }

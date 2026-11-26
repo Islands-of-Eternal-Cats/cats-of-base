@@ -32,6 +32,18 @@ const THICK = 0.28;
 /// «что это за комната» сам, оттенок только поддерживает его.
 const TINT = 0.22;
 
+/// Тайлы-двойники: своего рисунка у них нет, и второй копии рисунка заводить
+/// незачем — один словарь на оба вида (плоский и 3/4). С §12.433 это находки:
+/// неисследованная ячейка выглядит одинаково, что бы в ней ни стояло, —
+/// иначе находку узнавали бы по рисунку раньше обследования. Рисунок у всех —
+/// неисследованного шлюза (§12.426), первой такой ячейки партии.
+export const LOOKS_LIKE = {
+  unknown_bin: "broken_gate",
+  unknown_table: "broken_gate",
+  unknown_bed: "broken_gate",
+  unknown_storage: "broken_gate",
+};
+
 /// Материал пола по роли клетки. Неизвестное — бетон, как пол коридора.
 const MATERIAL = {
   floor: "concrete",
@@ -39,6 +51,7 @@ const MATERIAL = {
   rack: "concrete",
   bin: "concrete",
   bed: "wood",
+  broken_bed: "wood",
   nest: "wood",
   lab: "tile",
   bench: "tile",
@@ -47,6 +60,8 @@ const MATERIAL = {
   broken_gate: "plate",
   gate_ruin: "plate",
   muster_table: "plate",
+  briefing_table: "plate",
+  dusty_table: "plate",
   shop: "rubber",
   post: "rubber",
   relay: "rubber",
@@ -96,7 +111,8 @@ export function drawOblique(d) {
     for (let x = 0; x < W; x++) {
       const v = at(x, y);
       if (v < 0) continue;
-      const id = palette[v]?.id;
+      const raw = palette[v]?.id;
+      const id = LOOKS_LIKE[raw] ?? raw;
       const mat = MATERIAL[id] ?? "concrete";
       floorCell(
         ground,
@@ -560,8 +576,9 @@ function wallFace(g, x, y, w, h, cx, cy, tint, d) {
   }
 }
 
-/// Мебель одной клетки в 3/4.
-function prop(g, id, x, y, tint, n, d) {
+/// Мебель одной клетки в 3/4. Наружу — ради завала под порталом (§12.403).
+export function prop(g, id, x, y, tint, n, d) {
+  id = LOOKS_LIKE[id] ?? id;
   const { T, shade, tileDefAt } = d;
   const px = x * T;
   const py = y * T;
@@ -593,6 +610,23 @@ function prop(g, id, x, y, tint, n, d) {
         const ry = 0.1 + rnd() * (0.8 - w);
         box(rx, ry, w, w, 0.12 + rnd() * 0.28, stones[i % 4]);
       }
+      break;
+    }
+    case "broken_bed": {
+      // Сломанная лежанка (§12.423): та же рама, но подстилка сорвана —
+      // голые доски и клок тряпья в углу.
+      const frame = 0x5a4030;
+      box(0.12, 0.08, 0.76, 0.08, 0.3, shade(frame, 0.05));
+      const t = box(0.14, 0.14, 0.72, 0.74, 0.12, frame);
+      for (let i = 1; i < 4; i++) {
+        g.rect(t.x + 1, t.y + (t.d * i) / 4, t.w - 2, 1).fill(shade(frame, -0.4));
+      }
+      g.moveTo(t.x + t.w * 0.5, t.y + t.d * 0.6)
+        .lineTo(t.x + t.w - 2, t.y + t.d * 0.55)
+        .lineTo(t.x + t.w - 3, t.y + t.d - 2)
+        .lineTo(t.x + t.w * 0.62, t.y + t.d - 3)
+        .closePath()
+        .fill(shade(tint, 0.1));
       break;
     }
     case "bed":
@@ -654,6 +688,29 @@ function prop(g, id, x, y, tint, n, d) {
         width: 1,
         alpha: 0.3,
       });
+      break;
+    }
+    case "small_bin": {
+      // Малый ящик (§12.402): открытый деревянный ящик — стенки из досок,
+      // тёмное нутро. Крышки нет намеренно: что в нём лежит, рисует
+      // `drawScrap`, и куча поднята на `SURFACE.small_bin` — она лежит
+      // **в** ящике, над передней стенкой, а не на полу за ней.
+      const wood = 0x8a6a42;
+      const H = 0.34;
+      const t = box(0.14, 0.32, 0.72, 0.48, H, wood, 0x6e5232);
+      const fy = t.y + t.d; // верх передней стенки
+      const fh = T * H;
+      // Три доски передней стенки и стойки по углам.
+      for (const k of [1 / 3, 2 / 3]) {
+        g.rect(t.x, fy + fh * k, t.w, 1).fill(0x3e2c18);
+      }
+      g.rect(t.x, fy, 3, fh).fill(0x4a3520);
+      g.rect(t.x + t.w - 3, fy, 3, fh).fill(0x4a3520);
+      g.rect(t.x, fy + fh - 1, t.w, 1).fill({ color: 0, alpha: 0.4 });
+      // Нутро: тёмная впадина внутри кромки.
+      g.rect(t.x + 3, t.y + 3, t.w - 6, t.d - 5).fill(0x2a1f14);
+      g.rect(t.x + 3, t.y + 3, t.w - 6, 2).fill({ color: 0, alpha: 0.35 });
+      g.rect(t.x, t.y, t.w, t.d).stroke({ color: 0x3e2c18, width: 1 });
       break;
     }
     case "bin": {
@@ -771,6 +828,23 @@ function prop(g, id, x, y, tint, n, d) {
       if (dy < 0) box(0.3, 0.7, 0.4, 0.08, 0.5, back);
       break;
     }
+    // Пыльный стол (§12.418): та же столешница без карты, в пыли.
+    case "dusty_table": {
+      const cx = px + T / 2;
+      const cy = py + T / 2;
+      const r = T * 0.44;
+      const h = T * 0.3;
+      g.ellipse(cx + 2, cy + 3, r, r * 0.86).fill({ color: 0, alpha: 0.35 });
+      g.rect(cx - T * 0.06, cy - h, T * 0.12, h).fill(0x3e3020);
+      g.ellipse(cx, cy - h + 3, r, r * 0.86).fill(0x4a3c2a);
+      g.ellipse(cx, cy - h, r, r * 0.86).fill(0x6e5a40);
+      g.ellipse(cx, cy - h, r * 0.78, r * 0.78 * 0.86).fill({
+        color: 0xb8b0a0,
+        alpha: 0.28,
+      });
+      break;
+    }
+    case "briefing_table":
     case "muster_table": {
       const cx = px + T / 2;
       const cy = py + T / 2;
@@ -921,7 +995,7 @@ export const wallRise = (lowered) => (lowered ? 0 : RISE);
 /// столешница стеллажа сдвинута вверх, и куча в центре клетки оказывалась у её
 /// переднего края, а куча с паллеты позади — на задней кромке стеллажа, то
 /// есть читалась лежащей на нём.
-const SURFACE = { rack: 0.3, bench: 0.36, storage: 0.07 };
+const SURFACE = { rack: 0.3, bench: 0.36, storage: 0.07, small_bin: 0.24 };
 export const surfaceRise = (id) => SURFACE[id] ?? 0;
 
 /// Тайлы, чья мебель закрывает клетку целиком: в виде 3/4 глиф роли поверх них

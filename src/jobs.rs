@@ -258,9 +258,14 @@ pub(crate) fn surface_ok(rules: &TileRules, at: (i32, i32), tile: i16) -> bool {
 /// снеся сам объект: тогда слотов нет, и ластик по той же рамке снимает всё.
 /// Одно исключение — вернуть пол в яму под слотом: иначе партия, где пол
 /// стёрли до §12.360, держала бы сбор вечно и чинить было бы нечем.
+/// Второе — снять со слота слой, под которым остаётся пол (§12.418): пыльное
+/// место брифинга стоит в стартовой застройке посреди завала, и восемь его
+/// стульев откапывают. Ямы такой снос не оставляет, значит места не отнимает.
 pub(crate) fn may_build(plan: &Plan, rules: &TileRules, at: (i32, i32), tile: i16) -> bool {
-    let refloor = plan.built_at(at.0, at.1) < 0 && tile == rules.base().unwrap_or(0);
-    (refloor || plan.slot_at(at.0, at.1).is_none())
+    let built = plan.built_at(at.0, at.1);
+    let refloor = built < 0 && tile == rules.base().unwrap_or(0);
+    let unclutter = tile < 0 && built >= 0 && rules.stripped(built) >= 0;
+    (refloor || unclutter || plan.slot_at(at.0, at.1).is_none())
         && rules.rests_on(plan.built_at(at.0, at.1), tile)
         && access_ok(plan, rules, at, tile)
         && zoning_ok(plan, rules, at, tile)
@@ -548,6 +553,8 @@ pub(crate) fn assign_jobs(
     rules: Res<TileRules>,
     bins: Res<Bins>,
     auto_tidy: Res<AutoTidy>,
+    gates: Res<AutoRules>,
+    techs: Res<Techs>,
     mut commands: Commands,
     mut blueprints: Query<(Entity, &mut Blueprint)>,
     piles: Query<(&Position, &Stack)>,
@@ -586,7 +593,13 @@ pub(crate) fn assign_jobs(
         .iter()
         .map(|(p, s)| ((p.x, p.y), s.item, s.count))
         .collect();
-    let cluttered = site_clutter(&map, &rules, &bins, auto_tidy.0, &piled);
+    let cluttered = site_clutter(
+        &map,
+        &rules,
+        &bins,
+        gates.tidies(&auto_tidy, &techs),
+        &piled,
+    );
     let front = (!doomed.is_empty()).then(|| {
         let positions: Vec<(i32, i32)> = cats.iter().map(|(p, _)| (p.x, p.y)).collect();
         DemolitionFront::new(&map, &rules, &doomed, &positions)
@@ -611,7 +624,7 @@ pub(crate) fn assign_jobs(
                 bp.assignee = None;
                 commands.entity(cat).remove::<(Assignment, Path, Stride)>();
             }
-        } else if !waiting && !littered && missing(&rules, &bp).is_empty() {
+        } else if !waiting && !littered && missing(&rules, &map, &bp).is_empty() {
             open.push((bp_e, (bp.x, bp.y), bp.tile));
         }
     }
@@ -682,6 +695,7 @@ pub(crate) fn work_jobs(
     mut map: ResMut<BaseMap>,
     rules: Res<TileRules>,
     skill_rules: Res<SkillRules>,
+    mut bins: ResMut<Bins>,
     mut commands: Commands,
     cats: Query<(
         Entity,
@@ -702,24 +716,51 @@ pub(crate) fn work_jobs(
 
         let in_range = (pos.x - bp.x).abs() + (pos.y - bp.y).abs() <= 1;
         if in_range {
-            let level = build_skill.map_or(0, |s| level_of(&skill_rules, skills, s));
+            // Обследование (§12.410, §12.433) растит навык, названный у самой
+            // руины: цель обследования бывает обычной постройкой (склад), чью
+            // стройку «Наука» растить не должна. Прочая работа — навык
+            // ставящегося тайла, не назван — общий навык стройки.
+            let was = map.tile_at(bp.x, bp.y);
+            let examining = bp.tile >= 0 && rules.examine_of(was) == Some(bp.tile);
+            let work_skill = examining
+                .then(|| rules.skill_of(was))
+                .flatten()
+                .or_else(|| rules.skill_of(bp.tile))
+                .or(build_skill);
+            let level = work_skill.map_or(0, |s| level_of(&skill_rules, skills, s));
             bp.progress += WORK_RATE + level;
-            if let Some(skill) = build_skill {
+            if let Some(skill) = work_skill {
                 commands.entity(cat_e).insert(Worked(skill));
             }
             if bp.progress >= BUILD_WORK {
                 // Снос возвращает всю цену снесённого тайла, по каждому типу,
                 // и снимает ровно один слой (§12.237): постройку до пола, пол
                 // до пустоты.
-                let (refund, to): (Vec<(usize, i32)>, i16) = if bp.tile < 0 {
-                    let was = map.tile_at(bp.x, bp.y);
-                    (rules.cost_of(was).to_vec(), rules.stripped(was))
-                } else {
-                    (Vec::new(), bp.tile)
-                };
+                // Находка (§12.415) открывается и сносом слоя над ней, и
+                // обследованием (§12.433): что лежало в неисследованной ячейке,
+                // ложится в открывшийся ящик.
+                let (refund, found, to): (Vec<(usize, i32)>, Vec<(usize, i32)>, i16) =
+                    if bp.tile < 0 {
+                        (
+                            rules.cost_of(was).to_vec(),
+                            rules.holds_of(was).to_vec(),
+                            rules.stripped(was),
+                        )
+                    } else if examining {
+                        (Vec::new(), rules.holds_of(was).to_vec(), bp.tile)
+                    } else {
+                        (Vec::new(), Vec::new(), bp.tile)
+                    };
                 map.set(bp.x, bp.y, to);
                 for (item, count) in refund {
                     spill(&mut commands, &mut stacks, (pos.x, pos.y), item, count);
+                }
+                // Находка под завалом (§12.415): содержимое ложится в саму
+                // клетку, а открывшийся ящик сразу назначен на него — иначе
+                // ящик без назначения выгнал бы находку на пол (§12.402).
+                for (item, count) in found {
+                    spill(&mut commands, &mut stacks, (bp.x, bp.y), item, count);
+                    bins.set(bp.x, bp.y, item, true);
                 }
                 commands.entity(assign.0).despawn();
                 commands.entity(cat_e).remove::<Assignment>();
@@ -753,8 +794,10 @@ pub(crate) fn prune_structures(
             commands.entity(e).despawn();
             continue;
         };
+        // Раскопанная и починенная клетка — всё та же клетка штампа (§12.420):
+        // пыльный стол под завалом, а потом стол брифинга на его месте.
         let gone = rule.stamp(s.anchor, s.rot).into_iter().any(|((x, y), t)| {
-            map.tile_at(x, y) != t && !blueprints.iter().any(|b| (b.x, b.y) == (x, y))
+            !rule.holds(t, map.tile_at(x, y)) && !blueprints.iter().any(|b| (b.x, b.y) == (x, y))
         });
         if gone {
             commands.entity(e).despawn();

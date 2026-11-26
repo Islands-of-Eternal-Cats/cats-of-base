@@ -48,7 +48,13 @@ pub(crate) fn quote(
     buying: bool,
 ) -> Option<i32> {
     let rule = factions.0.get(faction)?;
-    let phases = &rule.price_of(item)?.phases;
+    let line = rule.price_of(item)?;
+    // Уникальный продукт базе не продают (§12.416): покупки по строке нет,
+    // и фасад отклонит её тем же `None`, что и товар, которым не торгуют.
+    if buying && line.sell_only {
+        return None;
+    }
+    let phases = &line.phases;
     if phases.is_empty() {
         return None;
     }

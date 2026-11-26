@@ -863,6 +863,10 @@ fn a_load_within_reach_of_two_tiers_goes_to_the_higher_one() {
     sim.set_solid(SHELF, true);
     sim.force_tile(4, 1, STORE); // сосед клетки (3, 1) справа
     sim.force_tile(3, 2, SHELF); // сосед той же клетки снизу
+    // Клетка с ярусом без назначения не берёт ничего (§12.402).
+    sim.set_items(1);
+    sim.set_bin(4, 1, 0, true);
+    sim.set_bin(3, 2, 0, true);
     sim.put_scrap(1, 1, 3);
 
     sim.tick_n(200);

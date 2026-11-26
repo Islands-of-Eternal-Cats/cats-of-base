@@ -78,7 +78,7 @@ impl Owners {
                 if let Some(i) = owners.index(x, y) {
                     owners.cells[i] = n as i32;
                 }
-                unfinished |= map.tile_at(x, y) != tile;
+                unfinished |= !rule.holds(tile, map.tile_at(x, y));
             }
             owners.unfinished.push(unfinished);
         }

@@ -17,6 +17,8 @@ import {
   drawGlass,
   drawGrid,
   drawOblique,
+  LOOKS_LIKE,
+  prop as obliqueProp,
   sconceCells,
   surfaceRise,
   wallRise,
@@ -32,6 +34,8 @@ import {
   wikiReady,
   articleTarget,
   renderArticle,
+  renderGist,
+  gistLinks,
   setArticleAlias,
   setArticleGate,
   setArticleTeased,
@@ -61,6 +65,7 @@ const COLORS = {
   wallLight: 0x676c7a, // блик по верху стены
   shadow: 0x000000,
   select: 0x6cf0a0, // выбор кота / метка цели / взведённая клетка
+  act: 0xffc857, // наведение с котом в руке: приказ сделает дело с вещью или откроет дверь
   placeable: 0x6cf0a0, // режим стройки: сюда тайл в руке поставить можно (§12.302)
   cell: 0x9fb0ff, // осмотренная клетка: уголки вокруг того, о чём говорит панель
   erase: 0xff5566,
@@ -203,6 +208,35 @@ function glyphHtml(sym, color, cls = "") {
 /// Рулсет — контент, и предмет в нём заводится без спроса у вида: у своего
 /// глифа для него нет, и падать на этом нельзя. Такой предмет остаётся цветным
 /// квадратиком — ровно тем, чем были все шестеро до §12.109.
+// Сюжетная вещь, которой на базе больше нет (§12.418): её строку не показывают
+// ни шапка, ни «Ресурсы». Карта приходит один раз и уходит в пыльный стол, и
+// навсегда оставшаяся «Карта 0» звала бы её ждать. Флаг — контент (`keepsake`),
+// счёт — тот же снимок, что у шапки: склад и пол с лапами.
+function keepsakeGone(i) {
+  if (!meta?.items?.[i]?.keepsake) return false;
+  const st = stock[i];
+  return !st || st.stored + st.loose <= 0;
+}
+
+// Глазик строки «Ресурсов» (§12.418): открытый — строка на виду, перечёркнутый
+// — в группе «Скрытые». Контур, а не символ шрифта: эмодзи глаза в разных
+// системах рисуется по-разному и не красится цветом кнопки.
+const EYE_ICON =
+  '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">' +
+  '<path fill="currentColor" d="M12 5C6.5 5 2.7 9.2 1.5 12c1.2 2.8 5 7 10.5 7s9.3-4.2 10.5-7C21.3 9.2 17.5 5 12 5Zm0 11.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9Zm0-2.3a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z"/>' +
+  '<path class="eye-slash" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M4 4 L20 20"/>' +
+  "</svg>";
+
+// Раскрыта ли группа «Скрытые» в окне «Ресурсы» (§12.418). Удобство вида, а не
+// решение игрока о мире: помнится в браузере, как свёрнутая рейка дверей.
+let hiddenOpen = false;
+try {
+  hiddenOpen = localStorage.getItem("sp-hidden-open") === "1";
+} catch {
+  /* приватное окно — живём без памяти */
+}
+let hiddenHead = null;
+
 function itemGlyph(i, cls = "") {
   const it = (meta?.items ?? [])[i];
   if (!it) return "";
@@ -312,10 +346,19 @@ const cellEl = document.getElementById("cell");
 // миллисекунд. Регистрируется один раз, здесь, а не при отрисовке панели.
 // Руина (§12.379): «Обследовать», потом «Починить» — работу берёт любой
 // свободный кот; конкретного посылают приказом по самой клетке.
-onPanelClick(cellEl, ".ruin-fix", (b) =>
-  sendAction({ type: "fix", x: Number(b.dataset.x), y: Number(b.dataset.y) }),
+onPanelClick(
+  cellEl,
+  ".ruin-fix",
+  (b) =>
+    // Нечем чинить (§12.419) — кнопка тусклая, причина в подсказке.
+    b.classList.contains("off") ||
+    sendAction({ type: "fix", x: Number(b.dataset.x), y: Number(b.dataset.y) }),
 );
-// Завал (§12.381): «Разобрать» — тот же снос, что ластиком на клетке.
+// Завал (§12.381): «Расчистить» (до §12.448 «Разобрать») — тот же снос, что ластиком на клетке.
+// Только эту клетку (§12.449, отменяет «берёт в руку» §12.432): инструмент в
+// руке молча меняет смысл следующего клика по карте — клик по коту размечал бы
+// завал под ним. Инструмент на всю базу предлагает кнопка в тулбаре, которая
+// встаёт с кольцом «новое» после первого разбора.
 onPanelClick(cellEl, ".rubble-clear", (b) =>
   sendAction({
     type: "dismantle",
@@ -517,6 +560,7 @@ onPanelClick(raidWinEl, ".squad-rename", (b) => {
   if (!crewEditing(x, y)) return;
   startSquadRename(x, y);
 });
+onPanelClick(raidWinEl, ".home-report-go", () => endHomeReport());
 onPanelClick(raidWinEl, ".crew-pick", (b) => {
   // Погашенная классом строка события мыши шлёт — тем и ценна (§12.121), —
   // поэтому отказ проверяем сами; причина написана в подсказке.
@@ -528,6 +572,8 @@ onPanelClick(raidWinEl, ".crew-pick", (b) => {
   const x = Number(b.dataset.x);
   const y = Number(b.dataset.y);
   if (!raidHome && raidWinAt?.x === x && raidWinAt?.y === y) return;
+  // Кот отряда на автомиссии отряд не выбирает (§12.438).
+  if (squadRuled(nodeAt(x, y))) return;
   // Выбранная База переживает смену отряда (§12.355).
   mapHome = atHome();
   raidHome = false;
@@ -563,12 +609,9 @@ onPanelClick(raidWinEl, ".squad-edit", (b) => {
 // отряда: `enlist` сам снимает прежнюю приписку, §12.61); «−» — исключить.
 onPanelClick(raidWinEl, ".crew-add", (b) => {
   if (b.classList.contains("off")) return;
-  sendAction({
-    type: "enlist",
-    id: b.dataset.id,
-    x: Number(b.dataset.x),
-    y: Number(b.dataset.y),
-  });
+  const [x, y] = [Number(b.dataset.x), Number(b.dataset.y)];
+  sendAction({ type: "enlist", id: b.dataset.id, x, y });
+  focusOnJoin(b.dataset.id, x, y);
 });
 onPanelClick(raidWinEl, ".crew-out", (b) => {
   if (b.classList.contains("off")) return;
@@ -608,7 +651,8 @@ function crewDropWhy(drag, drop) {
   if (!n || n.busy) return `«${n?.name ?? ""}» в деле`;
   if (wounded.has(drag.id)) return "ранен";
   // Допуск радиста считает ядро (`may_relay`, §12.291), вид его только читает.
-  if (radio && !drag.cat.may_relay) return `не умеет «${relayLevel(drag.cat).name}»`;
+  if (radio && !drag.cat.may_relay)
+    return `не умеет «${relayLevel(drag.cat).name}»`;
   return "";
 }
 function crewDropAt(px, py) {
@@ -662,7 +706,8 @@ function crewDragStart(d) {
   // Обёртка с классом колонки — чтобы строка сохранила свой вид вне неё.
   const g = document.createElement("div");
   g.className = "crew-ghost raidwin-crew";
-  for (const t of d.copy.querySelectorAll("[data-tip]")) t.removeAttribute("data-tip");
+  for (const t of d.copy.querySelectorAll("[data-tip]"))
+    t.removeAttribute("data-tip");
   g.appendChild(d.copy);
   g.style.width = `${r.width}px`;
   d.dx = d.x0 - r.left;
@@ -725,9 +770,11 @@ function crewDragEnd(drop) {
         // `post_relay` сам снимает кота из бойцов и сменяет прежнего радиста.
         const [x, y] = where.slice(6).split(",").map(Number);
         sendAction({ type: "postRelay", id: d.id, x, y });
+        focusOnJoin(d.id, x, y);
       } else {
         const [x, y] = where.split(",").map(Number);
         sendAction({ type: "enlist", id: d.id, x, y });
+        focusOnJoin(d.id, x, y);
       }
     }
   }
@@ -749,12 +796,16 @@ window.addEventListener("pointerup", (e) => {
   crewDragEnd(crewDrag.on ? crewDropAt(e.clientX, e.clientY) : null);
 });
 window.addEventListener("pointercancel", () => crewDrag && crewDragEnd(null));
-window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && crewDrag?.on) {
-    e.stopPropagation();
-    crewDragEnd(null);
-  }
-}, true);
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.key === "Escape" && crewDrag?.on) {
+      e.stopPropagation();
+      crewDragEnd(null);
+    }
+  },
+  true,
+);
 // Строка списка радиста (§12.357): приписать или снять — те же команды, что
 // раньше у кнопки рации в строке кота.
 onPanelClick(raidWinEl, ".radio-pick", (b) => {
@@ -801,6 +852,8 @@ onPanelClick(raidWinEl, ".squad-sel", (b, e) => {
   if (e.target.closest(".squad-rename")) return;
   const x = Number(b.dataset.x);
   const y = Number(b.dataset.y);
+  // Отряд правила не выбирается (§12.438): причина — в подсказке шапки.
+  if (squadRuled(nodeAt(x, y))) return;
   // Отряд в деле повторным кликом не снимается (§12.362): его колонка — одна
   // карточка вылазки, и снятый выбор подменял её чужими заказами.
   const again =
@@ -906,16 +959,6 @@ onPanelClick(raidWinEl, ".raid-auto", (b) =>
   sendAction({
     type: "setAutoRaid",
     mission: Number(b.dataset.def),
-    x: Number(b.dataset.x),
-    y: Number(b.dataset.y),
-  }),
-);
-// Пауза правила (§12.77). Мир она меняет — значит `sendAction`. `data-on` уже
-// несёт то, что надо отправить: пусто у «приостановить», «1» у «возобновить».
-onPanelClick(raidWinEl, ".raid-pause", (b) =>
-  sendAction({
-    type: "setAutoRaidOn",
-    on: !!b.dataset.on,
     x: Number(b.dataset.x),
     y: Number(b.dataset.y),
   }),
@@ -1068,6 +1111,14 @@ bpLayer.addChild(sparkGfx);
 // рассказывает, откуда он взялся. Узел постоянный (§12.84), под котами.
 const portalGfx = new Graphics();
 bpLayer.addChild(portalGfx);
+// Завал под порталом (§12.403): кот выпадает не на пустой пятачок, а на груду
+// камней, которая рассыпается, когда кольцо раскрылось. Только картинка — в
+// ядре клетка пол с нулевого тика. Свой узел, рисуется один раз на старте и
+// гаснет прозрачностью. **Над кольцом**, а не под ним: кольцо непрозрачно и
+// шире клетки, и под ним завала не было бы видно вовсе — а так портал
+// светится из-под груды по краям, пока её не разнесёт.
+const portalRubbleGfx = new Graphics();
+bpLayer.addChild(portalRubbleGfx);
 const dealGfx = new Graphics();
 dealLayer.addChild(dealGfx);
 
@@ -1098,8 +1149,11 @@ overlay.addChild(placeGfx);
 // Руины (§12.376, §12.379): пульсирующая рамка на клетке руины, пока с ней
 // есть что делать, — «вот где», ещё до того, как игрок её выбрал. Узел постоянный: рамка перерисовывается только на
 // смене карты или ворот, а пульс — это `alpha` в тикере.
-const ruinGfx = new Graphics();
-overlay.addChild(ruinGfx);
+// Рамка — свой узел на клетку (§12.417): у каждой своя фаза пульса, иначе
+// два «?» на карте мигают в такт и читаются одним сигналом, а не двумя
+// местами. Пересобираются они вместе со знаками и разрушаются явно (§12.84).
+const ruinFrames = new Container();
+overlay.addChild(ruinFrames);
 // Знак над руиной (§12.379): «?» — обследовать, ключ — починить. Узлы
 // пересобираются только на смене ключа `syncRuins`, снятые разрушаются явно
 // (§12.84); контекст глифа общий на глагол — `destroy()` без аргументов.
@@ -1148,6 +1202,19 @@ let itemColors = []; // number[] — цвет предмета по индекс
 let mapCells = null; // Int-массив состояния карты
 let mode = "cursor"; // 'cursor' | 'build'
 let buildTile = 0; // индекс палитры, или -1 = разобрать (в режиме build)
+// «Расчистить» (§12.432, §12.448; до неё «Разбор завала»): ластик только по
+// завалу, тайл `-2`. Тот же код в воркере: им он выбирает `clear_rubble_rect` и маску `rubble_mask`.
+const RUBBLE_TOOL = -2;
+let rubbleBtn = null; // плоская кнопка «Расчистить» — её берёт и «Расчистить» в панели
+let eraseBtn = null; // плоская кнопка «Снести» — видна вместе с «Постройкой» (§12.449)
+// Двери-инструменты в рейке и блок правил в «Приказах» (§12.451).
+let buildDoor = null;
+let ordersDoor = null;
+let rulesBox = null;
+// `rubble_met` прошлого снимка (§12.449): `null` — снимка этого мира ещё не
+// было. Кольцо «новое» зажигает только переход `false → true` на глазах
+// игрока: загруженная партия, где завал давно разбирали, кольца не получит.
+let rubbleSeen = null;
 // Объект-штамп в руке (§12.162): -1 = игрок держит тайл или ластик. Тайл и
 // объект взаимно исключают друг друга — в руке всегда одно.
 let buildStruct = -1;
@@ -1177,6 +1244,9 @@ let selectedUnits = [];
 // повторный клик по ней отправляет туда выбранных котов (§12.58).
 let selectedCell = null; // { x, y } в тайлах
 let lastHand = null; // ответ ядра по выбранной клетке (§12.303)
+let lastHover = null; // тот же ответ по клетке под курсором — цвет рамки наведения
+let hoverTile = null; // клетка под курсором (только в режиме курсора)
+let hoverDrawn = ""; // по какому ответу рамка наведения нарисована последней
 let dragFrom = null; // якорь рамки (клетка, где нажали), null = не тянем
 let dragTo = null; // текущий угол рамки; переживает выход курсора за карту
 // Кот, стоявший под началом рамки. Запоминается в момент нажатия, а не читается
@@ -1280,7 +1350,13 @@ let postLot = 0;
 // Открыта ли автоматика такого рода (§12.93): ворота названы технологиями в
 // рулсете, а изучены они или нет — считает ядро. Ярлыки самих тем приезжают
 // один раз в `meta.auto_gates`, потому что имя темы это контент.
-let autoOpen = { sales: true, crafting: true, raids: true, study: true };
+let autoOpen = {
+  sales: true,
+  crafting: true,
+  raids: true,
+  study: true,
+  tidy: true,
+};
 
 // Как правило зовётся на экране. Подача, а не механика, поэтому живёт в виде
 // (§12.46): ядро о словах не знает, оно возит ключ.
@@ -1289,6 +1365,7 @@ const AUTO_LABEL = {
   sales: "сбыт излишков",
   raids: "автовылазки",
   study: "учёба в простое",
+  tidy: "автоуборка",
 };
 
 // За какой дверью правилом пользуются (§12.202): порог сбыта и порог запаса —
@@ -1301,6 +1378,9 @@ const RULE_DOOR = {
   crafting: "stock",
   raids: "raid",
   study: "dossier",
+  // Автоуборка (§12.401) — тумблер «Убирать сам» в разделе «Правила» тулбара:
+  // окна у неё нет, дверь — сам раздел.
+  tidy: "rules",
 };
 
 // Ключ правила по индексу палитры. ⚠️ **Порядок приезжает из ядра**
@@ -1339,6 +1419,8 @@ let sales = [];
 // Избранное — только предметы (это порядок строк в окне), тикеры — предмет и
 // сторона (это лента на главном экране и кнопки сделки в ней).
 let favorites = [];
+// Скрытые игроком строки окна «Ресурсы» (§12.418) — из ядра, как избранное.
+let hiddenItems = [];
 let tickers = [];
 // Кого выберет следующий клик у предмета, на котором правила ещё нет. Это не
 // зеркало правила (его нет), а заготовка выбора: как только порог поставят,
@@ -1417,6 +1499,7 @@ worker.onmessage = (e) => {
     soundQuiet = true;
     awaySeen = null;
     knownSeen = -1;
+    rubbleSeen = null;
     teachSeen = null;
     meta = m.meta;
     paletteColors = meta.palette.map((p) => hex(p.color));
@@ -1434,13 +1517,27 @@ worker.onmessage = (e) => {
     // всё уже закрытое «только что закрытым» (см. `goalsDoneSeen`).
     goalsDoneSeen = null;
     exitSeen = null;
+    homeMetSeen = null;
+    homeRevealDue = false;
     // Портал (§12.372): играет первый снимок свежего мира, не загрузки.
     portalArmed = true;
     portal = null;
     portalGfx.clear();
+    portalRubbleGfx.clear();
     skillLevelsSeen = null;
+    autoOutSeen = null;
+    autoOutWho.clear();
+    storyResume = null;
+    homeReport = null;
     wikiOpenSeen = null;
+    wikiHiredSeen = null;
     wikiQueue = [];
+    wikiAnnounced.clear();
+    // Выжимки прошлой партии новому миру ни к чему (§12.442): отпускаем
+    // держащую страницу и закрываем её, а отложенное за ней — про чужой мир.
+    wikiHeld = false;
+    wikiAfter = [];
+    closeWikiWindow();
     wikiFacetsSeen = null;
     wikiAdded.clear();
     // Свёрнутость панели миру не принадлежит — это выбор игрока о своём экране,
@@ -1455,6 +1552,7 @@ worker.onmessage = (e) => {
     cam = null; // карта нового мира своя — вписываем заново (§12.321)
     layout();
     drawMap(m.map);
+    syncRubbleTool();
     if (!triedResume) {
       triedResume = true;
       const saved = localStorage.getItem(SAVE_KEY);
@@ -1463,9 +1561,15 @@ worker.onmessage = (e) => {
   } else if (m.type === "map") {
     puffChanged(mapCells, m.map.cells);
     drawMap(m.map);
+    syncRubbleTool();
   } else if (m.type === "snapshot") {
     lastHand = m.hand ?? null;
     syncHandAim();
+    lastHover = m.hover ?? null;
+    syncHoverAim();
+    if (hoverAt && mode === "cursor" && hoverSig() !== hoverDrawn)
+      updateHover(hoverAt);
+    syncHandTip();
     // Перерисовываем рамку только на **изменение** маски: `snapshot` приходит
     // каждые 16 мс, а безусловный `clear()` живого `Graphics` — это разбор
     // фигуры шестьдесят раз в секунду на ровном месте (§12.84, §12.109).
@@ -1713,7 +1817,8 @@ const tileGlyphCache = new Map();
 function tileGlyphContext(i) {
   if (tileGlyphCache.has(i)) return tileGlyphCache.get(i);
   const def = (meta?.palette ?? [])[i];
-  const d = def && TILE_GLYPHS[def.id];
+  // Находка (§12.423) говорит о себе тем же глифом, что вещь из палитры.
+  const d = def && TILE_GLYPHS[LOOKS_LIKE[def.id] ?? def.id];
   let ctx = null;
   if (d) {
     // Рулсет — контент, и кривой контур в нём не должен ронять карту: тайл
@@ -1847,6 +1952,7 @@ function shade(c, t) {
 /// Мебель одной клетки. `id` — тайл рулсета; неизвестному ничего не рисуем,
 /// комната остаётся тонированным полом.
 function drawFurniture(g, id, x, y, tint, n) {
+  id = LOOKS_LIKE[id] ?? id;
   const T = TILE;
   const px = x * T;
   const py = y * T;
@@ -1879,6 +1985,32 @@ function drawFurniture(g, id, x, y, tint, n) {
           alpha: 0.12,
         });
       }
+      break;
+    }
+    case "broken_bed": {
+      // Сломанная лежанка (§12.423): голая рама без матраса — доски поперёк и
+      // клок тряпья в углу.
+      const m = T * 0.14;
+      shadowUnder(m, m, T - 2 * m, T - 2 * m);
+      g.roundRect(px + m, py + m, T - 2 * m, T - 2 * m, 3).fill(0x5a4030);
+      for (let i = 1; i < 4; i++) {
+        g.rect(
+          px + m + 1,
+          py + m + ((T - 2 * m) * i) / 4,
+          T - 2 * m - 2,
+          1,
+        ).fill(0x2e2218);
+      }
+      g.moveTo(px + T * 0.5, py + T * 0.58)
+        .lineTo(px + T - m - 1, py + T * 0.52)
+        .lineTo(px + T - m - 2, py + T - m - 1)
+        .lineTo(px + T * 0.6, py + T - m - 2)
+        .closePath()
+        .fill(shade(tint, 0.1));
+      g.roundRect(px + m, py + m, T - 2 * m, T - 2 * m, 3).stroke({
+        color: dark,
+        width: 1,
+      });
       break;
     }
     case "bed": {
@@ -1926,6 +2058,23 @@ function drawFurniture(g, id, x, y, tint, n) {
         width: 1,
         alpha: 0.35,
       });
+      break;
+    }
+    case "small_bin": {
+      // Малый ящик (§12.402): открытый деревянный ящик сверху — кромка из
+      // досок и тёмное нутро. Содержимое рисует `drawScrap`, поэтому крышки нет.
+      const m = T * 0.16;
+      const s = T - 2 * m;
+      shadowUnder(m, m, s, s);
+      g.rect(px + m, py + m, s, s).fill(0x8a6a42);
+      g.rect(px + m + 3, py + m + 3, s - 6, s - 6).fill(0x2a1f14);
+      g.rect(px + m + 3, py + m + 3, s - 6, 2).fill({ color: 0, alpha: 0.35 });
+      // Стыки досок на кромке.
+      for (const k of [0.33, 0.66]) {
+        g.rect(px + m + s * k, py + m, 1, 3).fill(0x3e2c18);
+        g.rect(px + m + s * k, py + m + s - 3, 1, 3).fill(0x3e2c18);
+      }
+      g.rect(px + m, py + m, s, s).stroke({ color: 0x3e2c18, width: 1 });
       break;
     }
     case "bin": {
@@ -2038,6 +2187,33 @@ function drawFurniture(g, id, x, y, tint, n) {
     // Место брифинга (§12.279): строится и рисуется **один стол**, а сидят
     // вокруг на свободных слотах (§12.283) — это обычный пол. Где слоты,
     // показывает превью постройки пунктиром; кто сел — сами коты.
+    // Пыльный стол (§12.418): тот же круглый стол, но пустой — карты на нём
+    // нет, столешница в серой пыли и паре следов лап.
+    case "dusty_table": {
+      shadowUnder(T * 0.06, T * 0.06, T * 0.88, T * 0.88);
+      g.circle(px + T / 2, py + T / 2, T * 0.44).fill(0x6e5a40);
+      g.circle(px + T / 2, py + T / 2, T * 0.44).stroke({
+        color: dark,
+        width: 1,
+      });
+      g.circle(px + T / 2, py + T / 2, T * 0.34).fill({
+        color: 0xb8b0a0,
+        alpha: 0.28,
+      });
+      for (const [ax, ay, r] of [
+        [0.36, 0.38, 0.05],
+        [0.6, 0.62, 0.04],
+        [0.64, 0.36, 0.035],
+      ]) {
+        g.circle(px + T * ax, py + T * ay, T * r).fill({
+          color: 0x4a3a26,
+          alpha: 0.45,
+        });
+      }
+      break;
+    }
+    // Починенный картой стол (§12.418) рисуется ровно как построенный.
+    case "briefing_table":
     case "muster_table": {
       // Круглый стол с картой похода посередине.
       shadowUnder(T * 0.06, T * 0.06, T * 0.88, T * 0.88);
@@ -3117,6 +3293,28 @@ function days(n) {
 
 function renderSnapshot(snap) {
   lastSnap = snap;
+  // Первый разбор завала на глазах игрока (§12.449): кнопка «Расчистить»
+  // встаёт с кольцом «новое». Помним по снимкам, а не по `lastSnap` на
+  // `ready`: тот ещё держит прошлый мир.
+  const rubbleFirst = snap.rubble_met && rubbleSeen === false;
+  if (rubbleFirst) rubbleBtn?.classList.add("fresh");
+  rubbleSeen = !!snap.rubble_met;
+  syncRubbleTool();
+  // Тем же первым разбором раскрываются «Приказы», и «Расчистить» в них
+  // вспыхивает (§12.452): игрок видит, где живёт инструмент на всю базу, ровно
+  // когда узнал действие на одной клетке. Только если ничего не открыто —
+  // чужую панель или окно не отбираем; инструмент в руку не кладём (§12.449).
+  if (rubbleFirst && rubbleBtn && !rubbleBtn.hidden) {
+    if (openSection === null && !topWindow()) openOnly("Приказы");
+    rubbleBtn.classList.remove("flash");
+    void rubbleBtn.offsetWidth;
+    rubbleBtn.classList.add("flash");
+    rubbleBtn.addEventListener(
+      "animationend",
+      () => rubbleBtn.classList.remove("flash"),
+      { once: true },
+    );
+  }
   noteWikiOpened();
   // Тик сменился — доля тика начинается заново. Отметка общая на всех: тикают
   // коты вместе, и второй такой счётчик на каждого разошёлся бы с этим.
@@ -3374,6 +3572,7 @@ function renderSnapshot(snap) {
   prices = snap.prices ?? [];
   sales = snap.sales ?? [];
   favorites = snap.favorites ?? [];
+  hiddenItems = snap.hidden ?? [];
   tickers = snap.tickers ?? [];
   stock = snap.stock ?? [];
   posts = snap.posts ?? 0;
@@ -3382,11 +3581,17 @@ function renderSnapshot(snap) {
     crafting: !!snap.auto_crafting,
     raids: !!snap.auto_raids,
     study: !!snap.auto_study,
+    tidy: !!snap.auto_tidy_open,
   };
   // Правило живёт в ядре и сохраняется в снимке, поэтому вид его **читает**,
   // а не помнит (§12.96): от него зависит, есть ли у кучи кнопка «на склад».
   autoTidy = snap.auto_tidy ?? true;
-  if (tidyBtn) tidyBtn.classList.toggle("on", autoTidy);
+  if (tidyBtn) {
+    tidyBtn.classList.toggle("on", autoTidy);
+    // До «Автоуборки» тумблера нет вовсе (§12.401, §12.126): кнопка, которая
+    // ничего не включает, — отказ без причины, а кучи до темы метят руками.
+    tidyBtn.hidden = !autoOpen.tidy;
+  }
   postFree = !!snap.post_free;
   postLot = snap.post_lot ?? 0;
   shops = snap.shops ?? 0;
@@ -3412,6 +3617,9 @@ function renderSnapshot(snap) {
       // Считает это ядро — в снимке нет истории, а `stored > 0` прятало бы
       // строку обратно, стоило запасу кончиться.
       if (!(snap.stock ?? [])[i]?.seen) return "";
+      // Сюжетная вещь (§12.418) — только пока она есть: «Карта 0» звала бы
+      // ждать то, что уже ушло в стол.
+      if (keepsakeGone(i)) return "";
       // Главное число — **учтённое**: склад минус бронь (§12.53). С §12.69 у
       // него один смысл на всё, что база делает наружу, — им и платят, и
       // торгуют. Валяющееся приписано отдельно и приглушённо: оно у базы есть,
@@ -3549,10 +3757,12 @@ function renderSnapshot(snap) {
   syncNewsMarks();
   syncStockWindow();
   syncTileButtons(snap.techs, snap.tiles_open, snap.structures_open);
+  syncToolbarBare();
   syncRuins();
   renderNotePanel(snap.notes, snap.tick);
   renderGoalsPanel(snap.goals, snap.goals_required, snap);
   noteSkillUps(snap);
+  noteAutoOutings(snap);
   // Последней — подсказка: она читает то, что нарисовали выше, и переприцелится,
   // если её узел уехал вместе с перерисованной лентой.
   refreshLiveTip();
@@ -4409,7 +4619,12 @@ function puffChanged(prev, next) {
 // поднятой из сохранения партии портала нет.
 // Кот **вываливается** из портала: падает, кувыркаясь на бок, лежит, пока
 // кольцо схлопывается за ним, и только потом встаёт и отряхивается.
-const PORTAL_OPEN = 900; // кольцо раскрылось — кот вываливается
+// Пауза перед порталом (§12.403): партия начинается тишиной над заваленной
+// комнатой, и только потом в груде загорается кольцо. Отсчёт идёт с минуса,
+// поэтому остальные отметки ниже не сдвигаются.
+const PORTAL_DELAY = 1500;
+const PORTAL_OPEN = 900; // кольцо раскрылось — кот вываливается, завал рассыпается
+const PORTAL_CLEAR = 1150; // от завала под порталом не осталось ничего
 const PORTAL_LAND = 1250; // упал на бок
 const PORTAL_SHUT = 1500; // кольцо начинает схлопываться
 const PORTAL_GONE = 2200; // кольца нет
@@ -4426,13 +4641,45 @@ function startPortal(snap) {
     id: e.id,
     x: (e.x + 0.5) * TILE,
     y: (e.y + 0.5) * TILE,
-    t: 0,
+    t: -PORTAL_DELAY,
     out: false,
     landed: false,
     gone: false,
     // Бок, на который упадёт, — случайный, как у спящего (это вид).
     side: Math.random() < 0.5 ? -1 : 1,
   };
+  // Завал на клетке портала (§12.403): тот же рисунок, что у настоящего
+  // завала вокруг, — плоский или коробками 3/4.
+  const g = portalRubbleGfx;
+  g.clear();
+  g.alpha = 1;
+  const n = cellNoise(e.x, e.y);
+  if (view34) {
+    obliqueProp(g, "rubble", e.x, e.y, 0, n, { T: TILE, shade, tileDefAt });
+  } else {
+    drawFurniture(g, "rubble", e.x, e.y, 0, n);
+  }
+}
+// Завал разлетается крошкой и оседает пылью (§12.403).
+function portalCrumble(x, y) {
+  const stones = [0x6b6052, 0x7d7262, 0x5a5145, 0x8a7f6c];
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2 + Math.random() * 0.4;
+    const v = 0.04 + Math.random() * 0.05;
+    addSpark({
+      kind: "chip",
+      x: x + (Math.random() - 0.5) * TILE * 0.5,
+      y: y + (Math.random() - 0.5) * TILE * 0.5,
+      vx: Math.cos(a) * v,
+      vy: Math.sin(a) * v - 0.04,
+      g: 0.0004,
+      life: 650,
+      max: 650,
+      size: 2 + Math.random() * 2.5,
+      color: stones[i % 4],
+    });
+  }
+  portalDust(x, y);
 }
 // Сколько кота уже видно: до раскрытия кольца — нисколько, потом проявляется.
 function portalVeil(id) {
@@ -4513,8 +4760,14 @@ function stepPortal(deltaMS) {
   if (!p.out && p.t >= PORTAL_OPEN) {
     p.out = true;
     portalBurst(p.x, p.y, 18, 0.06);
+    portalCrumble(p.x, p.y);
     play("portal");
   }
+  // Завал гаснет за четверть секунды после раскрытия (§12.403).
+  portalRubbleGfx.alpha =
+    p.t < PORTAL_OPEN
+      ? 1
+      : Math.max(0, 1 - (p.t - PORTAL_OPEN) / (PORTAL_CLEAR - PORTAL_OPEN));
   if (!p.landed && p.t >= PORTAL_LAND) {
     p.landed = true;
     portalDust(p.x, p.y);
@@ -4528,6 +4781,7 @@ function stepPortal(deltaMS) {
   g.clear();
   if (p.t >= PORTAL_END) {
     portal = null;
+    portalRubbleGfx.clear();
     if (c) {
       c.alpha = c.down ? 0.55 : 1;
       c.body.rotation = 0;
@@ -4876,6 +5130,12 @@ function renderCatPanel(entities) {
 // Роль клетки словами: чем она полезна сверх цвета. Свойства тайла — та самая
 // схема «комната значит что-то сверх цвета» (§12.35), и все девять приезжают в
 // `meta.palette` целиком, так что второго списка в ядре заводить не пришлось.
+// Завал (§12.381, §12.418): простой и с находкой под ним (`veiled`). Одно
+// выражение на панель и подсказку у курсора.
+function isRubble(def) {
+  return def?.id === "rubble" || !!def?.veiled;
+}
+
 function tileRoles(def) {
   if (!def) return [];
   const roles = [];
@@ -4902,7 +5162,10 @@ function tileRoles(def) {
   // Строка общая на **все** непроходимые тайлы — стеллаж, столы парты,
   // лаборатории и места брифинга, — поэтому имени тайла в ней нет: оно стоит
   // заголовком. «Пройти можно» с §12.142 неправда: клетку обходят.
-  if (def.solid) roles.push("на клетку не встать — её обходят");
+  // У завала строки нет (§12.431): «её обходят» отвечала на вопрос, которого
+  // игрок не задавал, и стояла над единственным делом клетки — «Разобрать».
+  if (def.solid && !isRubble(def))
+    roles.push("на клетку не встать — её обходят");
   return roles;
 }
 
@@ -5037,9 +5300,10 @@ function renderCellPanel(snap) {
             : `пойдут: ${who}`
       }</div>`,
     );
-  } else if (cellReleases()) {
-    parts.push('<div class="cell-armed">ещё клик — снять выделение</div>');
   }
+  // Строки «ещё клик — снять выделение» нет (§12.431): повторный клик снимает
+  // выбор и без неё, а зелёная рамка под главной кнопкой клетки спорила с ней
+  // за взгляд. Жесту игрок учится сам.
 
   // Про уже посланного панель говорит фактом — тускло, как про приписанного.
   // Отдельной строки «придёт сюда сам» у парты здесь больше нет (§12.147): о
@@ -5090,9 +5354,7 @@ function renderCellPanel(snap) {
   if (piles.length) {
     const chips = piles
       .map(
-        (s) =>
-          `${itemGlyph(s.item)}` +
-          `${esc(itemLabel(s.item))} ${s.count}`,
+        (s) => `${itemGlyph(s.item)}` + `${esc(itemLabel(s.item))} ${s.count}`,
       )
       .join(" · ");
     parts.push(`<div class="cat-sub">${chips}</div>`);
@@ -5108,7 +5370,9 @@ function renderCellPanel(snap) {
     // отработала бы ровно один тик и вернулась обратно: не отказ, а качели,
     // которые игрок прочтёт как поломку. Остаётся факт строкой.
     const marked = piles.some((s) => s.marked);
-    const auto = def?.capacity > 0 || autoTidy;
+    // Уборка идёт сама, только когда тема изучена (§12.401): до неё кнопка
+    // пометки стоит у каждой кучи вне склада — это и есть ручная уборка.
+    const auto = def?.capacity > 0 || (autoTidy && autoOpen.tidy);
     // Почему куча не едет — словом (§12.53, §12.303): считает ядро (`pile_why`).
     const pileWhy =
       lastHand?.key === handAimKey() ? PILE_WHY[lastHand.why] : null;
@@ -5140,7 +5404,7 @@ function renderCellPanel(snap) {
       bp.tile < 0
         ? "Разбор"
         : def?.examine && def.examine === bpDef?.id
-          ? "Обследование"
+          ? "Исследование"
           : def?.repair && def.repair === bpDef?.id
             ? `Ремонт: ${esc(bpDef?.label || bpDef?.id)}`
             : `Стройка: ${esc(bpDef?.label || bpDef?.id || "?")}`;
@@ -5190,14 +5454,40 @@ function renderCellPanel(snap) {
   const fix = def && (def.examine || def.repair);
   if (fix && !bp) {
     const target = meta.palette.find((p) => p.id === fix);
+    // Цена ремонта (§12.425): своя у руины (`repair_cost`), иначе цена тайла,
+    // который встаёт, — тем же правилом, что `TileRules::site_cost` в ядре.
+    const price = def.repair_cost?.size ? def.repair_cost : target?.cost;
+    // Нечем чинить (§12.419): решает ядро (`fix_why`), вид гасит кнопку
+    // классом и называет причину словом (§12.53) — `disabled` нельзя.
+    // `built` (§12.424): материала нет, но он стоит в постройке, и снос его
+    // вернёт — причина с дорогой назад. Знакомство (§12.426): `unseen` — база
+    // не видела ничего из цены, кнопки нет вовсе; `unknown` — видела не всё,
+    // кнопка погашена, а незнакомое в цене — «??». Пока ответ ядра не пришёл
+    // для этой клетки, ремонта не рисуем: кадр с полной ценой был бы спойлером.
+    const handReady = lastHand?.key === handAimKey();
+    const fixWhy = !def.examine && handReady ? lastHand.fix : "";
+    const veiled = fixWhy === "unseen" || fixWhy === "unknown";
     const label = def.examine
-      ? "Обследовать"
-      : `Починить: ${esc(target?.label || fix)} ${costChips(target?.cost)}`;
+      ? "Исследовать"
+      : // Без имени цели (§12.426): что встанет после починки, понятно и так.
+        `Починить ${costChips(price, veiled)}`;
+    const lacks = fixWhy === "lacks" || fixWhy === "built" || veiled;
+    const why =
+      "нет материала: " +
+      costChips(price, veiled) +
+      (fixWhy === "built" ? " — он в постройке, снос вернёт" : "");
+    const hidden = !def.examine && (!handReady || fixWhy === "unseen");
     parts.push(
-      `<div class="cat-sub">${def.examine ? "что с этим делать, пока неясно" : "обследовано: понятно, как чинить"}</div>`,
-      `<button class="tool ruin-fix" data-key="fix@${x}, ${y}"` +
-        ` data-x="${x}" data-y="${y}">${label}</button>`,
+      `<div class="cat-sub">${def.examine ? "что с этим делать, пока неясно" : fixWhy === "unseen" ? "чем чинить, пока неясно" : lacks ? why : "понятно, как чинить"}</div>`,
     );
+    // Кнопка — сразу под именем, как «Разобрать» у завала (§12.431).
+    if (!hidden)
+      parts.splice(
+        1,
+        0,
+        `<button class="tool ruin-fix${lacks ? " off" : " primary"}" data-key="fix@${x}, ${y}"` +
+          ` data-x="${x}" data-y="${y}"${lacks ? ` data-tip="${HAND_REFUSALS[fixWhy]}"` : ""}>${label}</button>`,
+      );
   }
 
   // Завал (§12.381): разбор — обычный снос (`plan_demolish_rect` на 1×1),
@@ -5205,10 +5495,18 @@ function renderCellPanel(snap) {
   // котором на старте партии ничего не говорит. Цена решения — что вернёт
   // разбор — стоит на кнопке фишками (§12.80). Размеченный снос отвечает
   // полоской площадки выше, поэтому кнопка пропадает вместе с ним.
-  if (def?.id === "rubble" && !bp) {
-    parts.push(
-      `<button class="tool rubble-clear" data-key="dismantle@${x}, ${y}"` +
-        ` data-x="${x}" data-y="${y}">Разобрать ${def.cost ? `→ ${costChips(def.cost)}` : ""}</button>`,
+  // Завал над ящиком (§12.404) разбирается той же кнопкой.
+  // С §12.418 так же — завал над пыльным столом: всё, что под «?», закрыто
+  // сверху завалом (`veiled`), и содержимое видно только после разбора.
+  // ⚠️ **Кнопка стоит сразу под именем** (§12.431): это единственное дело
+  // клетки, и ниже строк о роли и кучах её не замечали — игрок не знал, что
+  // делать с завалом. Заливка акцентом (`.primary`) — по той же причине.
+  if (isRubble(def) && !bp) {
+    parts.splice(
+      1,
+      0,
+      `<button class="tool primary rubble-clear" data-key="dismantle@${x}, ${y}"` +
+        ` data-x="${x}" data-y="${y}">Расчистить ${def.cost ? `→ ${costChips(def.cost)}` : ""}</button>`,
     );
   }
 
@@ -6143,9 +6441,6 @@ function squadRow(node, m) {
       : homeState(node);
   const otherRule =
     auto >= 0 && m && !sameRule ? `↻ ${esc(missionLabel(auto))}` : null;
-  // Пауза — не «нет правила», а «правило есть, но круг остановлен» (§12.77), и
-  // словом она названа отдельно: погашенный знак сказал бы «правила нет».
-  const paused = auto >= 0 && !node.auto_on ? "пауза" : null;
   const waiting =
     m && !m.away && m.resting
       ? "ждут, пока выспится"
@@ -6157,9 +6452,7 @@ function squadRow(node, m) {
   // тех, кто не пойдёт (§12.70). Числом он отвечал хуже: у отряда в поле
   // менялся только вместе с составом, то есть почти никогда, а на базе
   // повторял то, что и так написано словом («состав не набран» — это ноль).
-  const sub = [job, otherRule, paused, waiting, verdict]
-    .filter(Boolean)
-    .join(" · ");
+  const sub = [job, otherRule, waiting, verdict].filter(Boolean).join(" · ");
   return (
     // ⚠️ **Кнопок в панели нет ни одной** (§12.170, сужает §12.75). «Отозвать»
     // жила здесь и мелькала: она есть, только пока отряд собирается у шлюза, —
@@ -6888,11 +7181,11 @@ function lecternCell(snap, x, y) {
 function binCell(snap, x, y) {
   const accepts =
     (snap.bins ?? []).find((b) => b.x === x && b.y === y)?.accepts ?? [];
-  // Пустой набор — это «принимает всё», и говорится это словом: пустое место
-  // читалось бы как «не принимает ничего», то есть как поломка (§12.53).
+  // Пустой набор с §12.402 — «не принимает ничего», и говорится это словом:
+  // пустой ящик рядом с кучей деталей иначе читался бы поломкой (§12.53).
   const what = accepts.length
     ? `держим: ${accepts.map((i) => esc(itemLabel(i))).join(", ")}`
-    : "принимает всё: не выбрано, что держать";
+    : "ничего не назначено — ящик пустует";
   return [
     '<div class="cat-skill">' +
       `<div class="cat-sub">${what}</div>` +
@@ -7154,7 +7447,7 @@ function renderTickers() {
     // Состояние кнопок считает `tradeState` — то же место, что и в окне
     // (§12.100): второй экземпляр этой арифметики однажды покажет живую кнопку,
     // которую фасад отклонит.
-    const acts = [true, false]
+    const acts = (sellOnly(t.item) ? [false] : [true, false])
       .map((buying) => {
         const s = tradeState(t.faction, t.item, buying, qty);
         return (
@@ -7182,8 +7475,11 @@ function renderTickers() {
         `<button class="tool tick-off" data-key="off@${t.item}" ` +
         `data-item="${t.item}" data-tip="Убрать из ленты">×</button>` +
         "</div>" +
-        `<div class="tick-rate">${rateText(q, true)}` +
-        `<span class="ware-sep">·</span>${rateText(q, false)}</div>` +
+        `<div class="tick-rate">${
+          sellOnly(t.item)
+            ? rateText(q, false)
+            : `${rateText(q, true)}<span class="ware-sep">·</span>${rateText(q, false)}`
+        }</div>` +
         (posts ? `<div class="cat-act">${acts}</div>` : "") +
         "</div>",
     );
@@ -7423,6 +7719,12 @@ let goalsDoneSeen = null;
 // штаб открывается сам: прокоп и был дорогой к нему. Монотонно — ушедший
 // всем составом отряд дверь не прячет.
 let exitSeen = null;
+// База на карте штаба (§12.422): `home_met` из ядра, как видел его вид.
+// Переход `false → true` — осмотр входа выполнен, и значок базы проявляется
+// из «?» вспышкой (`homeRevealDue`) — сразу, если штаб открыт, иначе при
+// следующем входе в него. Загруженная партия базовой линией не вспыхивает.
+let homeMetSeen = null;
+let homeRevealDue = false;
 
 goalsToggleEl.addEventListener("click", () => {
   goalsOpen = !goalsOpen;
@@ -7685,6 +7987,88 @@ function noteSkillUps(snap) {
   skillLevelsSeen = now;
 }
 
+/// Сюжетный выход кота (§12.435): заказ с `auto` ядро отправляет само, и вид
+/// называет это **поступком кота, а не запуском миссии** — словами самого кота.
+/// Иначе первый же заход в штаб научил бы, что штаб отправляет котов сам.
+/// Первый кадр мира — базовая линия, как у `skillLevelsSeen`: загрузка партии
+/// посреди осмотра не повторяет реплику.
+let autoOutSeen = null;
+// Кто ушёл на сюжетный выход, по заказу: на возвращении заказа в снимке уже
+// нет, а доклад называет кота по имени.
+const autoOutWho = new Map();
+// Темп, с которого сюжетный выход сбросил на ×1 (§12.436): вернётся вместе с
+// докладом. `null` — не сбрасывали (игрок и так шёл на ×1 или на паузе).
+let storyResume = null;
+// Доклад вернувшегося кота (§12.436): `{who, def, resume}` или `null`. Пока он
+// стоит, время на паузе, а в штабе вместо карты и миссий — карточка доклада.
+let homeReport = null;
+// Реплика доклада по заказу — подача, ядро о ней не знает (§12.46).
+const AUTO_REPORT = {
+  inspect: "Снаружи тихо. Вокруг шлюза есть что пошарить",
+};
+
+function noteAutoOutings(snap) {
+  const now = new Set();
+  for (const m of snap.missions ?? []) {
+    if (!meta?.missions?.[m.def]?.auto) continue;
+    now.add(m.def);
+    const who = m.squad?.[0];
+    if (who) autoOutWho.set(m.def, who);
+    if (autoOutSeen === null || autoOutSeen.has(m.def)) continue;
+    if (who) showToast("снаружи", `${who}: «Пойду гляну, что там за шлюзом»`);
+    // Сцена идёт в реальном времени (§12.436): на ×10 выход длиной в
+    // несколько секунд мигал бы и пропадал. Темп вернёт доклад.
+    if (speed > 1) {
+      storyResume = speed;
+      setSpeed(1);
+    }
+  }
+  // Вернулся — пауза и доклад (§12.436): раскрытие мира — действие игрока,
+  // а не кадр, который на ×10 пролетает незамеченным.
+  if (autoOutSeen !== null) {
+    for (const def of autoOutSeen) {
+      if (now.has(def)) continue;
+      const resume = storyResume ?? (speed > 0 ? speed : null);
+      storyResume = null;
+      homeReport = { who: autoOutWho.get(def) ?? "", def, resume };
+      if (speed > 0) setSpeed(0);
+      whenWikiFree(() => raidWinOpen || openRaidWindow());
+    }
+  }
+  autoOutSeen = now;
+}
+
+/// Карты в штабе ещё нет (§12.435, §12.436): снаружи никто не был — или
+/// сюжетный выход ещё идёт. Второе не лишнее: осмотр засчитывается на конце
+/// работы (§12.244), и в кадр между ним и возвращением карта вспыхивала бы
+/// раньше доклада.
+function mapUnmet() {
+  return lastSnap?.home_met === false || (autoOutSeen?.size ?? 0) > 0;
+}
+
+/// Доклад выслушан (§12.436): кнопка «Показать карту» или закрытие штаба.
+/// Возвращает темп, с которого сцену начали, — если игрок за это время сам
+/// его не выбрал. Вспышка базы (`homeRevealDue`) ждала доклада и сыграет
+/// следующим кадром карты.
+function endHomeReport() {
+  const r = homeReport;
+  if (!r) return;
+  homeReport = null;
+  if (r.resume !== null && speed === 0) setSpeed(r.resume);
+}
+
+function homeReportHtml(r) {
+  const def = meta?.missions?.[r.def];
+  const line = AUTO_REPORT[def?.id];
+  const loot = def?.loot ? costChips(def.loot) : "";
+  return (
+    `<div class="home-report-h">${esc(r.who)} снова дома</div>` +
+    (line ? `<div class="home-report-say">«${esc(line)}»</div>` : "") +
+    (loot ? `<div class="home-report-loot">принёс: ${loot}</div>` : "") +
+    '<button class="tool primary home-report-go">Показать карту</button>'
+  );
+}
+
 function showToast(kind, label) {
   const node = document.createElement("div");
   node.className = "toast";
@@ -7862,7 +8246,8 @@ function needBars(e, always) {
   // шкала там тоже ответ. «Просела» меряется **показанным** числом, а не сырым:
   // сытость тает каждый тик, и 998 из 1000 рисовалось бы полоской «100%» —
   // полной шкалой, которую правило и прячет.
-  const energyPct = e.energy_max > 0 ? Math.round((e.energy / e.energy_max) * 100) : 100;
+  const energyPct =
+    e.energy_max > 0 ? Math.round((e.energy / e.energy_max) * 100) : 100;
   if (e.energy_max > 0 && (always || energyPct < 100)) {
     const pct = energyPct;
     const spent = e.energy_critical > 0 && e.energy <= e.energy_critical;
@@ -7903,7 +8288,8 @@ function needBars(e, always) {
   // просевшая полоска всегда означает «этот кот только что вернулся с плохой
   // вылазки», а порог надо назвать словом: ниже него кота не берут в отряд, и
   // без подписи игрок прочитает молчащую кнопку как поломку.
-  const healthPct = e.health_max > 0 ? Math.round((e.health / e.health_max) * 100) : 100;
+  const healthPct =
+    e.health_max > 0 ? Math.round((e.health / e.health_max) * 100) : 100;
   if (e.health_max > 0 && (always || healthPct < 100)) {
     const pct = healthPct;
     const hurt = e.health <= e.health_hurt;
@@ -8232,6 +8618,19 @@ function nodeAt(tx, ty) {
   );
 }
 
+// Отряд на работающем правиле автовылазки (§12.400, §12.438) — расписан, а не
+// свободен: в штабе он не выбирается вовсе. Выбрать отряд значит собраться
+// его куда-то отправить, а на чужой заказ ядро его не отпустит
+// (`AutoRaids::claims`); свой заказ правило водит само. Либо правило, либо
+// ручная отправка: вернуть отряд в руки — × в его строке правила (паузы у
+// правила с §12.440 нет).
+function squadRuled(n) {
+  return !!n && n.auto >= 0;
+}
+const RULED_TIP =
+  "Отряд на автомиссии: его водит правило, вручную его не отправить. " +
+  "Чтобы выбрать отряд, поставьте правило на паузу (⏸) или снимите его (×)";
+
 // Короткое слово «чем отряд занят» (§12.173): одно на строку панели «Отряды»
 // и вкладку штаба (§12.337). У ушедших — стадия из ядра (§12.168), у
 // собирающихся — где они в сборе, у отряда дома — «дома». Вкладка до §12.337
@@ -8340,6 +8739,13 @@ function command(global, add) {
     else updateSelectionOverlay();
     return;
   }
+  // Повторный клик по осмотренной клетке, когда котов не выбрано, снимает
+  // выделение, как Escape (§12.430): приказывать некому, и второй клик иначе
+  // не делал бы ничего.
+  if (cellDeselects()) {
+    clearSelection();
+    return;
+  }
   const hand = handOnCell();
   if (hand && HAND_DOORS[hand]) {
     // Окно открывается **на клике**, а не когда кот дошёл (§12.349, §12.101):
@@ -8380,10 +8786,11 @@ const HAND_WORDS = {
   take: "взять из кучи",
   put: "положить сюда",
   // Руина отвечает работой над собой (§12.379): пойдёт именно этот кот.
-  examine: "обследовать",
+  examine: "исследовать",
   repair: "починить",
-  // Завал отвечает разбором (§12.395): тот же снос, что у кнопки «Разобрать».
-  dismantle: "разобрать завал",
+  // Завал отвечает разбором (§12.395): тот же снос, что у кнопки «Расчистить»
+  // (§12.448 — глагол один на кнопку в панели и на инструмент в тулбаре).
+  dismantle: "расчистить завал",
   site: "отнести на стройку",
   shop: "отнести к станку",
 };
@@ -8401,9 +8808,16 @@ const HAND_REFUSALS = {
   booked: "Не взять: всё обещано покупателю",
   unreachable: "Не дойти",
   asleep: "Кот спит и приказ не примет",
+  // Ремонт без материала на базе (§12.419): тот же `fix_why`, что гасит кнопку.
+  lacks: "Не починить: нет материала",
+  // Материал стоит в постройке (§12.424): снос возвращает цену.
+  built: "Не починить: материал в постройке — разберите её, и он вернётся",
+  // Знакомство с ценой (§12.426): называть незнакомое раньше находки нельзя.
+  unseen: "Не починить: чем — пока неясно",
+  unknown: "Не починить: нужно то, чего база ещё не видела",
 };
 const PILE_WHY = {
-  untidy: "Лежит: уборка выключена",
+  untidy: "Лежит: не помечено на склад",
   nostore: "Лежит: нет склада",
   noroom: "Лежит: на складах нет места для этого",
   waiting: "Ждёт свободного кота",
@@ -8427,6 +8841,35 @@ function syncHandAim() {
       y: selectedCell.y,
     },
   });
+}
+// Рамка наведения спрашивает ядро о клетке под курсором — тем же
+// `hand_tag`, что и выбранная клетка, но отдельным прицелом: выбранная клетка
+// держит панель, а курсор бегает.
+let hoverAimKey = "";
+function hoverKey() {
+  return hoverTile && selectedUnits.length
+    ? `${selectedUnits[0]}@${hoverTile.x},${hoverTile.y}`
+    : "";
+}
+function syncHoverAim() {
+  const key = hoverKey();
+  if (key === hoverAimKey) return;
+  hoverAimKey = key;
+  worker.postMessage({
+    type: "setHoverAim",
+    aim: key && {
+      key,
+      id: selectedUnits[0],
+      x: hoverTile.x,
+      y: hoverTile.y,
+    },
+  });
+}
+// Что сейчас решает вид рамки: прицел и ответ на него. Сменилось — перерисовать.
+function hoverSig() {
+  const k = hoverKey();
+  const h = lastHover && lastHover.key === k ? lastHover.verb : "?";
+  return `${k}|${h}`;
 }
 function handOnCell() {
   const h = lastHand;
@@ -8459,6 +8902,13 @@ function revealSection(tx, ty) {
 function cellReleases() {
   if (!selectedCell || selectedUnits.length !== 1) return false;
   return unitAt(selectedCell.x, selectedCell.y) === selectedUnits[0];
+}
+
+// Снимет выделение — если котов не выбрано и на клетке кота нет (§12.430);
+// с котом на клетке второй клик снова выбирает его (см. `command`).
+function cellDeselects() {
+  if (!selectedCell || selectedUnits.length) return false;
+  return !unitAt(selectedCell.x, selectedCell.y);
 }
 
 // Взведена — если по клетке есть кого отправить и есть куда идти.
@@ -8501,8 +8951,21 @@ function modeChrome() {
         tint: null,
       };
     }
+    if (buildTile === RUBBLE_TOOL) {
+      return {
+        key: "erase",
+        label: "РАСЧИСТКА: клик или рамка · Esc — выход",
+        color: COLORS.erase,
+        tint: null,
+      };
+    }
     if (buildTile < 0) {
-      return { key: "erase", label: "РАЗБОР", color: COLORS.erase, tint: null };
+      return {
+        key: "erase",
+        label: "СНОС: клик или рамка · Esc — выход",
+        color: COLORS.erase,
+        tint: null,
+      };
     }
     const p = meta?.palette?.[buildTile];
     return {
@@ -8595,8 +9058,9 @@ function askBuildMask(r) {
   const key = `${tile}:${structure}:${buildRot}:${rect.join(",")}`;
   if (key === maskAsked) return;
   maskAsked = key;
-  // Курсор и ластик правилу не подчиняются.
-  if (tile < 0 && structure < 0 && buildMask) {
+  // Курсор и ластик правилу не подчиняются. «Расчистить» — подчиняется
+  // (§12.432): его маска — неразмеченный завал.
+  if (tile < 0 && tile !== RUBBLE_TOOL && structure < 0 && buildMask) {
     buildMask = null;
     drawPlaceable();
   }
@@ -8643,38 +9107,67 @@ function placeableArea() {
 }
 
 // Клетки руин (§12.376, §12.379): рамка и знак глагола — приглашение, а не
-// правило: что сделает клик, решает ядро (`fix_at`, `hand_tag`).
+// правило: что сделает клик, решает ядро (`fix_at`, `hand_tag`). С §12.417
+// тем же «?» помечен завал с находкой (`holds`): ремонт шлюза ждёт его
+// детали, и без метки игрок не знает, какой из завалов разбирать.
 function syncRuins() {
   // Руина говорит сама, что с ней делать (§12.379): `examine`, потом `repair`.
   // Ворот у этого нет — кнопка в панели клетки и приказ коту работают сразу.
   const pal = meta?.palette ?? [];
   const cells = [];
+  // Ремонт, чью цену база ещё не видела целиком (§12.427, §12.428), знака
+  // не получает: с
+  // клеткой пока ничего не сделать, а мигающий ключ звал бы к кнопке, которой
+  // в панели нет. Список считает ядро (`ruins_mute`, тот же `fix_why`).
+  const mute = new Set(lastSnap?.ruins_mute ?? []);
+  // Куда не дотянется ни один кот (§12.431, `cells_far` из ядра), рамки нет, а
+  // знак приглушён: пульс звал бы к клетке, где клик ответит «не дойти».
+  const far = new Set(lastSnap?.cells_far ?? []);
   if (mapCells) {
     for (let i = 0; i < mapCells.length; i++) {
       const def = pal[mapCells[i]];
       if (def?.examine) cells.push([i, "examine"]);
-      else if (def?.repair) cells.push([i, "repair"]);
+      else if (def?.repair && !mute.has(i)) cells.push([i, "repair"]);
+      // Завал с находкой (§12.417): `holds` у тайла — под ним что-то лежит.
+      // Знак — «?», как у необследованной руины: «здесь неизвестное, клик
+      // покажет». Что именно, не говорим — иначе находка не находка. Клик
+      // при этом разбирает (`dismantle`), а не обследует: знак тут про
+      // неизвестность, а не про глагол. С §12.418 признак — `veiled` у тайла:
+      // под завалом бывает и не ящик (пыльный стол).
+      else if (def?.veiled) cells.push([i, "examine"]);
     }
   }
-  const key = cells.map(([i, v]) => `${i}${v[0]}`).join(",");
+  const key = cells
+    .map(([i, v]) => `${i}${v[0]}${far.has(i) ? "f" : ""}`)
+    .join(",");
   if (key === ruinKey) return;
   ruinKey = key;
-  ruinGfx.clear();
+  for (const n of ruinFrames.removeChildren()) n.destroy();
   for (const n of ruinMarks.removeChildren()) n.destroy();
   const W = meta.width;
   const size = TILE * 0.62;
-  for (const [i, verb] of cells) {
+  for (const [k, [i, verb]] of cells.entries()) {
     const x = i % W;
     const y = (i - x) / W;
-    ruinGfx.rect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2);
+    const frame = new Graphics()
+      .rect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2)
+      .stroke({ color: COLORS.placeable, width: 2.5 });
+    // Фаза — по порядку рамки, а не случайная: детерминирована и между
+    // перерисовками не скачет, пока набор руин тот же. Шаг — золотой угол
+    // (137°), так что любые две соседние рамки расходятся почти в противофазу.
+    // От индекса клетки фазу не брать: у шлюза и ящика стартовой карты она
+    // совпала бы до 9°.
+    frame.phase = (k * 2.399963) % (2 * Math.PI);
+    if (far.has(i)) frame.destroy();
+    else ruinFrames.addChild(frame);
     const mark = new Graphics(ruinGlyphContext(verb));
     mark.scale.set(size / 24);
     mark.x = x * TILE + (TILE - size) / 2;
     mark.y = y * TILE + (TILE - size) / 2;
     mark.tint = COLORS.placeable;
+    if (far.has(i)) mark.alpha = 0.4;
     ruinMarks.addChild(mark);
   }
-  if (cells.length) ruinGfx.stroke({ color: COLORS.placeable, width: 2.5 });
 }
 
 function drawPlaceable() {
@@ -8722,6 +9215,74 @@ function sameMask(a, b) {
   if (!a || !b || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
+}
+
+// Подсказка у курсора (§12.431): что сделает клик по клетке под ним — словом,
+// там, куда игрок смотрит. Панель клетки стоит в дальнем углу, и на первом
+// завале партии её не читали: игрок не знал, что завал разбирают. Глагол
+// приходит из ядра (`hand_tag` по прицелу наведения) — вид только называет его
+// теми же словами, что панель (`HAND_WORDS`, `HAND_REFUSALS`). Без выбранного
+// кота клик лишь осматривает, поэтому у завала и руины подсказка ведёт к
+// кнопке панели, а не обещает разбор. На ходьбе и пустом полу молчит: «клик —
+// идти» над каждой клеткой — шум.
+const handTipEl = document.getElementById("handtip");
+let handTipOut = true; // курсор ушёл со сцены
+let handTipText = "";
+function handTipFor() {
+  if (handTipOut || mode !== "cursor" || !hoverTile || !meta || !mapCells)
+    return ["", ""];
+  if (topWindow()) return ["", ""];
+  const { x, y } = hoverTile;
+  if (unitAt(x, y)) return ["", ""];
+  if (selectedUnits.length) {
+    if (!lastHover || lastHover.key !== hoverKey()) return ["", ""];
+    const v = lastHover.verb;
+    if (HAND_WORDS[v]) return [`клик — ${HAND_WORDS[v]}`, "act"];
+    if (HAND_DOORS[v]) return [`клик — откроется: ${HAND_DOORS[v]}`, "act"];
+    if (HAND_REFUSALS[v]) return [HAND_REFUSALS[v], "no"];
+    return ["", ""];
+  }
+  const i = y * meta.width + x;
+  const def = meta.palette[mapCells[i]];
+  const mute = (lastSnap?.ruins_mute ?? []).includes(i);
+  const verb = isRubble(def)
+    ? "Расчистить"
+    : def?.examine
+      ? "Исследовать"
+      : def?.repair && !mute
+        ? "Починить"
+        : "";
+  if (!verb) return ["", ""];
+  const name = def.label || def.id;
+  if ((lastSnap?.cells_far ?? []).includes(i))
+    return [`${name}: пока не дотянуться`, "no"];
+  if (selectedCell && selectedCell.x === x && selectedCell.y === y)
+    return [`${name}: кнопка «${verb}» — в панели справа`, "act"];
+  return [`${name}: клик — что с ним делать`, "act"];
+}
+function syncHandTip() {
+  if (!handTipEl) return;
+  const [text, tone] = handTipFor();
+  const sig = `${tone}|${text}`;
+  if (sig !== handTipText) {
+    handTipText = sig;
+    handTipEl.textContent = text;
+    handTipEl.className = tone;
+    handTipEl.hidden = !text;
+  }
+  if (text && hoverAt) {
+    // У правого и нижнего края окна подсказка встаёт по другую сторону
+    // курсора — обрезанная фраза не подсказывает ничего.
+    const r = app.canvas.getBoundingClientRect();
+    const cx = r.left + hoverAt.x;
+    const cy = r.top + hoverAt.y;
+    const w = handTipEl.offsetWidth;
+    const h = handTipEl.offsetHeight;
+    const left = cx + 16 + w > innerWidth - 8 ? cx - 12 - w : cx + 16;
+    const top = cy + 18 + h > innerHeight - 8 ? cy - 10 - h : cy + 18;
+    handTipEl.style.left = `${Math.max(8, left)}px`;
+    handTipEl.style.top = `${Math.max(8, top)}px`;
+  }
 }
 
 function updateHover(global) {
@@ -8789,19 +9350,47 @@ function updateHover(global) {
     return;
   }
 
+  // Режим курсора: без выбранного кота рамки нет вовсе (клик по любой клетке
+  // значит одно — осмотр, и рамка ничего не различала бы), а с котом она
+  // называет цветом, что сделает приказ сюда (`hand_tag` из ядра): ход, дело
+  // с вещью или дверь, отказ. Над котом — выбор: клик возьмёт его.
+  if (mode === "cursor") {
+    hoverTile = t ? { x: t.tx, y: t.ty } : null;
+    syncHoverAim();
+    hoverDrawn = hoverSig();
+    syncHandTip();
+    askBuildMask(null);
+    if (!t || !selectedUnits.length) return;
+    let col = null;
+    if (unitAt(t.tx, t.ty)) col = COLORS.select;
+    else {
+      const k = hoverKey();
+      // Ответ ещё не приехал — кадр без рамки лучше вспышки не того цвета.
+      if (!lastHover || lastHover.key !== k) return;
+      const v = lastHover.verb;
+      if (HAND_WORDS[v] || HAND_DOORS[v]) col = COLORS.act;
+      else if (v) col = COLORS.erase;
+      else if (isWalkable(t.tx, t.ty)) col = COLORS.select;
+    }
+    if (col == null) return;
+    hoverRect
+      .rect(t.tx * TILE, t.ty * TILE, TILE, TILE)
+      .fill({ color: col, alpha: 0.2 })
+      .stroke({ color: col, width: 2, alpha: 0.85 });
+    return;
+  }
+  hoverTile = null;
+  syncHoverAim();
+  syncHandTip();
+
   // Во время протяжки показываем всю рамку — даже если курсор ушёл за карту.
   const r = dragFrom
     ? rectOf(dragFrom, dragTo)
     : t && { x: t.tx, y: t.ty, w: 1, h: 1 };
   askBuildMask(r);
   if (!r) return;
-  // Одна клетка с котом под ней подсвечивается как выбор, а не как разметка:
-  // отпустив кнопку здесь, игрок выберет кота, и цвет обязан сказать это до
-  // клика, а не после.
-  const overUnit =
-    mode === "cursor" && r.w === 1 && r.h === 1 && t && unitAt(t.tx, t.ty);
   const m = modeChrome();
-  const col = overUnit ? COLORS.select : (m.tint ?? m.color);
+  const col = m.tint ?? m.color;
   hoverRect
     .rect(r.x * TILE, r.y * TILE, r.w * TILE, r.h * TILE)
     .fill({ color: col, alpha: 0.28 })
@@ -8838,7 +9427,15 @@ app.stage.on("pointerdown", (e) => {
     return;
   }
   const t = tileAt(e.global);
-  if (!t || !toolInHand()) return;
+  if (!t) return;
+  // Клик по клетке в режиме стройки без инструмента — выход из режима, как
+  // Escape (§12.457): раздел сворачивается, режим уходит. Клетку он при этом
+  // не выбирает — один жест, одно действие.
+  if (!toolInHand()) {
+    openOnly(null);
+    if (mode !== "cursor") selectCursor();
+    return;
+  }
   // Объект ставится одним кликом: размер у него свой, и тянуть его рамкой
   // значило бы дать игроку выбрать то, что уже выбрано в рулсете (§12.162).
   if (buildStruct >= 0) {
@@ -8935,6 +9532,13 @@ app.canvas.addEventListener(
 // колесом с `ctrlKey`; без запрета он масштабирует всю страницу целиком. Если
 // тот же щипок пришёл и колесом, жест молчит: иначе зум удвоился бы.
 let gestureScale = 1;
+app.canvas.addEventListener("pointerleave", () => {
+  handTipOut = true;
+  syncHandTip();
+});
+app.canvas.addEventListener("pointermove", () => {
+  handTipOut = false;
+});
 app.canvas.addEventListener("gesturestart", (e) => {
   e.preventDefault();
   gestureScale = 1;
@@ -9327,6 +9931,10 @@ window.addEventListener("keydown", (e) => {
     if (mode !== "cursor") {
       if (toolInHand() && openSection === "Постройка") {
         selectBuildIdle();
+      } else if (toolInHand() && openSection === "Приказы") {
+        // «Расчистить» и «Снести» (§12.451): инструмент кладётся, панель
+        // «Приказов» остаётся — её свернёт следующее нажатие.
+        selectCursor();
       } else {
         openOnly(null);
         if (mode !== "cursor") selectCursor();
@@ -9384,7 +9992,9 @@ document.addEventListener("visibilitychange", () => {
 // он алфавитный: в рулсете это отображение).
 // `veiled` — показывать ли незнакомое игроку «??» вместо глифа (§12.131).
 //
-// Включает его **одна** строка на всю игру — добыча заказа вылазки: обещание
+// Включают его **две** строки (§12.426): цена ремонта руины — она сама находка,
+// и деталь в ней называется, только когда её принесли, — и добыча заказа
+// вылазки: обещание
 // принести то, чего база ещё не видела, интереснее названного, а первое
 // знакомство должно случаться в момент, когда кот тащит это к шлюзу, а не в
 // таблице заказов. Везде остальное (цена тайла, цена темы, вход рецепта, «не
@@ -9432,7 +10042,9 @@ let openSection = null;
 // «Лом» здесь вместе с «Постройкой» намеренно: рамка на склад — та же разметка,
 // и гонять игрока через курсор между двумя рамками было бы налогом на ровном
 // месте.
-const TOOL_SECTIONS = new Set(["Постройка"]);
+// С §12.451 разделов два и оба — инструменты: «Приказы» держат «Расчистить» и
+// «Снести», то есть ту же разметку, и глушить их на время разметки нельзя.
+const TOOL_SECTIONS = new Set(["Постройка", "Приказы"]);
 
 // `sw` — класс образца слева от заголовка, как у кнопок-дверей выше: раздел
 // стоит в одном столбце с ними, и заголовок без значка выпадает из ряда. Ряд
@@ -9533,6 +10145,17 @@ function openOnly(title) {
     s.head.classList.toggle("active", on);
     s.body.hidden = !on;
   }
+  syncToolbarBare();
+}
+
+// Двери-инструменты в рейке (§12.451): «Постройки» и «Приказы» раскрывают
+// свою панель рядом с рейкой, а не окно — в режиме стройки карта обязана быть
+// видна (§12.101). Открытое окно дверь снимает: игрок пошёл к карте. Повторный
+// клик по открытой — свернуть, то есть вернуться на «Базу».
+function toggleToolDoor(title) {
+  const shown = openSection === title && !topWindow();
+  closeAllWindows();
+  openOnly(shown ? null : title);
 }
 
 // Кнопка верхнего уровня складывает раскрытый раздел (§12.194). Тулбар — один
@@ -9584,6 +10207,8 @@ document.addEventListener(
     // значило бы уронить столбец под мышью: «Вылазки» уезжали вверх до
     // отпускания кнопки, и клик не доходил ни до какой двери.
     if (document.getElementById("toolbar")?.contains(t)) return;
+    // Рейка тоже (§12.451): двери-инструменты переключают панель сами, кликом.
+    if (screenBarEl?.contains(t)) return;
     // Раскрытая «Постройка» — это режим, поэтому уходит он вместе с ней.
     if (openSection === "Постройка") openOnly(null);
     else selectCursor();
@@ -9627,6 +10252,21 @@ function buildToolbar() {
   // единственный раздел-инструмент, то есть то, чем размечают карту, и держать
   // его в конце списка значило бы уводить самый частый клик за три двери.
   const build = mkSection(el, "Постройка", "sw-build");
+  // С §12.451 заголовков разделов на экране нет: раздел открывает дверь в
+  // рейке, а колонка тулбара — его выезжающая панель.
+  buildDoor = mkTool(doorHtml("build", "Постройки"), () =>
+    toggleToolDoor("Постройка"),
+  );
+  liveTitle(buildDoor, "Что поставить на базе и почём");
+  buildDoor.hidden = true;
+  // «Приказы» (§12.451): разовые работы на карте — «Расчистить», «Снести» — и
+  // постоянные приказы котам, «Правила».
+  const orders = mkSection(el, "Приказы");
+  ordersDoor = mkTool(doorHtml("orders", "Приказы"), () =>
+    toggleToolDoor("Приказы"),
+  );
+  liveTitle(ordersDoor, "Расчистить, снести и правила для котов");
+  ordersDoor.hidden = true;
 
   // Ещё две двери, по тому же доводу (§12.118): реестр живёт окном, инструмент
   // — разделом. Раздел из одной кнопки был бы лишним кликом, а выбирать в нём
@@ -9783,11 +10423,40 @@ function buildToolbar() {
     build.appendChild(b);
   });
 
-  const er = mkTool(
-    '<span class="sw sw-erase"></span><span>Разобрать</span>',
-    () => selectBuild(-1, er),
+  // **Разбор вынесен из «Постройки» двумя плоскими кнопками** (§12.448):
+  // «поставить» и «убрать» — разные намерения, а первое дело партии — расчистка,
+  // когда палитра ещё пуста (§12.372). Стоят сразу под разделом, без своего
+  // заголовка: раздел ради двух кнопок — лишний клик. Режим держится на
+  // инструменте в руке, а не на раскрытом разделе: кнопка сворачивает
+  // «Постройку» и берёт инструмент, повторный клик кладёт его — режима без
+  // инструмента у них нет (`putDownTool`).
+  //
+  // «Расчистить» (§12.432): ластик только по завалу — постройку им не снести.
+  // Виден, пока на карте есть завал, — и только после первого разбора с
+  // клетки (§12.449, `syncRubbleTool`): кнопка в панели завала размечает одну
+  // клетку, а эта встаёт рядом с кольцом «новое» — инструмент предлагают, а не
+  // суют в руку.
+  const rb = mkTool(
+    '<span class="sw sw-rubble"></span><span>Расчистить</span>',
+    () => takeFlatTool(RUBBLE_TOOL, rb),
   );
-  build.appendChild(er);
+  liveTitle(rb, "Только завал: клик или рамка. Постройки не трогает");
+  rubbleBtn = rb;
+  orders.appendChild(rb);
+  syncRubbleTool();
+
+  // «Снести» — полный ластик: снимает один слой с чего угодно (§12.237).
+  const er = mkTool(
+    '<span class="sw sw-erase"></span><span>Снести</span>',
+    () => takeFlatTool(-1, er),
+  );
+  liveTitle(er, "Снимает верхний слой: постройку до пола, пол до пустоты");
+  // Прячется вместе с «Постройкой» (§12.449, `syncTileButtons`): что нельзя
+  // построить, того нельзя и разобрать (§12.372), и при пустой палитре
+  // сносить нечего — кнопка отвечала бы на клик ничем.
+  er.hidden = true;
+  eraseBtn = er;
+  orders.appendChild(er);
 
   // Вылазки — **дверь, а не раздел** (сужает §12.66): щелчок ведёт прямо в штаб
   // (§12.71), где рядом стоят состав, прогноз и причина отказа словом. Раздел
@@ -9847,7 +10516,13 @@ function buildToolbar() {
 
   // Правила симуляции — не режимы ввода, а тумблеры поведения котов, поэтому
   // они живут отдельно от инструментов и своей подсветкой их не сбивают.
-  const rules = mkSection(el, "Правила");
+  // С §12.451 — блок внутри «Приказов»: правило и есть приказ, только
+  // постоянный. Прячется целиком, пока переключать нечего (§12.387).
+  const rules = document.createElement("div");
+  rules.className = "sec-body";
+  rules.innerHTML = '<div class="tt">Правила</div>';
+  orders.appendChild(rules);
+  rulesBox = rules;
 
   // Подсветку кнопки ведёт снимок, а не сам клик (§12.96): правда о правиле
   // живёт в ядре и переживает загрузку партии, а зеркало в виде — нет.
@@ -10229,7 +10904,7 @@ function sellableOf(item) {
 // на первое и не хватает на второе.
 function tradeState(fi, ii, buying, qty) {
   const q = quoteOf(fi, ii);
-  if (!q) return null;
+  if (!q || (buying && sellOnly(ii))) return null;
   const unit = buying ? q.buy : q.sell;
   const total = unit * qty;
   const broke = buying && money < total;
@@ -10790,6 +11465,21 @@ function syncTileButtons(techs, open, structOpen) {
     btn.hidden = (structOpen ?? [])[def] === false;
     syncWikiMark(btn, `structure:${(meta.structures ?? [])[def]?.id}`);
   }
+  // Пустая палитра — нет и раздела (§12.448): до осмотра входа строить нечего
+  // (§12.372), а заголовок «Постройка» над пустотой звал бы туда, где ничего
+  // нет. Ворота палитры монотонны (технологии и журналы не забываются),
+  // поэтому раздел появляется один раз — вместе с новостью о первой постройке.
+  const buildSec = sections.find((sec) => sec.title === "Постройка");
+  if (buildSec) {
+    const empty = ![...tileButtons, ...structButtons].some(
+      (b) => !b.btn.hidden,
+    );
+    const wrap = buildSec.head.parentElement;
+    if (wrap.hidden !== empty) wrap.hidden = empty;
+    if (buildDoor && buildDoor.hidden !== empty) buildDoor.hidden = empty;
+    if (eraseBtn && eraseBtn.hidden !== empty) eraseBtn.hidden = empty;
+    if (empty && openSection === "Постройка") openOnly(null);
+  }
 }
 
 // Значок «i» у кнопки, собранной один раз (палитра): статья открывается по
@@ -10989,6 +11679,64 @@ function stepWords(i) {
   return `через ${st.step_in} станет ступенью ${st.stage + 1}`;
 }
 
+// Куда поползёт очаг — картинкой на карте штаба (§12.437). Цель и срок
+// считает ядро (`SiteSnap::step == "spread"`, `step_to`, `step_in`) — то же,
+// что `stepWords` говорит словом; вид только рисует: изогнутую пунктирную
+// стрелку от края пятна к соседу и призрачный контур пятна, которое там
+// встанет. Призрак — того же размера, что первая ступень, и пунктиром: очага
+// там ещё нет. Узлы пересобираются только на смене цели, срок пишется в текст.
+function syncSpreads() {
+  const layer = raidUi?.mapCol?.querySelector(".map-spreads");
+  if (!layer) return;
+  const R = SITE_R;
+  const list = sites
+    .map((st, i) => ({ st, i }))
+    .filter(
+      ({ st }) =>
+        st?.step === "spread" && st.step_to != null && siteSpots[st.step_to],
+    );
+  const key = list.map(({ st, i }) => `${i}>${st.step_to}`).join(";");
+  if (layer.dataset.key !== key) {
+    layer.dataset.key = key;
+    layer.innerHTML = list
+      .map(({ st, i }) => {
+        const [ax, ay] = siteSpots[i];
+        const [bx, by] = siteSpots[st.step_to];
+        const dx = bx - ax;
+        const dy = by - ay;
+        const len = Math.hypot(dx, dy) || 1;
+        const ux = dx / len;
+        const uy = dy / len;
+        // Начало — с края пятна, конец — у края призрака: стрелка не лезет
+        // под значки и не прячется под штриховкой.
+        const s0 = Math.min(R * 1.6, len * 0.35);
+        const s1 = Math.min(R * 1.45, len * 0.35);
+        const x0 = ax + ux * s0;
+        const y0 = ay + uy * s0;
+        const x1 = bx - ux * s1;
+        const y1 = by - uy * s1;
+        // Лёгкий изгиб — чтобы не сливаться с пунктиром ребра соседства.
+        const bend = Math.min(26, len * 0.12);
+        const cx = (x0 + x1) / 2 - uy * bend;
+        const cy = (y0 + y1) / 2 + ux * bend;
+        const lx = (x0 + 2 * cx + x1) / 4 - uy * 14;
+        const ly = (y0 + 2 * cy + y1) / 4 + ux * 14;
+        return (
+          `<g class="map-spread">` +
+          `<path class="map-spread-ghost" transform="translate(${bx},${by})" d="${blightBlob(st.step_to, R * 1.3)}"/>` +
+          `<path class="map-spread-arrow" d="M${x0.toFixed(1)} ${y0.toFixed(1)}Q${cx.toFixed(1)} ${cy.toFixed(1)} ${x1.toFixed(1)} ${y1.toFixed(1)}" marker-end="url(#map-spread-head)"/>` +
+          `<text class="map-spread-in" x="${lx.toFixed(1)}" y="${(ly + 4).toFixed(1)}"></text>` +
+          `</g>`
+        );
+      })
+      .join("");
+  }
+  [...layer.querySelectorAll(".map-spread-in")].forEach((t, k) => {
+    const want = `через ${list[k].st.step_in}`;
+    if (t.textContent !== want) t.textContent = want;
+  });
+}
+
 // Недостающие возможности отряда словом (§12.260): «нужен сбор образцов — у
 // Антенны». Кто её несёт, берётся из самого кота (`EntitySnap::abilities`,
 // считает ядро по надетому); пленных и ушедших не называем — их не взять.
@@ -11080,7 +11828,7 @@ function raidGate(i, node) {
   const ruled =
     !def.cleanses &&
     !def.nearby &&
-    nodes.some((o) => o !== node && o.auto === i && o.auto_on);
+    nodes.some((o) => o !== node && o.auto === i);
   // «Пошарить рядом» занят не идущей вылазкой, а исчерпанным пределом
   // (§12.363): сколько котов заказ ещё возьмёт, считает ядро
   // (`RaidSnap::room`) тем же выражением, каким заявка отклонит лишних.
@@ -11138,13 +11886,13 @@ function raidGate(i, node) {
           ? ` — вернутся через ${mine.left}`
           : ` — ${gatherWord(mine)}`);
   // Отряд на автомиссии расписан (§12.400): на чужой заказ ядро его не
-  // отпустит (`AutoRaids::claims` в `launch_node` — те же `auto` и `auto_on`),
-  // пока игрок сам не поставит правило на паузу или не снимет его. Причина
+  // отпустит (`AutoRaids::claims` в `launch_node` — тот же `auto`), пока игрок
+  // сам не снимет правило. Причина
   // одна на все карточки колонки, поэтому строкой не пишется — только в
   // подсказке кнопки (§12.181), а шапка отряда стоит в «Автомиссиях».
   const ruleWhy =
-    !node.nearby && node.auto >= 0 && node.auto_on && node.auto !== i
-      ? `отряд ходит сам на «${esc(missionLabel(node.auto))}» — поставьте правило на паузу ⏸ или снимите ×`
+    !node.nearby && node.auto >= 0 && node.auto !== i
+      ? `отряд ходит сам на «${esc(missionLabel(node.auto))}» — снимите правило ×`
       : null;
   // Недокомплект вылазку не закрывает (§12.113): минимум вилки — рекомендация,
   // и цена его видна тут же, в доле и сроке. Безусловный минимум остался у
@@ -11252,29 +12000,33 @@ function raidGate(i, node) {
             : ruleWhy
               ? `${hint} · ${ruleWhy}`
               : roomWhy
-              ? roomWhy
-              : taken
-                ? // Одним словом на обе причины (§12.183): «ведёт» — это ответ на
-                  // «свободен ли заказ», а кто именно ведёт, названо строкой выше
-                  // номером отряда.
-                  "эту вылазку уже ведёт другой отряд — он назван строкой выше"
-                : !known
-                  ? `${hint} · нужна известность ${def.requires ?? 0}`
-                  : nobody
-                    ? `${hint} · ${nothingWhy}`
-                    : // ⚠️ **Перебор называется раньше сбора**: он чинится решением
-                      // игрока (вычеркнуть), а сбор — временем (§12.116), и пока
-                      // отряд спит, «вычеркните лишних» иначе не прозвучало бы.
-                      over
-                      ? `${hint} · в отряде ${enlisted}, а больше ${most} этот заказ` +
-                        ` не уводит — вычеркните лишних`
-                      : !fit
-                        ? `${hint} · уйдут, когда соберутся все${waiting}`
-                        : paws < least
-                          ? `${hint} · готовых ${paws}, нужно ${need}`
-                          : lackWhy
-                            ? `${hint} · ${lackWhy}`
-                            : hint;
+                ? roomWhy
+                : taken
+                  ? // Одним словом на обе причины (§12.183): «ведёт» — это ответ на
+                    // «свободен ли заказ», а кто именно ведёт, названо строкой выше
+                    // номером отряда.
+                    "эту вылазку уже ведёт другой отряд — он назван строкой выше"
+                  : !known
+                    ? `${hint} · нужна известность ${def.requires ?? 0}`
+                    : nobody
+                      ? `${hint} · ${nothingWhy}`
+                      : // ⚠️ **Перебор называется раньше сбора**: он чинится решением
+                        // игрока (вычеркнуть), а сбор — временем (§12.116), и пока
+                        // отряд спит, «вычеркните лишних» иначе не прозвучало бы.
+                        over
+                        ? `${hint} · в отряде ${enlisted}, а больше ${most} этот заказ` +
+                          ` не уводит — вычеркните лишних`
+                        : // ⚠️ **Нехватка возможности называется раньше сбора**
+                          // (§12.455): она чинится составом, а сбор — временем
+                          // (§12.116), и пока отряд спит, «возьмите в отряд» иначе
+                          // не прозвучало бы — кнопка молча говорила «Нельзя».
+                          lackWhy
+                          ? `${hint} · ${lackWhy}`
+                          : !fit
+                            ? `${hint} · уйдут, когда соберутся все${waiting}`
+                            : paws < least
+                              ? `${hint} · готовых ${paws}, нужно ${need}`
+                              : hint;
   // Причина отказа отдельной строкой от подсказки: тулбар склеивает их в один
   // `title`, а штаб (§12.71) печатает причину словом под заказом — там она и
   // должна читаться, не наводя мышь.
@@ -11309,23 +12061,24 @@ function raidGate(i, node) {
                     : over
                       ? `в отряде ${enlisted}, а больше ${most} этот заказ не уводит` +
                         ` — вычеркните лишних`
-                      : !fit
-                        ? // Не в сборе — состояние **отряда**, а не заказа (§12.184):
-                          // причина одна на все карточки, и красной строкой в каждой
-                          // она была той же стеной, что «отряд занят» до §12.181.
-                          // Названа она один раз в шапке слева, где стоит и состав, —
-                          // а здесь остаётся в подсказке кнопки.
-                          null
-                        : paws < least
-                          ? // Пустой отряд — одна строка в шапке (§12.349, по §12.181):
-                            // «готовы идти 0» красным под каждой карточкой — та же
-                            // стена, причина у всех одна.
-                            enlisted === 0
-                            ? null
-                            : `готовы идти ${paws}, а нужно ${need}`
-                          : // Строкой, а не только подсказкой (§12.181): причина
-                            // своя у этой карточки и чинится составом.
-                            lackWhy;
+                      : // Раньше сбора (§12.455): чинится составом, а не временем.
+                        lackWhy
+                        ? lackWhy
+                        : !fit
+                          ? // Не в сборе — состояние **отряда**, а не заказа (§12.184):
+                            // причина одна на все карточки, и красной строкой в каждой
+                            // она была той же стеной, что «отряд занят» до §12.181.
+                            // Названа она один раз в шапке слева, где стоит и состав, —
+                            // а здесь остаётся в подсказке кнопки.
+                            null
+                          : paws < least
+                            ? // Пустой отряд — одна строка в шапке (§12.349, по §12.181):
+                              // «готовы идти 0» красным под каждой карточкой — та же
+                              // стена, причина у всех одна.
+                              enlisted === 0
+                              ? null
+                              : `готовы идти ${paws}, а нужно ${need}`
+                            : null;
   return {
     ready,
     // Заказчик закрыл виданный заказ (§12.246): карточка без кнопки.
@@ -11423,6 +12176,9 @@ let siteTrails = [];
 // пришедший на участок извне, — зачистка очага работает на месте, а не ведёт
 // караван.
 let siteApproaches = [];
+// Центры участков в координатах полотна карты штаба: по ним рисуется стрелка
+// расползания очага (§12.437). Пересобираются вместе с графом.
+let siteSpots = [];
 // Центр базы на полотне карты штаба: вокруг него кружат коты, работающие рядом
 // с базой (§12.396). Ставит `buildSiteGraph`.
 let siteHome = null;
@@ -11663,7 +12419,8 @@ function tripStackSvg(m, tags) {
       : "";
   const right = x0 + (n - 1) * step + STACK_R;
   const badge = `<g transform="translate(${(right + 2).toFixed(1)},${-STACK_R - 3}) scale(0.75)">${tagsSvg(tags)}</g>`;
-  const item = m.phase === "back" && !m.failed && m.share > 0 ? m.loot?.[0]?.[0] : null;
+  const item =
+    m.phase === "back" && !m.failed && m.share > 0 ? m.loot?.[0]?.[0] : null;
   const it = item != null ? (meta?.items ?? [])[item] : null;
   const loot =
     it && ITEM_GLYPHS[it.id]
@@ -11768,8 +12525,7 @@ function syncOrbits() {
       const what = (meta?.missions ?? [])[m.def]?.label ?? "";
       liveTitle(g, `${id} — ${RAID_PHASE[m.phase] ?? "сбор"}: ${what}`);
     });
-    for (const g of [...cats.children])
-      if (!mine.has(g.dataset.id)) g.remove();
+    for (const g of [...cats.children]) if (!mine.has(g.dataset.id)) g.remove();
   }
   for (const c of [...layer.children]) if (!seen.has(c.dataset.c)) c.remove();
 }
@@ -11833,9 +12589,12 @@ function syncFlashes() {
     if (!was.has(key) || was.get(key) === phase) continue;
     const prev = was.get(key);
     const end =
-      m.site >= 0 ? siteApproaches[m.site]?.at(-1) ?? siteHome : siteHome;
+      m.site >= 0 ? (siteApproaches[m.site]?.at(-1) ?? siteHome) : siteHome;
     const at = prev === "" || phase === "" ? siteHome : end;
-    const ring = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    const ring = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "circle",
+    );
     ring.setAttribute("class", "map-flash");
     ring.setAttribute("cx", at[0].toFixed(1));
     ring.setAttribute("cy", at[1].toFixed(1));
@@ -11851,6 +12610,29 @@ function syncFlashes() {
 // меняются только заливка, ступень, метка отряда и подпись под графом.
 function syncRaidMap() {
   if (!raidUi?.marks?.length) return;
+  // Карты нет, пока снаружи никто не был (§12.435): до осмотра входа штаб —
+  // это состав и идущая вылазка, а карта появляется вместе с вернувшимся
+  // котом, вспышкой базы (`homeRevealDue`).
+  const unmet = mapUnmet();
+  if (raidUi.mapCol.hidden !== unmet) raidUi.mapCol.hidden = unmet;
+  if (unmet) return;
+  // Доклад вернувшегося кота стоит на месте карты (§12.436), а миссии ждут
+  // за ним: новая карточка появляется вместе с картой, по клику.
+  const report = !!homeReport;
+  raidUi.jobsCol.hidden = report;
+  raidUi.report.hidden = !report;
+  for (const n of raidUi.mapParts) n.hidden = report;
+  if (report) {
+    // Сравниваем свою строку, а не `innerHTML`: глифы фишек браузер
+    // нормализует, и `setHtml` пересоздавал бы кнопку каждым кадром — клик по
+    // ней умирал бы (§12.84).
+    const html = homeReportHtml(homeReport);
+    if (raidUi.reportHtml !== html) {
+      raidUi.reportHtml = html;
+      raidUi.report.innerHTML = html;
+    }
+    return;
+  }
   // Выбор мира из прошлой партии сюда не доедет: `ready` сбрасывает `mapPick`
   // в «авто», а число за пределами палитры значило бы чужое место.
   if (mapPick >= raidUi.marks.length) mapPick = -1;
@@ -11886,7 +12668,7 @@ function syncRaidMap() {
       (o.auto ?? -1) >= 0 ? siteIndexOf(meta.missions[o.auto]?.site) : -1;
     if (site == null || site < 0) return;
     if (!ruled.has(site)) ruled.set(site, []);
-    ruled.get(site).push({ n: k + 1, on: !!o.auto_on, def: o.auto });
+    ruled.get(site).push({ n: k + 1, def: o.auto });
   });
 
   // Сколько заказов на участке — числом **в центре кружка** (§12.245): колонка
@@ -11957,20 +12739,12 @@ function syncRaidMap() {
       box.setAttribute("width", String(w));
       box.setAttribute("x", String(-w / 2));
     }
-    rule.classList.toggle("paused", rs.length > 0 && rs.every((r) => !r.on));
-    // Адреса столов — на самой плашке: клик по ней переводит окно на отряд
-    // правила (§12.295), а считать их второй раз в обработчике незачем.
-    const rnodes = rs
-      .map((r) => `${nodes[r.n - 1].x},${nodes[r.n - 1].y}`)
-      .join(";");
-    if (rule.dataset.nodes !== rnodes) rule.dataset.nodes = rnodes;
     liveTitle(
       rule,
       rs
         .map(
           (r) =>
-            `${nodes[r.n - 1].name} ходит сюда сам: «${meta.missions[r.def]?.label || ""}»` +
-            (r.on ? "" : " — на паузе"),
+            `${nodes[r.n - 1].name} ходит сюда сам: «${meta.missions[r.def]?.label || ""}»`,
         )
         .join(" · "),
     );
@@ -12016,6 +12790,7 @@ function syncRaidMap() {
     }
   });
 
+  syncSpreads();
   syncRaidTrips();
   raidUi.home?.classList.toggle("on", atHome());
   // Окрестности: подпись про базу (§12.349). Сколько заметных выходов
@@ -12028,6 +12803,18 @@ function syncRaidMap() {
   const near = nearAll.find(
     (n) => (meta.missions?.[n.def]?.yields ?? []).length > 0,
   );
+  // Туман над базой (§12.422): до выполненного `outskirts.raided` значок
+  // базы — «?». Кликается по-прежнему: за ним и стоит сам осмотр.
+  if (raidUi.home) {
+    const fog = lastSnap?.home_met === false;
+    raidUi.home.classList.toggle("fog", fog);
+    if (!fog && homeRevealDue) {
+      homeRevealDue = false;
+      raidUi.home.classList.remove("reveal");
+      void raidUi.home.getBoundingClientRect();
+      raidUi.home.classList.add("reveal");
+    }
+  }
   if (raidUi.home && near) {
     const full = (meta.missions?.[near.def]?.yields ?? []).length;
     raidUi.home.style.setProperty(
@@ -12042,11 +12829,13 @@ function syncRaidMap() {
       raidUi.note,
       '<div class="map-h">База</div>' +
         `<div>${
-          !near
-            ? "окрестности ещё не осмотрены"
-            : near.left > 0
-              ? `окрестности: ещё ${plural(near.left, "заметный выход", "заметных выхода", "заметных выходов")}`
-              : "окрестности обшарены: дальше мелочь, изредка деталь"
+          lastSnap?.home_met === false
+            ? "вход снаружи ещё не осмотрен"
+            : !near
+              ? "окрестности ещё не осмотрены"
+              : near.left > 0
+                ? `окрестности: ещё ${plural(near.left, "заметный выход", "заметных выхода", "заметных выходов")}`
+                : "окрестности обшарены: дальше мелочь, изредка деталь"
         }</div>`,
     );
     return;
@@ -12392,7 +13181,14 @@ function openNewsTarget(kind, def) {
   // здесь не строка, а колонка, и вести к одной из сорока не к чему.
   else if (kind === "rule") {
     const door = RULE_DOOR[autoKind(def)];
-    if (door === "raid") openRaidWindow();
+    // Тумблер живёт в тулбаре, а не за дверью (§12.401): раскрываем раздел,
+    // и новость гаснет тем же кликом — окна, на закрытии которого она гасла
+    // бы, у неё нет.
+    if (door === "rules") {
+      readNews("rule", [def]);
+      closeOtherWindows();
+      openOnly("Приказы");
+    } else if (door === "raid") openRaidWindow();
     else if (door === "dossier") openDossier();
     else openStockWindow();
   } else openSciWindow();
@@ -12435,6 +13231,8 @@ function renderNews(snap) {
     // заказе говорят точка на двери «Вылазки», число на участке карты и
     // группа «Только что открылись» в штабе.
     if (n.kind === "raid") return false;
+    // Ту же новость уже сказала выжимка справочника (§12.444).
+    if (newsToldByWiki(n)) return false;
     // Ноль в рулсете значит «сами не гаснут» — тем же нулём, каким `day`
     // выключает календарь.
     return span <= 0 || snap.tick - n.at < span;
@@ -13028,14 +13826,12 @@ function syncDoors(snap) {
   // про лежанку («Беречь себя»), и пока ни того, ни другого на базе не
   // стояло, переключать там нечего. Журнал застройки монотонен: снесённый
   // склад раздел обратно не прячет.
-  const rulesSec = sections.find((sec) => sec.title === "Правила");
-  if (rulesSec) {
+  if (rulesBox) {
     const built = snap.tiles_built ?? [];
     const hide = !(meta?.palette ?? []).some(
       (p, i) => built[i] && (p.capacity > 0 || p.rest > 0),
     );
-    rulesSec.head.parentElement.hidden = hide;
-    if (hide && openSection === "Правила") openOnly(null);
+    if (rulesBox.hidden !== hide) rulesBox.hidden = hide;
   }
   // Шестой случай пропажи двери (§12.380): база не видела ещё ни одного
   // предмета — окно «Ресурсы» пусто целиком (строки прячет тот же `seen`,
@@ -13052,10 +13848,16 @@ function syncDoors(snap) {
     // («нет выхода») звала бы туда, куда игрок и так копает.
     const exitNow =
       !!lastSnap?.exit_open || (lastSnap?.missions ?? []).length > 0;
+    const homeNow = lastSnap?.home_met !== false;
+    if (homeMetSeen === null) homeMetSeen = homeNow;
+    else if (homeNow && !homeMetSeen) {
+      homeMetSeen = true;
+      homeRevealDue = true;
+    }
     if (exitSeen === null) exitSeen = exitNow;
     else if (exitNow && !exitSeen) {
       exitSeen = true;
-      openRaidWindow();
+      whenWikiFree(() => openRaidWindow());
     }
     raidDoor.hidden = !exitSeen;
     const nogate = gateHint();
@@ -13104,8 +13906,14 @@ function syncNewsMarks() {
   // У палитры окна нет, метку носит заголовок раздела — и гаснет она на
   // **закрытии** раздела, как у окон (§12.120): пока раздел раскрыт,
   // подсвеченная кнопка и есть весь ответ на «что нового».
-  const build = sections.find((sec) => sec.title === "Постройка");
-  build?.head.classList.toggle("fresh", newsPending("tile").length > 0);
+  // С §12.451 — на двери «Постройки» в рейке; у «Приказов» — от кольца на
+  // «Расчистить» (§12.449) и от нового правила, которое живёт в них.
+  buildDoor?.classList.toggle("fresh", newsPending("tile").length > 0);
+  ordersDoor?.classList.toggle(
+    "fresh",
+    !!rubbleBtn?.classList.contains("fresh") ||
+      newsPending("rule", ruleDefsAt("rules")).length > 0,
+  );
   const fresh = newlyOpen("tile");
   for (const { btn, def } of tileButtons) {
     btn.classList.toggle("fresh", fresh.has(def));
@@ -13639,7 +14447,7 @@ function buildBuyWindow() {
   // выбрать сторону за игрока (§12.88).
   (meta.factions ?? []).forEach((f, fi) => {
     for (const item of (meta.items ?? []).keys()) {
-      if (!sidesOf(item).includes(fi)) continue;
+      if (!sidesOf(item).includes(fi) || sellOnly(item)) continue;
       const row = mkTool(
         `${itemGlyph(item)}<span class="buy-name"></span>` +
           `<span class="buy-rate"></span><b class="qty">×5</b>`,
@@ -13799,8 +14607,8 @@ function syncBinWindow() {
   setHtml(
     binHintEl,
     accepts.size
-      ? "остальное коты увезут отсюда"
-      : "принимает всё: пока ничего не выбрано",
+      ? "остальное коты увезут отсюда, а некуда — вынесут рядом"
+      : "ничего не назначено — ящик ничего не принимает",
   );
 }
 
@@ -15024,6 +15832,126 @@ let wikiBack = null;
 // Пройденные статьи: «← Назад» шагает по ним, а не закрывает окно, — переход
 // по ссылке внутри справочника это не смена цели, а углубление в неё.
 let wikiTrail = [];
+// Страница «Новые записи» (§12.441) — своим ключом в `wikiKey`, наравне с
+// оглавлением (`null`): «Подробнее» кладёт её в след, и «←» из статьи ведёт
+// обратно к выжимкам, а не наружу. Ключ статьи двоеточием начинаться не может.
+const WIKI_DIGEST = ":digest";
+// Записи, собранные на страницу «Новые записи», — ключи статей.
+let wikiDigest = [];
+// Статьи, объявленные выжимками, → тик, когда их поставили в очередь
+// (§12.444). Тикер «новый ресурс — Лом» рядом с выжимкой о Ломе — та же
+// новость второй раз, поэтому новость, открывшаяся в тот же миг, что и статья,
+// тикером не встаёт. Метки на дверях она по-прежнему ставит: это не дубль.
+const wikiAnnounced = new Map();
+// Виды статей, которые выжимкой не всплывают (§12.445): открываются тихо и
+// ждут в справочнике. Навык, параметр и перк игрок и так видит у кота —
+// полоской, которая растёт у него на глазах; заказ сам встаёт карточкой в
+// штабе, первой, мимо неё не пройти. Выжимка о них повторяла бы экран.
+// Фракции, репутация и известность (§12.450) — тоже: о них говорит заказ в
+// штабе (заказчик, «нужна репутация 30», «нужна известность 20»), а
+// всплывали они на возвращении отряда пачкой, поверх его доклада.
+const WIKI_SILENT = new Set(["skill", "stat", "perk", "raid", "faction"]);
+// Статьи лора, которые открываются тихо (§12.450): шкалы из шапки и
+// «Вылазки» — их открывает стол брифинга (§12.386), а дорога от него одна — в
+// штаб, где сила, сложность и прогноз стоят на карточке заказа.
+const WIKI_SILENT_KEYS = new Set(["lore:standing", "lore:fame", "lore:raids"]);
+
+/// Открывается ли статья молча (§12.445, §12.446). Сверх видов из
+/// `WIKI_SILENT` молчит постройка, которая встаёт **только ремонтом руины**
+/// (стол брифинга, шлюз — `internal`, в палитре их нет): её статья
+/// открывается обследованием руины (§12.384), и выжимка рассказывала бы, во
+/// что превратится пыльный стол, раньше, чем игрок его починит. Что с руиной
+/// делать, говорит её панель — кнопкой «Починить». Лежанка тоже встаёт
+/// ремонтом, но она постройка палитры, и о ней выжимка законна.
+function wikiSilent(key) {
+  const [kind, id] = key.split(":");
+  if (WIKI_SILENT.has(kind) || WIKI_SILENT_KEYS.has(key)) return true;
+  if (kind !== "tile") return false;
+  const pal = meta?.palette ?? [];
+  return (
+    !!pal.find((p) => p.id === id)?.internal && pal.some((p) => p.repair === id)
+  );
+}
+// Насколько новость может опередить статью: статью замечает кадр, а за кадр
+// на ×10 проходит несколько тиков.
+const WIKI_NEWS_SLACK = 30;
+
+/// Сказала ли уже эту новость выжимка (§12.444).
+function newsToldByWiki(n) {
+  if (!n.opened) return false;
+  const k = newsWikiKey(n);
+  if (!k) return false;
+  const at = wikiAnnounced.get(wikiOwnerOf(k) ?? articleTarget(k));
+  return at !== undefined && n.at <= at && at - n.at <= WIKI_NEWS_SLACK;
+}
+// Страница «Новые записи» держит игрока, пока он не нажал «Ок» (§12.442):
+// клик мимо окна, дверь, «База», Escape и клавиши гаснут. Иначе всплывшее
+// посреди жеста — кот разбирает завал, игрок уже тянется к «Базе» — пропадало
+// тем же кликом, ни разу не показавшись. «Закрыть» у статьи, открытой
+// «Подробнее», возвращает к выжимкам, а не наружу.
+let wikiHeld = false;
+// Что открылось бы само, пока страница держит (штаб на открытом выходе,
+// доклад вернувшегося кота): встаёт следом за «Ок», а не поверх выжимок.
+let wikiAfter = [];
+
+/// Открыть окно сам, без жеста игрока: сейчас или следом за «Ок» (§12.442).
+function whenWikiFree(open) {
+  if (wikiHeld) wikiAfter.push(open);
+  else open();
+}
+
+/// «Ок» на странице «Новые записи» — единственный выход из неё (§12.442).
+function wikiAcknowledge() {
+  wikiHeld = false;
+  closeWikiWindow();
+  const after = wikiAfter;
+  wikiAfter = [];
+  for (const open of after) open();
+}
+
+// Пока страница держит, всё мимо её коробки гаснет **на захвате**, до любых
+// слушателей игры: перечислять двери, «Базу», карту и рейку поимённо значило
+// бы завести список, который однажды забудут пополнить.
+for (const type of [
+  "pointerdown",
+  "pointerup",
+  "mousedown",
+  "mouseup",
+  "click",
+  "dblclick",
+  "contextmenu",
+  "wheel",
+]) {
+  window.addEventListener(
+    type,
+    (e) => {
+      if (!wikiHeld) return;
+      const box = wikiWinEl.querySelector(".win-box");
+      if (box && e.target instanceof Node && box.contains(e.target)) return;
+      e.stopPropagation();
+      e.preventDefault();
+    },
+    { capture: true, passive: false },
+  );
+}
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (!wikiHeld) return;
+    const box = wikiWinEl.querySelector(".win-box");
+    // Пробел по чекбоксу «Больше не показывать» — его законный жест.
+    if (box && e.target instanceof Node && box.contains(e.target)) {
+      if (e.target instanceof HTMLInputElement) return;
+    }
+    e.stopPropagation();
+    e.preventDefault();
+    // Enter на странице выжимок — то же «Ок»: прочитал, понял.
+    if (e.key === "Enter" && !e.repeat && wikiKey === WIKI_DIGEST) {
+      wikiAcknowledge();
+    }
+  },
+  { capture: true },
+);
 
 // Какой палитре принадлежит ключ. Список ровно тот же, что в `newsText` и
 // `opensOf`: справочник не заводит своего реестра сущностей, он говорит о тех,
@@ -15232,7 +16160,37 @@ function wikiPicture(key) {
       "</span>";
   }
   if (kind === "recruit") inner = portraitHtml(entry.sprite, "wiki-portrait");
+  if (kind === "structure") inner = wikiStructPlan(entry);
   return inner ? `<div class="wiki-pic">${inner}</div>` : "";
+}
+
+// Объект-штамп — планом (§12.447): его клетки цветом своих тайлов с глифом
+// роли, свободные слоты — стульями. Тем же силуэтом (`shapes[0]`, `slots[0]`),
+// каким он встаёт под курсором, а не отдельной картинкой: план, разошедшийся
+// с палитрой, рассказывал бы о другом объекте.
+function wikiStructPlan(d) {
+  const cells = d.shapes?.[0] ?? [];
+  const slots = d.slots?.[0] ?? [];
+  if (!cells.length) return "";
+  const all = [...cells, ...slots];
+  const w = Math.max(...all.map(([x]) => x)) + 1;
+  const h = Math.max(...all.map(([, y]) => y)) + 1;
+  const pal = meta?.palette ?? [];
+  const html = [
+    ...slots.map(
+      ([x, y]) =>
+        `<span class="wiki-plan-seat" style="grid-column:${x + 1};grid-row:${y + 1}"></span>`,
+    ),
+    ...cells.map(
+      ([x, y, ti]) =>
+        `<span class="wiki-plan-cell" style="grid-column:${x + 1};grid-row:${y + 1};` +
+        `background:${pal[ti]?.color ?? "#555"}">${tileGlyphHtml(ti, "wiki-plan-glyph")}</span>`,
+    ),
+  ].join("");
+  return (
+    `<span class="wiki-plan" style="--cols:${w};--rows:${h};` +
+    `--n:${Math.max(w, h)}">${html}</span>`
+  );
 }
 
 // Роль клетки словами — те же свойства тайла, которыми её знает ядро.
@@ -15263,8 +16221,9 @@ function tileRoleWords(t) {
 function openWiki(key, back) {
   // `null` — оглавление: у двери тулбара адресата нет, она ведёт «в
   // справочник вообще».
-  if (key !== null) key = articleTarget(key);
-  if (key !== null && !hasArticle(key)) return;
+  const page = key === null || key === WIKI_DIGEST;
+  if (!page) key = articleTarget(key);
+  if (!page && !hasArticle(key)) return;
   if (!wikiOpen) {
     // Запоминаем возврат **до** `closeOtherWindows`: он погасит то окно, из
     // которого мы и пришли, и спросить его будет уже не у кого.
@@ -15273,7 +16232,6 @@ function openWiki(key, back) {
     closeOtherWindows("wiki");
     wikiOpen = true;
   } else if (wikiKey !== key) {
-    wikiFresh = "";
     // Оглавление (`null`) кладём в след наравне со статьёй: игрок, пришедший
     // из него, ждёт вернуться в него же, а не наружу.
     wikiTrail.push(wikiKey);
@@ -15282,8 +16240,8 @@ function openWiki(key, back) {
   // Прочитанная статья — уже не новость, как бы игрок до неё ни дошёл
   // (ссылкой, значком «i», оглавлением): модалом «Новая запись» она после
   // этого не всплывает.
-  if (key !== null) {
-    wikiQueue = wikiQueue.filter(([q]) => articleTarget(q) !== key);
+  if (!page) {
+    wikiQueue = wikiQueue.filter((q) => articleTarget(q) !== key);
   }
   buildWikiWindow();
   wikiWinEl.hidden = false;
@@ -15291,8 +16249,18 @@ function openWiki(key, back) {
 
 function closeWikiWindow() {
   if (!wikiOpen) return;
+  // Держит страница выжимок (§12.442): из статьи — назад к ним, с самой
+  // страницы — никуда, выход один — «Ок».
+  if (wikiHeld) {
+    if (wikiKey !== WIKI_DIGEST) {
+      wikiKey = WIKI_DIGEST;
+      wikiTrail = [];
+      buildWikiWindow();
+    }
+    return;
+  }
   wikiOpen = false;
-  wikiFresh = "";
+  wikiDigest = [];
   wikiKey = null;
   wikiTrail = [];
   wikiWinEl.hidden = true;
@@ -15369,7 +16337,21 @@ function wikiIndexHtml() {
 }
 
 function buildWikiWindow() {
-  const { list } = mkWindow(wikiWinEl, "Справочник", () => closeWikiWindow());
+  const { box, list, top } = mkWindow(wikiWinEl, "Справочник", () =>
+    closeWikiWindow(),
+  );
+  if (wikiKey === WIKI_DIGEST) {
+    // Шапки у страницы выжимок нет (§12.443): «Справочник» и плашка «Новая
+    // запись» говорили то, что окно и так говорит собой, а «Закрыть» и «Ок» —
+    // одно действие под двумя именами (довод «Назад» ниже). Остаётся «Ок»:
+    // он стоит под тем, что прочитано.
+    // `hidden` тут не годится: у `.win-top` свой `display: flex`. Отступ
+    // списка под шапку уходит вместе с ней — класс на коробке.
+    top.style.display = "none";
+    box.classList.add("wiki-digest");
+    list.innerHTML = wikiDigestHtml();
+    return;
+  }
   if (wikiKey === null) {
     const toc = wikiIndexHtml();
     // Пустой справочник — законное состояние: файлы могли не доехать, а игра
@@ -15404,20 +16386,54 @@ function buildWikiWindow() {
     '<div class="wiki-head">' +
     back +
     `<div class="wiki-title">${esc(title)}</div>` +
-    (wikiFresh ? `<div class="wiki-fresh">${wikiFresh}</div>` : "") +
     "</div>" +
     `<div class="wiki-body">${wikiPicture(wikiKey)}${renderArticle(wikiKey, wikiName)}</div>` +
     wikiFacts(wikiKey) +
-    also +
-    // Только у всплывшей статьи: открытой самим игроком отказываться не от
-    // чего. Чекбокс, а не кнопка: окно не закрывается, и передумать можно
-    // тут же. Вернуть потом — тем же чекбоксом в разделе «Партия».
-    (wikiFresh
-      ? '<label class="wiki-mute" data-tip="Новые статьи справочника не будут ' +
-        'всплывать сами. Вернуть можно в разделе «Партия»">' +
-        `<input type="checkbox" class="wiki-mute-box"${wikiPopups ? "" : " checked"}>` +
-        "Больше не показывать</label>"
-      : "");
+    also;
+}
+
+/// Страница «Новые записи» (§12.441): строка на открывшуюся статью — картинка,
+/// имя и выжимка (`::` в тексте статьи), — «Подробнее» у каждой и одно «Ок»
+/// внизу. Всплывшая статья целиком читалась как энциклопедия там, где игрок
+/// ждал уведомления, и её прокликивали не читая; а после первой вылазки их
+/// приходило по пять, и каждая — отдельным модалом.
+function wikiDigestHtml() {
+  const shown = wikiDigest.filter((k) => hasArticle(k));
+  // Строка, на которую уже ведёт ссылка соседней выжимки, не встаёт
+  // (§12.456): «Лаборатория — здесь изучают темы» под «Антенной, которая знает,
+  // как построить лабораторию» — та же новость дважды. Взаимные ссылки не
+  // гасят друг друга.
+  const links = new Map(shown.map((k) => [k, gistLinks(k)]));
+  const rows = shown
+    .filter(
+      (k) =>
+        !shown.some((j) => j !== k && links.get(j).has(k) && !links.get(k).has(j)),
+    )
+    .map(
+      (k) =>
+        '<div class="wiki-gist">' +
+        wikiPicture(k) +
+        '<div class="wiki-gist-main">' +
+        `<div class="wiki-title">${esc(wikiName(k))}</div>` +
+        `<div class="wiki-gist-text">${renderGist(k, wikiName)}</div>` +
+        "</div>" +
+        `<button class="tool wiki-more" data-key="wikimore${esc(k)}" ` +
+        `data-go="${esc(k)}">Подробнее</button>` +
+        "</div>",
+    )
+    .join("");
+  return (
+    rows +
+    // Чекбокс, а не кнопка: окно не закрывается, и передумать можно тут же.
+    // Вернуть потом — тем же чекбоксом в разделе «Партия».
+    '<div class="wiki-gist-foot">' +
+    '<label class="wiki-mute" data-tip="Новые статьи справочника не будут ' +
+    'всплывать сами. Вернуть можно в разделе «Партия»">' +
+    `<input type="checkbox" class="wiki-mute-box"${wikiPopups ? "" : " checked"}>` +
+    "Больше не показывать</label>" +
+    '<button class="tool primary wiki-ok" data-key="wikiok">Ок</button>' +
+    "</div>"
+  );
 }
 
 // Клики внутри справочника — делегированием и парой `mousedown`/`mouseup`, как
@@ -15425,6 +16441,8 @@ function buildWikiWindow() {
 // на одну статью из разных мест поделили бы обработчик.
 onPanelClick(wikiWinEl, ".wiki-link", (b) => openWiki(b.dataset.go));
 onPanelClick(wikiWinEl, ".wiki-back", () => wikiGoBack());
+onPanelClick(wikiWinEl, ".wiki-more", (b) => openWiki(b.dataset.go));
+onPanelClick(wikiWinEl, ".wiki-ok", () => wikiAcknowledge());
 // Окно справочника перестраивается только кликом игрока (`buildWikiWindow`),
 // а не кадром, поэтому родное `change` у чекбокса доходит (§12.84 тут не
 // про него). Слушатель один, на окне.
@@ -15481,22 +16499,25 @@ function wikiOwnGate(key) {
         !tileEverBuilt(snap, (p) => p.repair === id)
       )
         return false;
+      // Постройка, закрытая темой, но уже стоявшая на карте, — находка
+      // (малый ящик из-под завала, §12.404): статья о вещи, которую игрок
+      // держит в руках, открывается вместе с ней, а не с темой.
       return (
         def >= 0 &&
         !HIDDEN_TILES.has(id) &&
-        (snap.tiles_open ?? [])[def] !== false
+        ((snap.tiles_open ?? [])[def] !== false ||
+          (!!meta?.palette?.[def]?.tech &&
+            tileEverBuilt(snap, (p) => p.id === id)))
       );
     case "item": {
       // Личная вещь (§12.256) ресурсом не бывает и «виденной» не считается —
       // её статья открывается с наймом того, кто её приносит (`gear` у
-      // кандидата): анализатор приходит вместе с Антенной.
-      // Модалом «Новая запись» она при этом всплывала бы тем же кликом, что и
-      // сам кандидат, и рассказывала бы о коробке вместо кота, — поэтому
-      // статья с версией «до понимания» ждёт своей темы (`---понято---`):
-      // вещь объясняется тогда, когда база поняла, зачем она.
+      // кандидата): анализатор приходит вместе с Антенной. До своей темы
+      // (`---понято---`) — короткой версией. Отдельной строкой на странице
+      // «Новые записи» она не встаёт: на неё ведёт ссылка из выжимки кота
+      // (§12.456, §12.458). До §12.458 статья ждала темы целиком, и ссылка
+      // «анализатором» в выжимке Антенны на найме была пуста.
       if (entry?.personal) {
-        const tech = teaserTech(key);
-        if (tech && !(snap.techs ?? []).includes(tech)) return false;
         return (meta?.recruits ?? []).some(
           (r, i) =>
             (r.gear ?? []).includes(id) && (snap.recruits ?? [])[i]?.hired,
@@ -15551,7 +16572,9 @@ function wikiOwnGate(key) {
       );
     }
     case "rule":
-      return !!snap[`auto_${id}`];
+      // `auto_tidy` занято самим тумблером (§12.96), поэтому ворота уборки
+      // едут полем `auto_tidy_open` (§12.401).
+      return !!snap[id === "tidy" ? "auto_tidy_open" : `auto_${id}`];
     case "lore":
       return loreOpen(id, snap);
     default:
@@ -15704,12 +16727,14 @@ setArticleTeased((key) => {
 // снимок партии (новой или загруженной) её снимает и новостью не объявляется,
 // ровно как `goalsDoneSeen` и лента §12.120.
 let wikiOpenSeen = null;
-// Статьи, открывшиеся и ещё не показанные. Показываются по одной и только
-// когда никакое окно не открыто: модал поверх штаба стёр бы ответ, за которым
-// игрок туда пошёл (§12.101).
+// Нанятые кандидаты, уже виденные выжимкой (§12.454): статья кота всплывает,
+// когда он впервые встал на базе, а не когда откликнулся. `null` — базовой
+// линии ещё нет, её снимает первый снимок, как у `wikiOpenSeen`.
+let wikiHiredSeen = null;
+// Статьи, открывшиеся и ещё не показанные. Показываются **все разом**, одной
+// страницей «Новые записи» (§12.441), и только когда никакое окно не открыто:
+// модал поверх штаба стёр бы ответ, за которым игрок туда пошёл (§12.101).
 let wikiQueue = [];
-// Плашка над открывшейся статьёй: «Новая запись» · «Запись дополнена»; "" — нет.
-let wikiFresh = "";
 // Всплывают ли открывшиеся статьи модалом. Выбор игрока, а не партии: живёт
 // в `localStorage` рядом с видом 3/4 и звуком, новая партия его не сбрасывает.
 // Выключенные модалы не гасят меток «дополнено» в оглавлении: статья
@@ -15749,14 +16774,10 @@ function noteWikiFacets(open) {
       const owner = wikiOwnerOf(f);
       // Статья открылась этим же снимком — её объявит «Новая запись»,
       // и метка поверх неё сказала бы то же второй раз.
-      if (!wikiFacetsSeen.has(f) && wikiOpenSeen?.has(owner)) {
-        wikiAdded.add(f);
-        // Статья всплывает модалом с плашкой «Запись дополнена», как при
-        // понимании вещи: тихая строка фактов прошла бы мимо игрока.
-        if (!wikiQueue.some(([q]) => q === owner)) {
-          wikiQueue.push([owner, "Запись дополнена"]);
-        }
-      }
+      // Модалом дополнение не всплывает (§12.441): оно почти всегда
+      // приходит вместе с новостью о самой вещи, и вторая всплывашка рядом —
+      // шум. Его несёт метка «дополнено» у строки фактов и в оглавлении.
+      if (!wikiFacetsSeen.has(f) && wikiOpenSeen?.has(owner)) wikiAdded.add(f);
     }
   }
   wikiFacetsSeen = now;
@@ -15768,25 +16789,50 @@ function noteWikiOpened() {
   // них, пуста — и доехавшие статьи всплывали бы модалом «Новая запись» все
   // разом на каждой перезагрузке. Линию снимает первый снимок **после** загрузки.
   if (!wikiReady()) return;
-  // Помним и версию: переход «коротко → полно» (вещь поняли) объявляется
-  // так же, как новая статья, но словами «Запись дополнена».
+  // Помним и версию: переход «коротко → полно» (вещь поняли) новой записью
+  // не считается и модалом не всплывает (§12.441), как дополнение гранью.
   const open = new Map(articleKeys().map((k) => [k, articleStage(k)]));
   noteWikiFacets(open);
   if (wikiOpenSeen !== null) {
     for (const [k, stage] of open) {
       const was = wikiOpenSeen.get(k);
-      if (was === stage || wikiQueue.some(([q]) => q === k)) continue;
-      wikiQueue.push([k, was ? "Запись дополнена" : "Новая запись"]);
+      if (was !== undefined || wikiQueue.includes(k)) continue;
+      if (wikiSilent(k)) continue;
+      // Кандидат (§12.454): статья открывается откликом, а выжимкой всплывает
+      // найм — ниже. Отклик и так виден точкой на двери «Найм».
+      if (k.startsWith("recruit:")) continue;
+      wikiQueue.push(k);
+      if (wikiPopups) wikiAnnounced.set(k, lastSnap?.tick ?? 0);
     }
   }
   wikiOpenSeen = open;
+  // Кот встал на базе впервые (§12.454) — нанятый, найденный или пришедший
+  // сам: всё это `hired` у его записи.
+  const hired = new Set();
+  (lastSnap?.recruits ?? []).forEach((r, i) => {
+    if (r?.hired) hired.add(i);
+  });
+  if (wikiHiredSeen !== null) {
+    for (const i of hired) {
+      if (wikiHiredSeen.has(i)) continue;
+      const k = `recruit:${meta?.recruits?.[i]?.id}`;
+      if (!open.has(k) || wikiQueue.includes(k)) continue;
+      wikiQueue.push(k);
+      if (wikiPopups) wikiAnnounced.set(k, lastSnap?.tick ?? 0);
+    }
+  }
+  wikiHiredSeen = hired;
   // Базовую линию ведём и при выключенных модалах: включённые обратно, они
   // не должны вывалить всё, что открылось за это время.
   if (!wikiPopups) wikiQueue = [];
   if (!wikiQueue.length || WINDOWS.some(([, isOpen]) => isOpen())) return;
-  const [key, fresh] = wikiQueue.shift();
-  wikiFresh = fresh;
-  openWiki(key, null);
+  wikiDigest = wikiQueue;
+  wikiQueue = [];
+  openWiki(WIKI_DIGEST, null);
+  // Всплывшее окно звучит (§12.453): оно ставит партию на паузу, и тихое
+  // появление легко принять за зависание.
+  play("entry");
+  wikiHeld = true;
 }
 
 // Реестр окон: ключ · открыто ли · закрыть · **чем вернуть**.
@@ -15912,10 +16958,17 @@ let baseTab = null;
 function buildScreenBar() {
   if (!screenBarEl) return;
   screenBarEl.innerHTML = "";
-  baseTab = mkTool(doorHtml("base", "База"), () => closeAllWindows());
+  // «База» — то, куда возвращает Escape (§12.451): снимает и окна, и
+  // раскрытую панель «Построек» или «Приказов».
+  baseTab = mkTool(doorHtml("base", "База"), () => {
+    closeAllWindows();
+    openOnly(null);
+  });
   liveTitle(baseTab, "Карта базы: стройка и коты (Escape — назад сюда)");
   screenBarEl.appendChild(baseTab);
   screenTabs = [
+    ["build", buildDoor],
+    ["orders", ordersDoor],
     ["raid", raidDoor],
     ["stock", stockDoor],
     ["sci", sciDoor],
@@ -15962,11 +17015,17 @@ function syncScreenBar() {
   if (!baseTab) return;
   const open = topWindow()?.[0];
   // У «Ящика» двери нет: под ним горит штаб, если игрок пришёл из него.
+  // Окна нет — горит дверь раскрытой панели (§12.451), а «База» только когда
+  // нет ни того, ни другого.
   const lit = screenTabs.some(({ key }) => key === open)
     ? open
     : raidWinOpen
       ? "raid"
-      : null;
+      : openSection === "Постройка"
+        ? "build"
+        : openSection === "Приказы"
+          ? "orders"
+          : null;
   if (baseTab.classList.contains("active") !== !lit) {
     baseTab.classList.toggle("active", !lit);
   }
@@ -16045,6 +17104,13 @@ function sideOf(item, sides) {
 // Стороны, которые вообще торгуют этим предметом. Из палитры, а не из снапшота:
 // окно может открыться раньше первого курса, а прайс — контент (см. `costChips`,
 // `prices` приезжает `Map`).
+// Уникальный продукт (§12.416): его добывают коты базы, а снаружи только
+// берут — строки покупки у него нет ни в окне, ни в ленте. Флаг контента из
+// палитры, как и сам прайс (`sidesOf`); `quote` в ядре отказывает по нему же.
+function sellOnly(item) {
+  return !!(meta.items ?? [])[item]?.unique;
+}
+
 function sidesOf(item) {
   const id = (meta.items ?? [])[item]?.id;
   return (meta.factions ?? [])
@@ -16206,7 +17272,17 @@ function buildStockWindow() {
       sendAction({ type: "setFavorite", item, on: !favorites.includes(item) }),
     );
     fav.classList.add("toggle", "ware-fav");
-    row.appendChild(fav);
+    // Глазик (§12.418) — рядом со звездой и по тому же доводу: про саму строку,
+    // а не про запас. Скрытая строка уезжает в группу «Скрытые» внизу списка,
+    // правила на предмете работают как работали.
+    const eye = mkTool(EYE_ICON, () =>
+      sendAction({ type: "setHidden", item, on: !hiddenItems.includes(item) }),
+    );
+    eye.classList.add("toggle", "ware-eye");
+    const marks = document.createElement("div");
+    marks.className = "ware-marks";
+    marks.append(fav, eye);
+    row.appendChild(marks);
 
     const name = document.createElement("div");
     name.className = "ware-name";
@@ -16493,6 +17569,7 @@ function buildStockWindow() {
       item,
       row,
       fav,
+      eye,
       name,
       label,
       num,
@@ -16511,6 +17588,22 @@ function buildStockWindow() {
       it,
     });
   });
+
+  // Группа «Скрытые» (§12.418): заголовок-кнопка под обычными строками,
+  // свёрнутая по умолчанию. Скрытое не исчезает совсем — иначе вернуть строку
+  // было бы нечем, — а уходит под заголовок со счётом.
+  hiddenHead = mkTool("", () => {
+    hiddenOpen = !hiddenOpen;
+    try {
+      localStorage.setItem("sp-hidden-open", hiddenOpen ? "1" : "0");
+    } catch {
+      /* без памяти — только на эту вкладку */
+    }
+    syncStockWindow();
+  });
+  hiddenHead.classList.add("toggle", "ware-hidden-head");
+  hiddenHead.hidden = true;
+  list.appendChild(hiddenHead);
 }
 
 // Сводка «что сейчас делается» в шапке окна (§12.107). Заказы едут в снимке
@@ -16718,7 +17811,18 @@ function syncStockWindow() {
     // темой, не нажать вовсе. Знание тут и есть знакомство: раз база умеет
     // это делать, предмет ей известен.
     const makeable = r.keeps.some((k) => recipeSnaps[k.def]?.unlocked);
-    r.row.hidden = !st.seen && !makeable;
+    // Скрытая игроком строка (§12.418) стоит под заголовком «Скрытые» и видна,
+    // только пока группа раскрыта; сюжетная вещь без запаса не стоит нигде.
+    r.shown = (st.seen || makeable) && !keepsakeGone(r.item);
+    r.tucked = hiddenItems.includes(r.item);
+    r.row.hidden = !r.shown || (r.tucked && !hiddenOpen);
+    r.eye.classList.toggle("on", r.tucked);
+    liveTitle(
+      r.eye,
+      r.tucked
+        ? "Вернуть строку в список"
+        : "Скрыть строку: уедет в группу «Скрытые» внизу",
+    );
     if (r.row.hidden) continue;
     const free = Math.max(0, st.stored - st.booked);
     const name = esc(itemKnownName(r.item));
@@ -17068,18 +18172,26 @@ function syncStockWindow() {
 
     if (r.rate) {
       const q = quoteOf(who, r.item);
-      const html = q
-        ? `${rateText(q, true)}<span class="ware-sep">·</span>${rateText(q, false)}`
-        : "—";
+      const only = sellOnly(r.item);
+      const html = !q
+        ? "—"
+        : only
+          ? rateText(q, false)
+          : `${rateText(q, true)}<span class="ware-sep">·</span>${rateText(q, false)}`;
       if (r.rate.innerHTML !== html) r.rate.innerHTML = html;
       liveTitle(
         r.rate,
-        q
-          ? `Покупка ${q.buy}¤ · продажа ${q.sell}¤ за штуку` +
+        !q
+          ? ""
+          : only
+            ? `Продажа ${q.sell}¤ за штуку · купить нельзя: добывают только коты` +
+              (q.next_in > 0
+                ? ` · через ${q.next_in} станет ${q.next_sell}¤`
+                : "")
+            : `Покупка ${q.buy}¤ · продажа ${q.sell}¤ за штуку` +
               (q.next_in > 0
                 ? ` · через ${q.next_in} станет ${q.next_buy}¤ / ${q.next_sell}¤`
-                : "")
-          : "",
+                : ""),
       );
     }
   }
@@ -17098,17 +18210,30 @@ function syncStockWindow() {
 // Избранные — наверх, остальные по палитре. Переставляем **узлы**, а не
 // разметку: строка переживает переезд вместе со слушателями, набором в поле и
 // удержанием кнопки, а `innerHTML` убил бы всё это (§12.84).
+//
+// Скрытые (§12.418) — после заголовка «Скрытые», тем же списком и тем же
+// проходом (§12.201): второй проход спорил бы с первым о порядке каждым кадром.
 function orderWareRows() {
   const list = stockWinEl.querySelector(".win-list");
   if (!list) return;
-  const want = [...wareRows].sort((a, b) => {
+  const sorted = [...wareRows].sort((a, b) => {
     const fa = favorites.includes(a.item) ? 0 : 1;
     const fb = favorites.includes(b.item) ? 0 : 1;
     return fa - fb || a.item - b.item;
   });
-  const now = [...list.children];
-  if (want.every((r, i) => now[i] === r.row)) return;
-  for (const r of want) list.appendChild(r.row);
+  const tucked = sorted.filter((r) => r.tucked);
+  const count = tucked.filter((r) => r.shown).length;
+  if (hiddenHead) {
+    hiddenHead.hidden = count === 0;
+    const label = `${hiddenOpen ? "▾" : "▸"} Скрытые · ${count}`;
+    if (hiddenHead.textContent !== label) hiddenHead.textContent = label;
+  }
+  const want = [
+    ...sorted.filter((r) => !r.tucked).map((r) => r.row),
+    ...(hiddenHead ? [hiddenHead] : []),
+    ...tucked.map((r) => r.row),
+  ];
+  orderChildren(list, want);
 }
 
 function openRaidWindow(x, y, pick = null) {
@@ -17168,18 +18293,50 @@ function soloFreeCat() {
 // ни другого отряда дома, ни свободного кота на базе. Ключ — клетка стола,
 // а не узел: узлы снимка пересоздаются каждым кадром.
 function soloFreeSquad() {
-  const home = nodes.filter((n) => !n.busy);
+  // Отряд правила не в счёт (§12.438): он не выбирается.
+  const home = nodes.filter((n) => !n.busy && !squadRuled(n));
   if (home.length !== 1) return null;
-  const loose = (lastSnap?.entities ?? []).some(
+  return anyLooseCat() ? null : `${home[0].x},${home[0].y}`;
+}
+// Каким `soloFreeSquad` был в прошлый раз — по той же причине, что `soloSeen`.
+let soloSquadSeen = null;
+// Кот ушёл в отряд (§12.412): `{id, x, y, tick}` — чего ждём от ядра. Когда
+// кот встал в состав или радистом и свободных на базе не осталось, этот
+// отряд выбирается: отмечать больше некого, а идти теперь ему. Команда могла
+// не пройти — тогда ожидание гаснет само через пару секунд мира.
+let joinFocus = null;
+function focusOnJoin(id, x, y) {
+  joinFocus = { id, x, y, tick: lastSnap?.tick ?? 0 };
+}
+// Есть ли на базе кот без отряда — то же выражение, что в `soloFreeSquad`.
+function anyLooseCat() {
+  return (lastSnap?.entities ?? []).some(
     (e) =>
       !e.away &&
       !(e.crew_x >= 0) &&
       !(e.post_x >= 0 && nodeAt(e.post_x, e.post_y)),
   );
-  return loose ? null : `${home[0].x},${home[0].y}`;
 }
-// Каким `soloFreeSquad` был в прошлый раз — по той же причине, что `soloSeen`.
-let soloSquadSeen = null;
+function applyJoinFocus() {
+  const f = joinFocus;
+  if (!f || !lastSnap) return;
+  const e = (lastSnap.entities ?? []).find((u) => u.id === f.id);
+  const joined =
+    e &&
+    ((e.crew_x === f.x && e.crew_y === f.y) ||
+      (e.post_x === f.x && e.post_y === f.y));
+  if (!joined) {
+    if ((lastSnap.tick ?? 0) > f.tick + 30) joinFocus = null;
+    return;
+  }
+  joinFocus = null;
+  if (anyLooseCat() || !nodeAt(f.x, f.y) || squadRuled(nodeAt(f.x, f.y)))
+    return;
+  raidWinAt = { x: f.x, y: f.y };
+  raidHome = false;
+  nearbyPick.clear();
+  syncNearbyPick();
+}
 // Каким `soloFreeCat` был в прошлый раз: автовыбор срабатывает на **смене**
 // (окно открылось, кот вернулся с вылазки), а не каждым кадром, — иначе
 // снятую игроком отметку тут же ставило бы обратно.
@@ -17230,7 +18387,6 @@ function outskirtsNode() {
     name: "Окрестности",
     nearby: true,
     auto: -1,
-    auto_on: false,
   };
 }
 
@@ -17318,6 +18474,9 @@ function onSquadRenamed(m) {
 
 function closeRaidWindow() {
   endSquadRename(true);
+  // Закрыть штаб посреди доклада — тоже «выслушал» (§12.436): иначе время
+  // осталось бы на паузе за закрытым окном. Вспышка базы дождётся входа.
+  endHomeReport();
   // Гасим на закрытии: колонка заказов в штабе видна **всегда**, даже когда
   // отряд в поле, — значит визит и есть «посмотрел» (§12.120). Но с §12.243
   // колонка режется участком, и прочитанным идёт лишь то, что показывалось.
@@ -17390,6 +18549,7 @@ function buildRaidWindow(key) {
     '<div class="raidwin-h">Карта</div>' +
     '<div class="map-holder"></div>' +
     '<div class="map-note"></div>' +
+    '<div class="home-report" hidden></div>' +
     "</div>" +
     '<div class="raidwin-col raidwin-jobs">' +
     '<div class="raidwin-h">Миссии</div>' +
@@ -17412,6 +18572,13 @@ function buildRaidWindow(key) {
     nearby: q(".raid-nearby"),
     cards: q(".raid-cards"),
     mapCol: q(".raidwin-map"),
+    jobsCol: q(".raidwin-jobs"),
+    report: q(".home-report"),
+    mapParts: [
+      q(".raidwin-map > .raidwin-h"),
+      q(".map-holder"),
+      q(".map-note"),
+    ],
     note: q(".map-note"),
     // Узлы участков — по индексу. Строятся **вместе с каркасом**, то есть один
     // раз на открытие окна и на смену вкладки: граф от вкладки не зависит, но
@@ -17574,6 +18741,7 @@ function buildSiteGraph(holder) {
       : [],
   );
   siteApproaches = all.map((s) => bowedTrail(P(home), P(s.at ?? [0, 0])));
+  siteSpots = all.map((_, i) => [px(i), py(i)]);
   siteTrails = all.map((_, i) => [
     ...siteApproaches[i],
     ...roadLines[i].slice(1),
@@ -17645,11 +18813,18 @@ function buildSiteGraph(holder) {
           `<line class="map-link" x1="${px(a)}" y1="${py(a)}" x2="${px(b)}" y2="${py(b)}"/>`,
       )
       .join("") +
+    // Куда расползётся очаг (§12.437): над рёбрами, под кружками.
+    `<defs><marker id="map-spread-head" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+    `<path class="map-spread-head" d="M0 0 L10 5 L0 10 Z"/></marker></defs>` +
+    `<g class="map-spreads"></g>` +
     `<g class="map-home" transform="translate(${hx},${hy})">` +
     `<path class="map-home-halo" d="${siteHex(SITE_R * 1.75)}"/>` +
     `<path class="map-hex" d="${siteHex(SITE_R * 1.4)}"/>` +
     siteGlyph("home", SITE_R * 1.3) +
     siteName("База", SITE_R * 1.75 + 16) +
+    // До осмотра входа база — силуэт «?» (§12.422), как неразведанный участок.
+    `<text class="map-fog-mark" y="6">?</text>` +
+    `<path class="map-home-flash" d="${siteHex(SITE_R * 1.4)}"/>` +
     `</g>` +
     all
       .map(
@@ -17684,8 +18859,9 @@ function buildSiteGraph(holder) {
   const homeMark = holder.querySelector(".map-home");
   if (homeMark && (meta?.missions ?? []).some((m) => m.nearby)) {
     homeMark.classList.add("pick");
+    // Выбор отряда клик не снимает (§12.407): База — место, а не «без
+    // отряда» (§12.355), и «Пошарить рядом» с §12.363 ходят и отряды.
     homeMark.onmousedown = () => {
-      raidHome = true;
       mapHome = true;
       mapPick = -1;
       renderRaidWindow();
@@ -17702,44 +18878,10 @@ function buildSiteGraph(holder) {
   // стоит в колонке справа. Закрытие окна остаётся вторыми воротами — для
   // участка, на который игрок не кликал, но чью карточку видел.
   marks.forEach((g, i) => {
-    // Плашка правила «↻N» (§12.295) — дорога к отряду, который сюда ходит:
-    // окно переходит на его вкладку. Это осмотр, как сама вкладка, поэтому
-    // мимо `sendAction`. Правил на участке бывает несколько («↻1,2») — тогда
-    // клик листает их по кругу от открытого отряда. Выбор участка при этом
-    // остаётся: событие всплывает до кружка ниже.
-    g.querySelector(".map-rule").onmousedown = (e) => {
-      const list = (e.currentTarget.dataset.nodes || "")
-        .split(";")
-        .filter(Boolean);
-      if (!list.length) return;
-      const now = raidWinAt ? `${raidWinAt.x},${raidWinAt.y}` : "";
-      const [x, y] = list[(list.indexOf(now) + 1) % list.length]
-        .split(",")
-        .map(Number);
-      raidWinAt = { x, y };
-      raidHome = false;
-    };
     g.onmousedown = (e) => {
       // Неразведанный участок не выбирается (§12.320): колонке нечего о нём
       // сказать, а подпись под картой назвала бы его по имени.
       if (g.classList.contains("fog")) return;
-      // Клик по самому участку, куда ходит правило, тоже ведёт к его отряду
-      // (§12.327): плашка «↻N» мала, а смотрят на участок ради заказа, у
-      // которого отряд уже есть. Открыт один из отрядов правила — остаёмся на
-      // нём; листать по кругу — дело плашки, её клик сюда только всплывает.
-      // В «Окрестностях» клик только выбирает участок (§12.349): заказы
-      // свободных котов фильтруются по карте так же, как у отряда.
-      if (!raidHome && !e.target.closest(".map-rule")) {
-        const list = (g.querySelector(".map-rule").dataset.nodes || "")
-          .split(";")
-          .filter(Boolean);
-        const now = raidWinAt ? `${raidWinAt.x},${raidWinAt.y}` : "";
-        if (list.length && !list.includes(now)) {
-          const [x, y] = list[0].split(",").map(Number);
-          raidWinAt = { x, y };
-          raidHome = false;
-        }
-      }
       // Участок без заказов — отправлять туда некого и не на что: выбор
       // отряда и отметки свободных котов снимаются.
       const orders = (meta?.missions ?? []).some(
@@ -17839,11 +18981,13 @@ function renderEmptyRaidWindow() {
 // Строка на фракцию про невиданные заказы, закрытые её недоверием (§12.246): сколько их и
 // какой порог. Порог — первая недостающая фракция из `needs`, та же, что
 // называет `trustGap`; у заказа с двумя порогами вторая ждёт своей очереди.
-function trustLines(node) {
+// Режется участком, как карточки (§12.405): `here` — то же выражение колонки.
+function trustLines(node, here) {
   const factions = meta?.factions ?? [];
   const byFaction = new Map();
   (meta?.missions ?? []).forEach((def, i) => {
-    if (hiddenRaid(i) || !untrustedRaid(i) || node.auto === i) return;
+    if (hiddenRaid(i) || !untrustedRaid(i) || node.auto === i || !here(i))
+      return;
     const needs = def.needs;
     const entries =
       needs instanceof Map ? [...needs.entries()] : Object.entries(needs ?? {});
@@ -17880,6 +19024,7 @@ function renderRaidWindow() {
       syncNearbyPick();
     }
   }
+  applyJoinFocus();
   const squad = soloFreeSquad();
   if (squad !== soloSquadSeen) {
     soloSquadSeen = squad;
@@ -17894,14 +19039,20 @@ function renderRaidWindow() {
   // свободный, иначе первый по порядку. Закрывать окно на снос нельзя: у базы
   // есть другие отряды, а если их нет — причина обязана быть названа словом
   // (§12.53), и говорит её сам штаб.
+  // Отряд на автомиссии выбранным не бывает (§12.438): правило, поставленное
+  // кнопкой ↻ или ▶ у выбранного отряда, тем же кадром снимает выбор, а
+  // запасной узел его не берёт. Выбрать некого — идут отмеченные свободные.
+  const named = raidWinAt && nodeAt(raidWinAt.x, raidWinAt.y);
   const node =
-    (raidWinAt && nodeAt(raidWinAt.x, raidWinAt.y)) ??
-    nodes.find((n) => !n.busy) ??
-    nodes[0];
+    (named && !squadRuled(named) ? named : null) ??
+    nodes.find((n) => !n.busy && !squadRuled(n)) ??
+    nodes.find((n) => !squadRuled(n)) ??
+    null;
+  if (named && squadRuled(named)) raidWinAt = null;
   // Окрестности (§12.349): без столов окно другим не бывает, а со столами —
   // по выбору игрока. Пустое окно с одной причиной осталось рулсету, где
   // нет ни столов, ни заказа без отряда.
-  if (!node && !(meta?.missions ?? []).length) {
+  if (!nodes.length && !(meta?.missions ?? []).length) {
     renderEmptyRaidWindow();
     return;
   }
@@ -17955,10 +19106,7 @@ function renderRaidWindow() {
   // Прогноз со свободными годится только «Пошарить рядом»: на дальние заказы
   // их не берут (§12.371), и карточка такого заказа считает отряд без них
   // (`squad`), иначе сила и доля обещали бы вылазку, которой не будет.
-  syncRaidCards(
-    sel && raid ? raid : null,
-    sel ?? outskirtsNode(),
-  );
+  syncRaidCards(sel && raid ? raid : null, sel ?? outskirtsNode());
   // Список вещей слота (§12.293) — один на всю колонку.
   syncSlotPop("raid");
   // Карта — **после карточек**: прокрутка к выбранному участку ищет их узлы.
@@ -18161,14 +19309,13 @@ function crewGroups(sel) {
   const busy = [];
   // Отряды на автомиссии (§12.400) — своей группой между свободными и ушедшими:
   // правило расписало их, на чужой заказ они не идут, — и дома, и в поле.
-  // Усыплённое правило (§12.77) отряд отпускает: он стоит в «Свободны».
   const ruled = [];
   const eta = (m) => (m.away ? m.left : m.total);
   for (const n of nodes) {
     const groups = [];
     const on = sel === n;
     const raid = missionsOut.find((m) => missionHolds(m, n.x, n.y));
-    if (n.auto >= 0 && n.auto_on) ruled.push(groups);
+    if (n.auto >= 0) ruled.push(groups);
     else if (n.busy && raid) busy.push({ eta: eta(raid), groups });
     else idle.push(groups);
     // У отряда в деле заказ, стадия и срок — подписью над шапкой, как у
@@ -18208,6 +19355,7 @@ function crewGroups(sel) {
         y: n.y,
         on,
         busy: n.busy,
+        ruled: squadRuled(n),
         folded,
         // В правке у имени карандаш переименования (§12.359).
         html: squadHeadHtml(
@@ -18405,6 +19553,14 @@ function syncCrewRows(sel) {
       b.dataset.y = g.sel.y;
       b.classList.toggle("on", g.sel.on);
       b.classList.toggle("away", !!g.sel.busy);
+      // Отряд на автомиссии не выбирается (§12.438) — гасим классом, а не
+      // `disabled` (§12.121), чтобы подсказка с дорогой назад показывалась.
+      b.classList.toggle("ruled", !!g.sel.ruled);
+      const stip = g.sel.ruled ? RULED_TIP : "";
+      if ((b.dataset.tip ?? "") !== stip) {
+        if (stip) b.dataset.tip = stip;
+        else delete b.dataset.tip;
+      }
       // Разметка шапки — только на изменении (§12.84), и сравнивается с
       // записанной строкой, а не с `innerHTML`: браузер сериализует его по-своему,
       // и сравнение с ним переписывало бы шапку каждым кадром.
@@ -18421,13 +19577,15 @@ function syncCrewRows(sel) {
       edit.dataset.y = g.sel.y;
       const editing = crewEditing(g.sel.x, g.sel.y);
       edit.classList.toggle("on", editing);
-      edit.classList.toggle("off", !!g.sel.busy);
+      edit.classList.toggle("off", !!g.sel.busy || !!g.sel.ruled);
       head.classList.toggle("editing", editing);
       const etip = g.sel.busy
         ? "Отряд в деле — состав заморожен до возвращения"
-        : editing
-          ? "Закончить правку состава (Escape)"
-          : "Изменить отряд: состав, радист, имя";
+        : g.sel.ruled
+          ? "Отряд на автомиссии — чтобы править его, поставьте правило на паузу (⏸)"
+          : editing
+            ? "Закончить правку состава (Escape)"
+            : "Изменить отряд: состав, радист, имя";
       if (edit.dataset.tip !== etip) edit.dataset.tip = etip;
       const ehtml = editing
         ? "Готово"
@@ -18451,7 +19609,8 @@ function syncCrewRows(sel) {
       head.classList.toggle("crew-section", !!g.section);
       head.classList.toggle("squad-crew", g.key.startsWith("sq") && !g.bare);
       head.classList.toggle("crew-mission", !!g.bare);
-      if (head.dataset.drop !== (g.drop ?? "")) head.dataset.drop = g.drop ?? "";
+      if (head.dataset.drop !== (g.drop ?? ""))
+        head.dataset.drop = g.drop ?? "";
       if (head.textContent !== g.head) head.textContent = g.head;
       order.push(head);
     }
@@ -18460,7 +19619,7 @@ function syncCrewRows(sel) {
       setHtml(trip, tripHtml(g.trip.m, g.trip.node));
       order.push(trip);
     } else if (g.rule) {
-      // Круг правила и его кнопки — одной строкой: подпись слева, ⏸/▶ и ×
+      // Круг правила и его кнопка — одной строкой: подпись слева, ×
       // справа, как у полосы вылазки.
       const n = g.rule;
       // Правило стоит не по воле игрока (отряд великоват, ждёт сбора, прогноз
@@ -18469,7 +19628,7 @@ function syncCrewRows(sel) {
       const rs = ruleState(n);
       // Имя заказа режется многоточием, а причина — нет: она и есть новость.
       const name =
-        `<span class="crew-rule-label">↻ ${rs.label}${n.auto_on ? "" : " · пауза"}</span>` +
+        `<span class="crew-rule-label">↻ ${rs.label}</span>` +
         (rs.stuck
           ? `<span class="bad"${rs.hold ? ` data-tip="${esc(rs.hold)}"` : rs.blocked ? ' data-tip="Заказ сейчас недоступен — почему, написано у его карточки"' : ""}>${rs.state}</span>`
           : "");
@@ -18518,29 +19677,18 @@ function syncCrewRows(sel) {
 //   заказ в виде одна, значит отзыв адресный). Кнопка стоит справа в той же
 //   полосе, и высота полосы от неё не зависит (`min-height`): на уходе она
 //   пропадает, а соседи по колонке не прыгают (§12.172).
-// * **Правило отряда** (⏸/▶ и ×) — тут же: снять или усыпить его на всё
-//   время похода больше негде.
-// ⏸/▶ и × правила автовылазки отряда (§12.67, §12.77). Стоят у отряда с
-// правилом всегда — и в поле, и дома, на паузе включительно (§12.400):
-// отряд на паузе стоит в «Свободны», и вернуть его на круг надо оттуда же,
-// не выбирая заказ второй раз.
+// * **Правило отряда** (×) — тут же: снять его на всё время похода больше
+//   негде.
+// × правила автовылазки отряда (§12.67). Стоит у отряда с правилом всегда — и
+// в поле, и дома (§12.400). Паузы у правила нет (§12.440): снятое правило
+// возвращает отряд в руки, а вернуть круг — «↻» в карточке заказа.
 function ruleButtons(node) {
   if (node.auto < 0 || autoGateHint("raids")) return "";
   const at = `${node.x},${node.y}`;
   return (
-    `<button class="tool raid-icon raid-pause${node.auto_on ? " on" : ""}"` +
-    ` data-key="pause@${at}" data-on="${node.auto_on ? "" : "1"}"` +
-    ` data-x="${node.x}" data-y="${node.y}"` +
-    ` data-tip="${
-      node.auto_on
-        ? `Отряд ходит на «${esc(missionLabel(node.auto))}» сам — приостановить правило`
-        : "Правило стоит на паузе — вернуть отряд на этот круг"
-    }">` +
-    (node.auto_on ? "⏸" : "▶") +
-    "</button>" +
     `<button class="tool raid-icon raid-auto" data-key="off@${at}" data-def="-1"` +
     ` data-x="${node.x}" data-y="${node.y}"` +
-    ' data-tip="Забыть правило совсем">×</button>'
+    ` data-tip="Отряд ходит на «${esc(missionLabel(node.auto))}» сам — снять правило и вернуть отряд в руки">×</button>`
   );
 }
 
@@ -18552,7 +19700,8 @@ function tripHtml(m, node) {
     : (!m.rescue && m.share < 100
         ? `<div class="raidwin-verdict"><span class="warn">доля ${m.share} %</span>` +
           `<i>сила ${m.strength} против сложности ${m.danger}</i></div>`
-        : "") + missionLootRow(def, m.share, !!m.samples, m.loot, m.gather, true);
+        : "") +
+      missionLootRow(def, m.share, !!m.samples, m.loot, m.gather, true);
   const act = [];
   if (!m.away)
     act.push(
@@ -18577,6 +19726,9 @@ function tripHtml(m, node) {
 // закрытые известностью **прячем, а не удаляем**: удаление вернуло бы
 // перестройку колонки на ровном месте.
 function syncRaidCards(raid, node) {
+  // Пока стоит доклад (§12.436), колонка спрятана — и прочитанной на
+  // закрытии не считается.
+  if (homeReport) return;
   // `raid` — вылазка выбранного отряда в деле, иначе `null`.
   // Заказ, на который уже ушли, из колонки **выброшен целиком** (§12.389) —
   // чей бы ни был поход: отряда, свободных котов или правила. Вылазка говорит
@@ -18630,9 +19782,7 @@ function syncRaidCards(raid, node) {
   );
   const want = (meta.missions ?? []).map((_, i) => [
     String(i),
-    open[i] && here(i)
-      ? raidCard(i, node)
-      : "",
+    open[i] && here(i) ? raidCard(i, node) : "",
     i,
   ]);
   // Отряд в деле (§12.361): колонка — только про его вылазку. Прочие заказы
@@ -18661,9 +19811,13 @@ function syncRaidCards(raid, node) {
     const place = base ? "База" : siteLabel(pick);
     want.push([
       "none",
-      busyHere || open.some(Boolean)
-        ? `<div class="cat-sub">на участке «${esc(place)}» ${busyHere ? "свободных " : ""}заказов нет — выбери другой на карте</div>`
-        : nothing,
+      // Карты ещё нет (§12.435): снаружи никто не был, и звать «на карту»
+      // некуда — ответ на «что дальше» стоит слева, у ушедшего кота.
+      mapUnmet()
+        ? '<div class="cat-sub">кот снаружи — что там, станет ясно, когда вернётся</div>'
+        : busyHere || open.some(Boolean)
+          ? `<div class="cat-sub">на участке «${esc(place)}» ${busyHere ? "свободных " : ""}заказов нет — выбери другой на карте</div>`
+          : nothing,
     ]);
   }
   // Что игрок здесь видел, — ради гашения новостей на закрытии (§12.243):
@@ -18702,10 +19856,11 @@ function syncRaidCards(raid, node) {
   // Заказы, закрытые репутацией и не виданные открытыми, — **строкой на
   // фракцию** внизу колонки, без карточек (§12.246): пока репутации нет, ни
   // добыча, ни срок ни в каком решении не участвуют, а нужны три вещи — что
-  // работа есть, у кого и насколько не хватает. Виданный остаётся карточкой. Про участок строка не знает намеренно: репутация —
-  // про сторону, а не про место, и колонка по участку её не режет. Прятать
+  // работа есть, у кого и насколько не хватает. Виданный остаётся карточкой.
+  // С §12.405 строка режется участком тем же `here`, что карточки: стоя под
+  // «Пошарить рядом» у Базы, она читалась как условие этого заказа. Прятать
   // совсем нельзя: репутация падает (§12.43), и заказы исчезали бы молча.
-  if (!(raid && !node.nearby)) want.push(["trust", trustLines(node)]);
+  if (!(raid && !node.nearby)) want.push(["trust", trustLines(node, here)]);
   // Заказ правила поднимается **над группами**, а не встаёт в «Остальное».
   if (ruled) {
     const at = want.indexOf(ruled);
@@ -18786,6 +19941,32 @@ function missionLootRow(def, share, samples, counts, gather, onlyGot = false) {
   if (def.rescue) {
     return '<div class="cat-sub">возвращает пленного, а не добычу</div>';
   }
+  // Круг пола словами (§12.406): дошёл заказ до круга — не «▤ 1», а «обычно
+  // ▤ 1 иногда ⚙ 1». Какая порция следующая, не говорим намеренно: игроку
+  // нужно знать, что детали тут бывают, а не расписание. Делит ядро
+  // (`RaidSnap::circle`); образцов в круге нет, прибор тут ни при чём.
+  const circle = raids[(meta?.missions ?? []).indexOf(def)]?.circle ?? [];
+  if (circle.length) {
+    const cut1 = (n) =>
+      share > 0 && share < 100 ? Math.floor((n * share) / 100) : n;
+    const part = (usual) => {
+      const m = new Map(
+        circle
+          .filter(([, , u]) => u === usual)
+          .map(([i, n]) => [(meta?.items ?? [])[i]?.id, cut1(n)]),
+      );
+      return m.size ? costChips(m, true) : "";
+    };
+    const usual = part(true);
+    const rare = part(false);
+    // Слова едут вместе с фишками справа (`.loot-mix`): «обычно», оставшееся
+    // слева у «добыча», читалось отдельно от того, к чему относится.
+    const said = [
+      usual ? `${rare ? "<i>обычно</i> " : ""}${usual}` : "",
+      rare ? `<i>иногда</i> ${rare}` : "",
+    ].filter(Boolean);
+    return `<div class="raidwin-loot">добыча <span class="loot-mix">${said.join(" ")}</span></div>`;
+  }
   // Убывающая добыча (§12.349): `loot` у заказа пуст, порцию этого выхода
   // называет ядро (`loot_for`) — числами `counts`.
   const depleting = (def.yields ?? []).length || (def.floor ?? []).length;
@@ -18840,7 +20021,9 @@ function missionLootRow(def, share, samples, counts, gather, onlyGot = false) {
     const gchips = costChips(new Map(chips.map(([id, c]) => [id, c])));
     if (chips.length && onlyGot) together = gchips + note;
     else if (chips.length)
-      rows.push(`<div class="raidwin-gather">вернутся с ${gchips}${note}</div>`);
+      rows.push(
+        `<div class="raidwin-gather">вернутся с ${gchips}${note}</div>`,
+      );
   }
   const lost = samples || onlyGot ? [] : gathered.filter(([id]) => seenId(id));
   // Не достанется — зачёркнутой фишкой в той же строке добычи, а причина — в
@@ -18906,10 +20089,7 @@ function raidCard(i, node) {
     ? { ...g0, busy: true }
     : g0;
   const at = `${node.x}, ${node.y}`;
-  const on = node.auto === i && node.auto_on;
-  // Усыплённое правило на этом же заказе — не «нет правила»: заказ узел помнит,
-  // и тумблер обязан будить его, а не заводить заново (§12.77).
-  const paused = node.auto === i && !node.auto_on;
+  const on = node.auto === i;
   const rows = [];
 
   // Прогноз — первым и крупно: это ответ на «стоит ли». Провал называем словом,
@@ -19216,25 +20396,14 @@ function raidCard(i, node) {
   // производства ждёт материала, и поставить его заранее — это план (§12.67).
   // А вот до самой технологии тумблера нет вовсе: автоматики в игре ещё не
   // существует, и кнопка обещала бы механику, о которой игрок не знает.
-  // Решений по правилу три, и все три — квадратные значки одного размера
-  // (§12.77): поставить круг (`↻`), приостановить его (`⏸`/`▶`) и забыть
-  // совсем (`×`). Стоят они у самой карточки заказа, к которому относятся, —
+  // Решений по правилу два, и оба — квадратные значки одного размера:
+  // поставить круг (`↻`) и снять его (`×`); паузы с §12.440 нет. Стоят они у самой карточки заказа, к которому относятся, —
   // строкой над колонкой их больше нет: та повторяла имя заказа, уже написанное
   // в карточке, и занимала целый ярус ради двух кнопок.
   const auto = autoGate
     ? ""
-    : on || paused
-      ? `<button class="tool raid-icon raid-pause${on ? " on" : ""}"` +
-        ` data-key="auto${i}@${at}" data-on="${on ? "" : "1"}"` +
-        ` data-x="${node.x}" data-y="${node.y}"` +
-        ` data-tip="${
-          on
-            ? "Отряд ходит сюда сам — приостановить правило"
-            : "Правило стоит на паузе — вернуть отряд на этот круг"
-        }">` +
-        (on ? "⏸" : "▶") +
-        "</button>" +
-        `<button class="tool raid-icon raid-auto" data-key="off${i}@${at}" data-def="-1"` +
+    : on
+      ? `<button class="tool raid-icon raid-auto" data-key="off${i}@${at}" data-def="-1"` +
         ` data-x="${node.x}" data-y="${node.y}"` +
         ' data-tip="Забыть правило совсем">×</button>'
       : `<button class="tool raid-icon raid-auto"` +
@@ -19325,7 +20494,7 @@ function ruleState(node) {
   // правило решает, идти ли (§12.117).
   //
   // Пока отряд в поле, спрашивать не о чем: `busy` вытесняет обе причины.
-  const holding = !blocked && node.auto_on && !node.busy;
+  const holding = !blocked && !node.busy;
   // Третья причина простоя, и она **старше двух остальных**: заказ не уводит
   // больше `squad_max`, и `launch_at` отказывает по длине приписки — молча, до
   // всякого прогноза. Пока строка о ней молчала, лишний кот в отряде выглядел
@@ -19362,25 +20531,19 @@ function ruleState(node) {
     ? "выйти некуда"
     : blocked
       ? "недоступно"
-      : !node.auto_on
-        ? // Названо ровно тем же словом, что и значок под ним (§12.53):
-          // «неактивно» не отвечало на «а что случилось» — правило не сломалось
-          // и не закрылось, его приостановил сам игрок, и вернуть круг можно
-          // тем же значком.
-          "пауза"
-        : over
-          ? "отряд великоват"
-          : gathering
-            ? "ждёт сбора"
-            : naked
-              ? "нечего надеть"
-              : lesson
-                ? "ждёт конца урока"
-                : weak
-                  ? node.auto_fail
-                    ? "прогноз: провал"
-                    : `прогноз: ${node.auto_share} %`
-                  : "автовылазка";
+      : over
+        ? "отряд великоват"
+        : gathering
+          ? "ждёт сбора"
+          : naked
+            ? "нечего надеть"
+            : lesson
+              ? "ждёт конца урока"
+              : weak
+                ? node.auto_fail
+                  ? "прогноз: провал"
+                  : `прогноз: ${node.auto_share} %`
+                : "автовылазка";
   const hold = nogate
     ? nogate
     : over
@@ -19410,15 +20573,14 @@ function ruleState(node) {
               : "";
   // Слово — причина простоя, а не обычное состояние: его стоит показать
   // и у отряда в списке.
-  const stuck =
-    !!nogate || blocked || (node.auto_on && !!hold && !node.busy);
+  const stuck = !!nogate || blocked || (!!hold && !node.busy);
   return { label, state, hold, blocked, nogate, stuck };
 }
 
 function ruleRow(node) {
   const { label, state, hold, blocked, nogate } = ruleState(node);
   return (
-    `<div class="raid-rule${node.auto_on ? "" : " off"}${
+    `<div class="raid-rule${
       blocked || nogate ? " blocked" : ""
     }${hold ? " holding" : ""}">` +
     `<span${
@@ -19469,7 +20631,8 @@ function selectCursor() {
 }
 
 // Режим стройки без инструмента: раздел «Постройка» раскрыт, а тайл ещё не
-// взят. Карта в нём ничего не делает — ни строит, ни выбирает котов.
+// взят. Клик по клетке в нём выводит из режима, как Escape (§12.457), — ни
+// строит, ни выбирает котов.
 function selectBuildIdle() {
   mode = "build";
   buildTile = null;
@@ -19477,6 +20640,64 @@ function selectBuildIdle() {
   activate(null);
   applyModeChrome();
   askBuildMask(null);
+}
+
+// Плоская кнопка разбора (§12.448): сворачивает «Постройку» (`openOnly` кладёт
+// её инструмент) и берёт свой. Повторный клик по взятой — выход из режима
+// целиком: раздела под ней нет, и «режим без инструмента» тут ничего не значит.
+function takeFlatTool(tile, btn) {
+  // Кольцо «новое» (§12.449) гаснет на первом клике по самой кнопке.
+  btn.classList.remove("fresh");
+  if (btn.classList.contains("active")) {
+    selectCursor();
+    return;
+  }
+  selectBuild(tile, btn);
+}
+
+// Положить инструмент из рук: в раскрытой «Постройке» остаётся режим без
+// инструмента, вне её — режима нет вовсе (§12.448).
+function putDownTool() {
+  if (openSection === "Постройка") selectBuildIdle();
+  else selectCursor();
+}
+
+// Пустой тулбар не рисуется вовсе (§12.449): на старте в нём не видно ни
+// одного раздела и ни одной кнопки — «Постройка» ждёт палитры, «Расчистить»
+// первого разбора, «Правила» склада или лежанки, — и пустая рамка читалась
+// как сломанное меню. Прячем `visibility`, а не `hidden`: место под ним
+// `layout` по-прежнему вычитает, и карта не прыгнет под курсором, когда
+// первая кнопка появится. Пишем только на изменении (§12.84).
+function syncToolbarBare() {
+  const bar = document.getElementById("toolbar");
+  if (!bar) return;
+  // Дверь «Приказы» (§12.451): видна, пока в панели есть хоть что-то.
+  if (ordersDoor) {
+    const none = [rubbleBtn, eraseBtn, rulesBox].every((b) => !b || b.hidden);
+    if (ordersDoor.hidden !== none) ordersDoor.hidden = none;
+    if (none && openSection === "Приказы") openOnly(null);
+  }
+  // С §12.451 тулбар — панель открытой двери: без раздела его нет.
+  const bare =
+    openSection === null || ![...bar.children].some((c) => !c.hidden);
+  if (bar.classList.contains("bare") !== bare)
+    bar.classList.toggle("bare", bare);
+}
+
+// Кнопка «Расчистить» видна, пока на карте есть завал (§12.432): без него
+// инструменту нечего брать, и кнопка отвечала бы кликом «ничего».
+// Ушёл последний — инструмент кладётся из рук.
+//
+// И только после первого разбора завала (§12.449, `rubble_met` из ядра):
+// расчистку узнают с одной клетки — панель или приказ коту, — а инструмент на
+// всю базу приходит следом. Признак монотонный, кнопка не пропадает.
+function syncRubbleTool() {
+  if (!rubbleBtn || !meta || !mapCells) return;
+  const met = rubbleSeen === true;
+  const any = mapCells.some((t) => isRubble(meta.palette[t]));
+  const hide = !(met && any);
+  if (rubbleBtn.hidden !== hide) rubbleBtn.hidden = hide;
+  if (!any && mode === "build" && buildTile === RUBBLE_TOOL) putDownTool();
 }
 
 function toolInHand() {
@@ -19571,7 +20792,10 @@ app.ticker.add(stepUnits);
 // Пульс рамки над руиной (§12.376): по настенным часам — это приглашение, а не
 // мир, и на паузе ему стоять незачем.
 app.ticker.add(() => {
-  if (ruinKey) ruinGfx.alpha = 0.45 + 0.45 * Math.sin(performance.now() / 260);
+  if (!ruinKey) return;
+  const t = performance.now() / 260;
+  for (const f of ruinFrames.children)
+    f.alpha = 0.45 + 0.45 * Math.sin(t + f.phase);
 });
 // Свет — после шага котов: пятно у кота едет за уже сдвинутым узлом.
 app.ticker.add((t) => lighting.frame(units, t.deltaMS, speed));
