@@ -1711,6 +1711,40 @@ body.crew-dragging * {
 #tickers[hidden] {
   display: none;
 }
+
+/* Сторож (§12.462): та же карточка, что у соседей, с тёплой кромкой слева —
+   тревога, а не отказ (`--warn`, а не `--bad`). Строка целиком кликабельна. */
+#watch {
+  padding: 8px 12px;
+  background: rgba(21, 23, 31, 0.92);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: 10px;
+  backdrop-filter: blur(4px);
+  font-size: 13px;
+}
+#watch[hidden] {
+  display: none;
+}
+#watch .watch-row {
+  cursor: pointer;
+}
+#watch .watch-row + .watch-row {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+#watch .watch-head {
+  color: var(--warn);
+  font-weight: 600;
+}
+#watch .watch-sub {
+  color: var(--muted);
+  font-size: 11px;
+}
+#watch .watch-row:hover .watch-head {
+  text-decoration: underline;
+}
 /* Тикеры идут одной карточкой, поэтому второй и следующие отделяются линией —
    как группы сделок и строки записки. */
 #tickers .tick-row + .tick-row {

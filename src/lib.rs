@@ -80,6 +80,7 @@ mod snapshot;
 mod things;
 mod timeline;
 mod trade;
+mod watch;
 
 #[cfg(test)]
 mod tests;

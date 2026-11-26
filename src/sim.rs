@@ -514,6 +514,13 @@ impl Sim {
     /// §12.131), значит тема умеет открыться и не умеет закрыться — и это
     /// правда о мире, а не упущение.
     pub(crate) fn topic_is_open(&mut self, def: usize) -> bool {
+        self.topic_awaits_lab(def) && self.has_lab()
+    }
+
+    /// Тема готова ко всему, кроме места: технологии, находка и учёный —
+    /// первые трое ворот `topic_is_open` (§12.222). Отдельно её спрашивает
+    /// сторож (§12.462): «темы есть, а лаборатории нет» — ровно этот случай.
+    pub(crate) fn topic_awaits_lab(&mut self, def: usize) -> bool {
         let Some(rule) = self.world.resource::<ResearchRules>().0.get(def).cloned() else {
             return false;
         };
@@ -524,10 +531,7 @@ impl Sim {
         if !rule.specimen.iter().all(|&(item, _)| seen.saw(item)) {
             return false;
         }
-        if !self.topic_mastered(def) {
-            return false;
-        }
-        self.has_lab()
+        self.topic_mastered(def)
     }
 
     /// Дорастал ли хоть кто-то до уровней, которых ждёт тема (§12.259). Одно
@@ -7893,6 +7897,103 @@ impl Sim {
         out
     }
 
+    /// Сторож (§12.462): тревоги для панели справа. Каждая — уже существующий
+    /// отказ ядра тем же выражением, каким его считает работа (`watch.rs`).
+    pub(crate) fn watch(&mut self) -> Vec<crate::snapshot::WatchSnap> {
+        use crate::snapshot::WatchSnap;
+        let mut out = Vec::new();
+
+        // Склад полон: помеченное на склад, которому нигде нет места.
+        let piles: Vec<((i32, i32), usize, i32, bool)> = {
+            let mut q = self.world.query::<(&Position, &Stack, Option<&ToStore>)>();
+            q.iter(&self.world)
+                .map(|(p, s, mark)| ((p.x, p.y), s.item, s.count, mark.is_some()))
+                .collect()
+        };
+        let short = crate::watch::store_short(
+            self.world.resource::<BaseMap>(),
+            self.world.resource::<TileRules>(),
+            self.world.resource::<Bins>(),
+            &piles,
+        );
+        if short > 0 {
+            out.push(WatchSnap {
+                kind: "store_full".into(),
+                count: short,
+                units: Vec::new(),
+                defs: Vec::new(),
+            });
+        }
+
+        // Лежанки нет: свободной лежанки ни одной, а кто-то спит на полу или
+        // устал и лечь ему некуда. Есть свободная — раздатчик уложит сам.
+        let tired = self.world.resource::<NeedRules>().tired;
+        let cats: Vec<(String, (i32, i32), i32, Option<Option<(i32, i32)>>)> = {
+            let mut q = self.world.query_filtered::<
+                (&UnitId, &Position, &Energy, Option<&Rest>),
+                (Without<Away>, Without<Healing>),
+            >();
+            q.iter(&self.world)
+                .map(|(id, p, e, r)| (id.0.clone(), (p.x, p.y), e.0, r.map(|r| r.spot)))
+                .collect()
+        };
+        let lying: Vec<((i32, i32), Option<(i32, i32)>)> = cats
+            .iter()
+            .filter_map(|(_, pos, _, rest)| rest.map(|spot| (*pos, spot)))
+            .collect();
+        let map = self.world.resource::<BaseMap>();
+        let rules = self.world.resource::<TileRules>();
+        if crate::watch::free_beds(map, rules, &lying).is_empty() {
+            let mut units: Vec<String> = cats
+                .iter()
+                .filter(|(_, pos, energy, rest)| match rest {
+                    // Упал где стоял и не на лежанку.
+                    Some(spot) => spot.is_none() && rules.rest_of(map.tile_at(pos.0, pos.1)) <= 0,
+                    None => tired > 0 && *energy <= tired,
+                })
+                .map(|(id, ..)| id.clone())
+                .collect();
+            units.sort();
+            if !units.is_empty() {
+                let beds = map.cells.iter().any(|&t| rules.rest_of(t) > 0);
+                out.push(WatchSnap {
+                    kind: if beds { "beds_taken" } else { "no_bed" }.into(),
+                    count: units.len() as i32,
+                    units,
+                    defs: Vec::new(),
+                });
+            }
+        }
+        // Лаборатории нет, а темы ждут (§12.462): тема готова ко всему, кроме
+        // места, и лаборатория уже в палитре. Пока её нет в палитре, сторож
+        // молчит — иначе он называл бы постройку, о которой игра ещё не
+        // говорила (§12.126, §12.211).
+        if !self.has_lab() {
+            let lab_open = (0..self.world.resource::<TileRules>().0.len()).any(|t| {
+                self.world.resource::<TileRules>().is_lab(t as i16) && self.tile_is_open(t)
+            });
+            if lab_open {
+                let rules = self.world.resource::<ResearchRules>().0.clone();
+                let mut topics: Vec<usize> = Vec::new();
+                for (def, rule) in rules.iter().enumerate() {
+                    if !self.world.resource::<Techs>().knows(&rule.id) && self.topic_awaits_lab(def)
+                    {
+                        topics.push(def);
+                    }
+                }
+                if !topics.is_empty() {
+                    out.push(WatchSnap {
+                        kind: "no_lab".into(),
+                        count: topics.len() as i32,
+                        units: Vec::new(),
+                        defs: topics,
+                    });
+                }
+            }
+        }
+        out
+    }
+
     /// Разбирали ли завал хоть раз (§12.449) — то, что едет в снимок.
     pub(crate) fn rubble_met(&self) -> bool {
         self.world.resource::<RubbleMet>().0
@@ -9598,6 +9699,7 @@ impl Sim {
             rubble_met: self.rubble_met(),
             ruins_mute,
             cells_far,
+            watch: self.watch(),
             nodes,
             nearby,
             free: free_ids,

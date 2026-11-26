@@ -52,6 +52,7 @@ mod timeline;
 mod trade;
 mod tutoring;
 mod voids;
+mod watch;
 mod wiki;
 
 use bevy_ecs::prelude::*;

@@ -345,19 +345,13 @@ pub(crate) fn assign_rest(
 ) {
     // Занято и то, к чему идут, и то, на чём лежат: кот, свалившийся прямо на
     // лежанку, места в `Rest` не держит, но занимает его собой.
-    let mut taken: Vec<(i32, i32)> = Vec::new();
-    for (pos, rest) in &resting {
-        taken.extend(rest.spot);
-        if rules.rest_of(map.tile_at(pos.x, pos.y)) > 0 {
-            taken.push((pos.x, pos.y));
-        }
-    }
-
-    let mut free: Vec<(i32, i32)> = (0..map.height)
-        .flat_map(|y| (0..map.width).map(move |x| (x, y)))
-        .filter(|&(x, y)| rules.rest_of(map.tile_at(x, y)) > 0)
-        .filter(|cell| !taken.contains(cell))
+    // Одно выражение со сторожем (§12.462): иначе он кричал бы «лежанки нет»,
+    // пока раздатчик видит свободную.
+    let lying: Vec<((i32, i32), Option<(i32, i32)>)> = resting
+        .iter()
+        .map(|(pos, rest)| ((pos.x, pos.y), rest.spot))
         .collect();
+    let mut free = crate::watch::free_beds(&map, &rules, &lying);
     if free.is_empty() {
         return; // лежанок нет вовсе или все заняты — работаем до упора
     }

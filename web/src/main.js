@@ -381,6 +381,7 @@ const researchEl = document.getElementById("research");
 const craftEl = document.getElementById("craft");
 const dealEl = document.getElementById("deal");
 const tapeEl = document.getElementById("tickers");
+const watchEl = document.getElementById("watch");
 const noteEl = document.getElementById("note");
 const goalsEl = document.getElementById("goals");
 const goalsToggleEl = document.getElementById("goals-toggle");
@@ -3660,12 +3661,23 @@ function renderSnapshot(snap) {
     })
     .filter(Boolean)
     .join(" ");
+  // «Ресурсы не выбраны» зовёт в окно «Ресурсы», а его двери нет, пока база
+  // не видела ни одного предмета (§12.380) — те же ворота `seen`: причина,
+  // отсылающая к несуществующей двери, это подпись к ничему (§12.73).
+  const anySeen = (snap.stock ?? []).some((st) => st?.seen);
   scrapEl.innerHTML =
     (pinned ||
-      `<span class="stock off" data-tip="Ресурсы в шапку не выбраны: ` +
-        `отметьте нужные звёздочкой в окне «Ресурсы»">` +
-        `ресурсы не выбраны</span>`) +
-    `<span class="fame" data-tip="Известность">★<b>${fame}</b></span>` +
+      (anySeen
+        ? `<span class="stock off" data-tip="Ресурсы в шапку не выбраны: ` +
+          `отметьте нужные звёздочкой в окне «Ресурсы»">` +
+          `ресурсы не выбраны</span>`
+        : "")) +
+    // Известность в шапке — с первого очка (§12.463): «★ 0» — цифра без
+    // вопроса, как незнакомая фракция (§12.214). Шкала только растёт (§12.24),
+    // значит появившись, звезда не пропадёт.
+    (fame > 0
+      ? `<span class="fame" data-tip="Известность">★<b>${fame}</b></span>`
+      : "") +
     // Репутация рядом с известностью, но врозь: та отвечает «насколько высоко»
     // и только копится, эта — «от кого» и ходит в обе стороны (§12.43). Знак
     // пишем всегда: «0» и «−0» читаются одинаково, а «+20» и «−20» — нет.
@@ -3740,6 +3752,7 @@ function renderSnapshot(snap) {
   renderResearchPanel(snap.research);
   renderCraftPanel(snap.crafting);
   renderTickers();
+  renderWatch(snap);
   renderTradePanel(snap.deals);
   syncRecruitButtons(snap.recruits);
   syncTopicButtons(snap.topics);
@@ -7425,6 +7438,115 @@ function dealGroups(deals) {
 // нажать было нельзя. Наверху над ней не всплывает ничто, поэтому кнопка стоит
 // на месте. Порядок панелей здесь — не украшение, а условие того, что по кнопке
 // можно попасть.
+// --- сторож (§12.462) ---------------------------------------------------------
+//
+// Панель тревог: склад полон, негде спать, нет лаборатории. Что тревожно, решает **ядро**
+// (`Snapshot::watch`, тем же выражением, каким работа видит отказ, —
+// инвариант 14), а вид только называет тег словом и держит строку на месте.
+//
+// ⚠️ **Строка не мигает** (§12.169): тревога встаёт, только продержавшись
+// `WATCH_RISE` тиков, и гаснет, только пропав на `WATCH_FALL` — иначе склад,
+// который коты то наполняют, то разгружают, дёргал бы колонку под курсором.
+// Счёт в тиках, а не в секундах: на паузе мир стоит, и тревога тоже.
+const WATCH_RISE = 30;
+const WATCH_FALL = 18;
+// «Нет лаборатории» встаёт вместе с новостью «в палитре появилась
+// Лаборатория», и тем же кадром это дубль (§12.462). Поэтому строка ждёт, пока
+// тикер новости догорит (`meta.news` тиков): сторож подхватывает то, что
+// пролетело, а не повторяет то, что ещё на экране.
+function watchRise(kind) {
+  return kind === "no_lab" ? Math.max(WATCH_RISE, meta?.news ?? 0) : WATCH_RISE;
+}
+// Тег → { since, last, row }: с какого тика тревога держится, когда видели
+// последний раз и её последняя строка (её и показываем, пока гаснет).
+const watchSeen = new Map();
+const WATCH_WORDS = {
+  store_full: (w) => ({
+    head: "Склад полон",
+    sub: `ждёт места: ${plural(w.count, "штука", "штуки", "штук")}`,
+    tip: "Уборке есть что везти, а места на складе нет. Постройте ещё склад или стеллаж.",
+  }),
+  no_bed: (w) => ({
+    head: "Негде спать",
+    sub: `лежанок нет · ${w.units.map(esc).join(", ")}`,
+    tip: "Уставшие коты спят на полу — там сон вшестеро медленнее. Нужна лежанка.",
+  }),
+  // Темы готовы ко всему, кроме места (§12.462): ядро молчит, пока
+  // лаборатории нет в палитре, поэтому строка не зовёт строить невиданное.
+  no_lab: (w) => {
+    const names = (w.defs ?? []).map((d) => esc(topicLabel(d)));
+    const sub =
+      names.length > 2
+        ? `ждут: ${names.slice(0, 2).join(", ")} и ещё ${names.length - 2}`
+        : `ждут: ${names.join(", ")}`;
+    return {
+      head: "Нет лаборатории",
+      sub,
+      tip: "Темы можно начать, но изучать их негде. Лаборатория — в «Постройках».",
+    };
+  },
+  beds_taken: (w) => ({
+    head: "Негде спать",
+    sub: `все лежанки заняты · ${w.units.map(esc).join(", ")}`,
+    tip: "Лежанки есть, но на всех не хватает: уставшие спят на полу. Нужна ещё лежанка.",
+  }),
+};
+
+function renderWatch(snap) {
+  const tick = snap.tick ?? 0;
+  const now = new Map((snap.watch ?? []).map((w) => [w.kind, w]));
+  for (const [kind, w] of now) {
+    const seen = watchSeen.get(kind);
+    if (seen && tick - seen.last <= WATCH_FALL) {
+      seen.last = tick;
+      seen.row = w;
+    } else watchSeen.set(kind, { since: tick, last: tick, row: w });
+  }
+  const shown = [];
+  for (const [kind, seen] of watchSeen) {
+    if (tick < seen.last || tick - seen.last > WATCH_FALL) {
+      // Ушло насовсем (или мир сменился — тик пошёл назад).
+      watchSeen.delete(kind);
+      continue;
+    }
+    if (seen.last - seen.since >= watchRise(kind)) shown.push([kind, seen.row]);
+  }
+  if (!shown.length || !meta) {
+    watchEl.hidden = true;
+    return;
+  }
+  // Порядок — по списку, а не по приходу: строки не меняются местами.
+  // Сперва вред коту, потом застрявшее решение (§12.462).
+  const order = ["no_bed", "beds_taken", "store_full", "no_lab"];
+  shown.sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
+  const rows = shown.map(([kind, w]) => {
+    const words = WATCH_WORDS[kind]?.(w);
+    if (!words) return "";
+    return `<div class="watch-row" data-key="${kind}" data-tip="${esc(words.tip)}">
+      <div class="watch-head">${words.head}</div>
+      <div class="watch-sub">${words.sub}</div>
+    </div>`;
+  });
+  watchEl.innerHTML = rows.join("");
+  watchEl.hidden = false;
+}
+
+// Клик ведёт туда, где тревога чинится (§12.75): склад и лаборатория — в «Постройки»,
+// коты — выбор этих котов (панель кота скажет, что с ними).
+onPanelClick(watchEl, ".watch-row", (row) => {
+  const kind = row.dataset.key;
+  const w = watchSeen.get(kind)?.row;
+  if (!w) return;
+  if (kind === "store_full" || kind === "no_lab") {
+    if (openSection !== "Постройка" || topWindow()) toggleToolDoor("Постройка");
+    return;
+  }
+  if (w.units?.length) {
+    selectedUnits = [...w.units];
+    updateSelectionOverlay();
+  }
+});
+
 function renderTickers() {
   syncTradeButtons();
   if (!tickers.length || !meta) {

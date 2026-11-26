@@ -109,6 +109,12 @@ cargo test whole_room_is_erased_completely -- --nocapture
   `things` (**вещи**, §12.317: штука предмета со своим состоянием — `Thing`, место `Place`,
   параметры `Wear` и `Charges`; счёт остаётся числом, а сходятся они одной системой
   `reconcile_things`, см. инвариант 29).
+  `watch` (**сторож**, §12.462: тревоги справа — «склад полон», «негде спать», «нет лаборатории»;
+  наблюдатель без системы, как цели; `Sim::watch` → `Snapshot::watch`, а свободные лежанки —
+  `free_beds`, одно выражение с `assign_rest`; темы, ждущие только места, —
+  `Sim::topic_awaits_lab`, первые трое ворот `topic_is_open`; лаборатория вне палитры —
+  молчание; строка — застрявшее решение или вред коту, а не отсутствие
+  постройки; гистерезис по тикам держит вид, `renderWatch`).
   Своего модуля нет у **ленты новостей** (§12.120): `News` — ресурс в `components`, а пишет в
   него наблюдатель `Sim::note_news` — в фасаде и **после** цепочки, как `check_goals` читает
   сложившийся тик. Системы у неё нет и быть не должно: ворота считает фасад
@@ -402,6 +408,9 @@ cargo test whole_room_is_erased_completely -- --nocapture
   и у роли клетки; отказ кнопки, срок, доля и вилка состава остаются словами (§12.53, §12.71).
   Цветной квадратик `.chip` остался у **репутации фракций**: она не существительное, которое
   таскают по базе, а сторона со знаковой шкалой (§12.43).
+  ⚠️ **«★ 0» и «ресурсы не выбраны» в шапке не стоят** (§12.463): звезда — с первого очка
+  известности, причина — с первого виденного предмета (те же ворота `seen`, что у двери
+  «Ресурсы», §12.380).
   ⚠️ **Незнакомой фракции и незаведённого счёта в шапке нет вовсе** (§12.214). Обе шкалы
   показываются **монотонно** и выводятся из журналов, а не из самих величин: репутация умеет
   вернуться в ноль, деньги тратятся до нуля, — и спрятанная обратно шкала сказала бы «этого в
@@ -2314,10 +2323,10 @@ note_seen → note_reached → check_goals`.
 
 ## Тесты
 
-1148 тестов живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `nearby` · `opening` · `combined` · `jobs` · `demolition` ·
+1162 теста живут в `src/tests/` по механикам (`paths` · `voids` · `orders` · `nearby` · `opening` · `combined` · `jobs` · `demolition` ·
 `hauling` · `tidying` · `skills` · `stats` · `study` · `research` · `needs` · `news` · `food` · `health` · `items` · `layers` · `missions` · `muster` ·
 `captivity` · `fame` · `factions` · `trade` · `terrain` · `timeline` · `gear` · `crafting` · `crowd` · `panel` ·
-`goals` · `hand` · `record` · `relay` · `sampling` · `save` · `seen` · `self_study` · `sites` · `structures` · `things` · `tutoring` · `bins` · `tech_tree` · `wiki`); общие хелперы и сборка мира —
+`goals` · `hand` · `record` · `relay` · `sampling` · `save` · `seen` · `self_study` · `sites` · `structures` · `things` · `tutoring` · `bins` · `tech_tree` · `watch` · `wiki`); общие хелперы и сборка мира —
 в `tests/mod.rs`. Мир собирается из ASCII-схем, минуя YAML:
 
 ```rust
