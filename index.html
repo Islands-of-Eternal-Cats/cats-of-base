@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SP / Эсперы — POC</title>
-    <script type="module" crossorigin src="/cats-of-base/assets/index-Cpv7NTzZ.js"></script>
+    <script type="module" crossorigin src="/cats-of-base/assets/index-DoK6fhR9.js"></script>
     <link rel="modulepreload" crossorigin href="/cats-of-base/assets/pixi-Cj9fCruj.js">
-    <link rel="stylesheet" crossorigin href="/cats-of-base/assets/index-C1kFT1FR.css">
+    <link rel="stylesheet" crossorigin href="/cats-of-base/assets/index-BzUCAhN9.css">
   </head>
   <body>
     <header>
@@ -59,6 +59,10 @@
            клик по «Продать» промахивался. Наверху над ней ничего не всплывает,
            значит кнопка стоит там же, где её нажали в прошлый раз. -->
       <aside id="tickers" hidden></aside>
+      <!-- Сторож (§12.462): тревоги — решение игрока не исполняется или коту
+           плохо. Сразу под лентой: она обязана стоять первой (§12.100), а
+           тревога — первым, что читают ниже неё. -->
+      <aside id="watch" hidden></aside>
       <aside id="goals" hidden></aside>
       <aside id="cat" hidden></aside>
       <aside id="cell" hidden></aside>
