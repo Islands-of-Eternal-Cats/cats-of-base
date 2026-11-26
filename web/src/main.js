@@ -34,6 +34,7 @@ import {
   wikiReady,
   articleTarget,
   renderArticle,
+  renderGist,
   setArticleAlias,
   setArticleGate,
   setArticleTeased,
@@ -960,16 +961,6 @@ onPanelClick(raidWinEl, ".raid-auto", (b) =>
     y: Number(b.dataset.y),
   }),
 );
-// Пауза правила (§12.77). Мир она меняет — значит `sendAction`. `data-on` уже
-// несёт то, что надо отправить: пусто у «приостановить», «1» у «возобновить».
-onPanelClick(raidWinEl, ".raid-pause", (b) =>
-  sendAction({
-    type: "setAutoRaidOn",
-    on: !!b.dataset.on,
-    x: Number(b.dataset.x),
-    y: Number(b.dataset.y),
-  }),
-);
 // Переключение узла внутри окна — осмотр, а не команда: `sendAction` тут не при
 // чём. Отряды листаются на месте, чтобы «перекинуть кота с узла на узел» не
 // требовало закрывать окно и искать вторую рацию на карте.
@@ -1528,6 +1519,12 @@ worker.onmessage = (e) => {
     homeReport = null;
     wikiOpenSeen = null;
     wikiQueue = [];
+    wikiAnnounced.clear();
+    // Выжимки прошлой партии новому миру ни к чему (§12.442): отпускаем
+    // держащую страницу и закрываем её, а отложенное за ней — про чужой мир.
+    wikiHeld = false;
+    wikiAfter = [];
+    closeWikiWindow();
     wikiFacetsSeen = null;
     wikiAdded.clear();
     // Свёрнутость панели миру не принадлежит — это выбор игрока о своём экране,
@@ -6408,9 +6405,6 @@ function squadRow(node, m) {
       : homeState(node);
   const otherRule =
     auto >= 0 && m && !sameRule ? `↻ ${esc(missionLabel(auto))}` : null;
-  // Пауза — не «нет правила», а «правило есть, но круг остановлен» (§12.77), и
-  // словом она названа отдельно: погашенный знак сказал бы «правила нет».
-  const paused = auto >= 0 && !node.auto_on ? "пауза" : null;
   const waiting =
     m && !m.away && m.resting
       ? "ждут, пока выспится"
@@ -6422,9 +6416,7 @@ function squadRow(node, m) {
   // тех, кто не пойдёт (§12.70). Числом он отвечал хуже: у отряда в поле
   // менялся только вместе с составом, то есть почти никогда, а на базе
   // повторял то, что и так написано словом («состав не набран» — это ноль).
-  const sub = [job, otherRule, paused, waiting, verdict]
-    .filter(Boolean)
-    .join(" · ");
+  const sub = [job, otherRule, waiting, verdict].filter(Boolean).join(" · ");
   return (
     // ⚠️ **Кнопок в панели нет ни одной** (§12.170, сужает §12.75). «Отозвать»
     // жила здесь и мелькала: она есть, только пока отряд собирается у шлюза, —
@@ -8004,7 +7996,7 @@ function noteAutoOutings(snap) {
       storyResume = null;
       homeReport = { who: autoOutWho.get(def) ?? "", def, resume };
       if (speed > 0) setSpeed(0);
-      if (!raidWinOpen) openRaidWindow();
+      whenWikiFree(() => raidWinOpen || openRaidWindow());
     }
   }
   autoOutSeen = now;
@@ -8594,9 +8586,10 @@ function nodeAt(tx, ty) {
 // свободен: в штабе он не выбирается вовсе. Выбрать отряд значит собраться
 // его куда-то отправить, а на чужой заказ ядро его не отпустит
 // (`AutoRaids::claims`); свой заказ правило водит само. Либо правило, либо
-// ручная отправка: вернуть отряд в руки — ⏸ или × в его строке правила.
+// ручная отправка: вернуть отряд в руки — × в его строке правила (паузы у
+// правила с §12.440 нет).
 function squadRuled(n) {
-  return !!n && n.auto >= 0 && !!n.auto_on;
+  return !!n && n.auto >= 0;
 }
 const RULED_TIP =
   "Отряд на автомиссии: его водит правило, вручную его не отправить. " +
@@ -11713,7 +11706,7 @@ function raidGate(i, node) {
   const ruled =
     !def.cleanses &&
     !def.nearby &&
-    nodes.some((o) => o !== node && o.auto === i && o.auto_on);
+    nodes.some((o) => o !== node && o.auto === i);
   // «Пошарить рядом» занят не идущей вылазкой, а исчерпанным пределом
   // (§12.363): сколько котов заказ ещё возьмёт, считает ядро
   // (`RaidSnap::room`) тем же выражением, каким заявка отклонит лишних.
@@ -11771,13 +11764,13 @@ function raidGate(i, node) {
           ? ` — вернутся через ${mine.left}`
           : ` — ${gatherWord(mine)}`);
   // Отряд на автомиссии расписан (§12.400): на чужой заказ ядро его не
-  // отпустит (`AutoRaids::claims` в `launch_node` — те же `auto` и `auto_on`),
-  // пока игрок сам не поставит правило на паузу или не снимет его. Причина
+  // отпустит (`AutoRaids::claims` в `launch_node` — тот же `auto`), пока игрок
+  // сам не снимет правило. Причина
   // одна на все карточки колонки, поэтому строкой не пишется — только в
   // подсказке кнопки (§12.181), а шапка отряда стоит в «Автомиссиях».
   const ruleWhy =
-    !node.nearby && node.auto >= 0 && node.auto_on && node.auto !== i
-      ? `отряд ходит сам на «${esc(missionLabel(node.auto))}» — поставьте правило на паузу ⏸ или снимите ×`
+    !node.nearby && node.auto >= 0 && node.auto !== i
+      ? `отряд ходит сам на «${esc(missionLabel(node.auto))}» — снимите правило ×`
       : null;
   // Недокомплект вылазку не закрывает (§12.113): минимум вилки — рекомендация,
   // и цена его видна тут же, в доле и сроке. Безусловный минимум остался у
@@ -12548,7 +12541,7 @@ function syncRaidMap() {
       (o.auto ?? -1) >= 0 ? siteIndexOf(meta.missions[o.auto]?.site) : -1;
     if (site == null || site < 0) return;
     if (!ruled.has(site)) ruled.set(site, []);
-    ruled.get(site).push({ n: k + 1, on: !!o.auto_on, def: o.auto });
+    ruled.get(site).push({ n: k + 1, def: o.auto });
   });
 
   // Сколько заказов на участке — числом **в центре кружка** (§12.245): колонка
@@ -12619,23 +12612,12 @@ function syncRaidMap() {
       box.setAttribute("width", String(w));
       box.setAttribute("x", String(-w / 2));
     }
-    rule.classList.toggle("paused", rs.length > 0 && rs.every((r) => !r.on));
-    // Адреса столов — на самой плашке: клик по ней переводит окно на отряд
-    // правила (§12.295), а считать их второй раз в обработчике незачем.
-    // Отряд на работающем правиле не выбирается (§12.438) — к нему клик не
-    // ведёт; ведёт к отрядам, чьё правило стоит на паузе.
-    const rnodes = rs
-      .filter((r) => !r.on)
-      .map((r) => `${nodes[r.n - 1].x},${nodes[r.n - 1].y}`)
-      .join(";");
-    if (rule.dataset.nodes !== rnodes) rule.dataset.nodes = rnodes;
     liveTitle(
       rule,
       rs
         .map(
           (r) =>
-            `${nodes[r.n - 1].name} ходит сюда сам: «${meta.missions[r.def]?.label || ""}»` +
-            (r.on ? "" : " — на паузе"),
+            `${nodes[r.n - 1].name} ходит сюда сам: «${meta.missions[r.def]?.label || ""}»`,
         )
         .join(" · "),
     );
@@ -13122,6 +13104,8 @@ function renderNews(snap) {
     // заказе говорят точка на двери «Вылазки», число на участке карты и
     // группа «Только что открылись» в штабе.
     if (n.kind === "raid") return false;
+    // Ту же новость уже сказала выжимка справочника (§12.444).
+    if (newsToldByWiki(n)) return false;
     // Ноль в рулсете значит «сами не гаснут» — тем же нулём, каким `day`
     // выключает календарь.
     return span <= 0 || snap.tick - n.at < span;
@@ -13748,7 +13732,7 @@ function syncDoors(snap) {
     if (exitSeen === null) exitSeen = exitNow;
     else if (exitNow && !exitSeen) {
       exitSeen = true;
-      openRaidWindow();
+      whenWikiFree(() => openRaidWindow());
     }
     raidDoor.hidden = !exitSeen;
     const nogate = gateHint();
@@ -15717,6 +15701,119 @@ let wikiBack = null;
 // Пройденные статьи: «← Назад» шагает по ним, а не закрывает окно, — переход
 // по ссылке внутри справочника это не смена цели, а углубление в неё.
 let wikiTrail = [];
+// Страница «Новые записи» (§12.441) — своим ключом в `wikiKey`, наравне с
+// оглавлением (`null`): «Подробнее» кладёт её в след, и «←» из статьи ведёт
+// обратно к выжимкам, а не наружу. Ключ статьи двоеточием начинаться не может.
+const WIKI_DIGEST = ":digest";
+// Записи, собранные на страницу «Новые записи», — ключи статей.
+let wikiDigest = [];
+// Статьи, объявленные выжимками, → тик, когда их поставили в очередь
+// (§12.444). Тикер «новый ресурс — Лом» рядом с выжимкой о Ломе — та же
+// новость второй раз, поэтому новость, открывшаяся в тот же миг, что и статья,
+// тикером не встаёт. Метки на дверях она по-прежнему ставит: это не дубль.
+const wikiAnnounced = new Map();
+// Виды статей, которые выжимкой не всплывают (§12.445): открываются тихо и
+// ждут в справочнике. Навык, параметр и перк игрок и так видит у кота —
+// полоской, которая растёт у него на глазах; заказ сам встаёт карточкой в
+// штабе, первой, мимо неё не пройти. Выжимка о них повторяла бы экран.
+const WIKI_SILENT = new Set(["skill", "stat", "perk", "raid"]);
+
+/// Открывается ли статья молча (§12.445, §12.446). Сверх видов из
+/// `WIKI_SILENT` молчит постройка, которая встаёт **только ремонтом руины**
+/// (стол брифинга, шлюз — `internal`, в палитре их нет): её статья
+/// открывается обследованием руины (§12.384), и выжимка рассказывала бы, во
+/// что превратится пыльный стол, раньше, чем игрок его починит. Что с руиной
+/// делать, говорит её панель — кнопкой «Починить». Лежанка тоже встаёт
+/// ремонтом, но она постройка палитры, и о ней выжимка законна.
+function wikiSilent(key) {
+  const [kind, id] = key.split(":");
+  if (WIKI_SILENT.has(kind)) return true;
+  if (kind !== "tile") return false;
+  const pal = meta?.palette ?? [];
+  return (
+    !!pal.find((p) => p.id === id)?.internal && pal.some((p) => p.repair === id)
+  );
+}
+// Насколько новость может опередить статью: статью замечает кадр, а за кадр
+// на ×10 проходит несколько тиков.
+const WIKI_NEWS_SLACK = 30;
+
+/// Сказала ли уже эту новость выжимка (§12.444).
+function newsToldByWiki(n) {
+  if (!n.opened) return false;
+  const k = newsWikiKey(n);
+  if (!k) return false;
+  const at = wikiAnnounced.get(wikiOwnerOf(k) ?? articleTarget(k));
+  return at !== undefined && n.at <= at && at - n.at <= WIKI_NEWS_SLACK;
+}
+// Страница «Новые записи» держит игрока, пока он не нажал «Ок» (§12.442):
+// клик мимо окна, дверь, «База», Escape и клавиши гаснут. Иначе всплывшее
+// посреди жеста — кот разбирает завал, игрок уже тянется к «Базе» — пропадало
+// тем же кликом, ни разу не показавшись. «Закрыть» у статьи, открытой
+// «Подробнее», возвращает к выжимкам, а не наружу.
+let wikiHeld = false;
+// Что открылось бы само, пока страница держит (штаб на открытом выходе,
+// доклад вернувшегося кота): встаёт следом за «Ок», а не поверх выжимок.
+let wikiAfter = [];
+
+/// Открыть окно сам, без жеста игрока: сейчас или следом за «Ок» (§12.442).
+function whenWikiFree(open) {
+  if (wikiHeld) wikiAfter.push(open);
+  else open();
+}
+
+/// «Ок» на странице «Новые записи» — единственный выход из неё (§12.442).
+function wikiAcknowledge() {
+  wikiHeld = false;
+  closeWikiWindow();
+  const after = wikiAfter;
+  wikiAfter = [];
+  for (const open of after) open();
+}
+
+// Пока страница держит, всё мимо её коробки гаснет **на захвате**, до любых
+// слушателей игры: перечислять двери, «Базу», карту и рейку поимённо значило
+// бы завести список, который однажды забудут пополнить.
+for (const type of [
+  "pointerdown",
+  "pointerup",
+  "mousedown",
+  "mouseup",
+  "click",
+  "dblclick",
+  "contextmenu",
+  "wheel",
+]) {
+  window.addEventListener(
+    type,
+    (e) => {
+      if (!wikiHeld) return;
+      const box = wikiWinEl.querySelector(".win-box");
+      if (box && e.target instanceof Node && box.contains(e.target)) return;
+      e.stopPropagation();
+      e.preventDefault();
+    },
+    { capture: true, passive: false },
+  );
+}
+window.addEventListener(
+  "keydown",
+  (e) => {
+    if (!wikiHeld) return;
+    const box = wikiWinEl.querySelector(".win-box");
+    // Пробел по чекбоксу «Больше не показывать» — его законный жест.
+    if (box && e.target instanceof Node && box.contains(e.target)) {
+      if (e.target instanceof HTMLInputElement) return;
+    }
+    e.stopPropagation();
+    e.preventDefault();
+    // Enter на странице выжимок — то же «Ок»: прочитал, понял.
+    if (e.key === "Enter" && !e.repeat && wikiKey === WIKI_DIGEST) {
+      wikiAcknowledge();
+    }
+  },
+  { capture: true },
+);
 
 // Какой палитре принадлежит ключ. Список ровно тот же, что в `newsText` и
 // `opensOf`: справочник не заводит своего реестра сущностей, он говорит о тех,
@@ -15925,7 +16022,37 @@ function wikiPicture(key) {
       "</span>";
   }
   if (kind === "recruit") inner = portraitHtml(entry.sprite, "wiki-portrait");
+  if (kind === "structure") inner = wikiStructPlan(entry);
   return inner ? `<div class="wiki-pic">${inner}</div>` : "";
+}
+
+// Объект-штамп — планом (§12.447): его клетки цветом своих тайлов с глифом
+// роли, свободные слоты — стульями. Тем же силуэтом (`shapes[0]`, `slots[0]`),
+// каким он встаёт под курсором, а не отдельной картинкой: план, разошедшийся
+// с палитрой, рассказывал бы о другом объекте.
+function wikiStructPlan(d) {
+  const cells = d.shapes?.[0] ?? [];
+  const slots = d.slots?.[0] ?? [];
+  if (!cells.length) return "";
+  const all = [...cells, ...slots];
+  const w = Math.max(...all.map(([x]) => x)) + 1;
+  const h = Math.max(...all.map(([, y]) => y)) + 1;
+  const pal = meta?.palette ?? [];
+  const html = [
+    ...slots.map(
+      ([x, y]) =>
+        `<span class="wiki-plan-seat" style="grid-column:${x + 1};grid-row:${y + 1}"></span>`,
+    ),
+    ...cells.map(
+      ([x, y, ti]) =>
+        `<span class="wiki-plan-cell" style="grid-column:${x + 1};grid-row:${y + 1};` +
+        `background:${pal[ti]?.color ?? "#555"}">${tileGlyphHtml(ti, "wiki-plan-glyph")}</span>`,
+    ),
+  ].join("");
+  return (
+    `<span class="wiki-plan" style="--cols:${w};--rows:${h};` +
+    `--n:${Math.max(w, h)}">${html}</span>`
+  );
 }
 
 // Роль клетки словами — те же свойства тайла, которыми её знает ядро.
@@ -15956,8 +16083,9 @@ function tileRoleWords(t) {
 function openWiki(key, back) {
   // `null` — оглавление: у двери тулбара адресата нет, она ведёт «в
   // справочник вообще».
-  if (key !== null) key = articleTarget(key);
-  if (key !== null && !hasArticle(key)) return;
+  const page = key === null || key === WIKI_DIGEST;
+  if (!page) key = articleTarget(key);
+  if (!page && !hasArticle(key)) return;
   if (!wikiOpen) {
     // Запоминаем возврат **до** `closeOtherWindows`: он погасит то окно, из
     // которого мы и пришли, и спросить его будет уже не у кого.
@@ -15966,7 +16094,6 @@ function openWiki(key, back) {
     closeOtherWindows("wiki");
     wikiOpen = true;
   } else if (wikiKey !== key) {
-    wikiFresh = "";
     // Оглавление (`null`) кладём в след наравне со статьёй: игрок, пришедший
     // из него, ждёт вернуться в него же, а не наружу.
     wikiTrail.push(wikiKey);
@@ -15975,8 +16102,8 @@ function openWiki(key, back) {
   // Прочитанная статья — уже не новость, как бы игрок до неё ни дошёл
   // (ссылкой, значком «i», оглавлением): модалом «Новая запись» она после
   // этого не всплывает.
-  if (key !== null) {
-    wikiQueue = wikiQueue.filter(([q]) => articleTarget(q) !== key);
+  if (!page) {
+    wikiQueue = wikiQueue.filter((q) => articleTarget(q) !== key);
   }
   buildWikiWindow();
   wikiWinEl.hidden = false;
@@ -15984,8 +16111,18 @@ function openWiki(key, back) {
 
 function closeWikiWindow() {
   if (!wikiOpen) return;
+  // Держит страница выжимок (§12.442): из статьи — назад к ним, с самой
+  // страницы — никуда, выход один — «Ок».
+  if (wikiHeld) {
+    if (wikiKey !== WIKI_DIGEST) {
+      wikiKey = WIKI_DIGEST;
+      wikiTrail = [];
+      buildWikiWindow();
+    }
+    return;
+  }
   wikiOpen = false;
-  wikiFresh = "";
+  wikiDigest = [];
   wikiKey = null;
   wikiTrail = [];
   wikiWinEl.hidden = true;
@@ -16062,7 +16199,21 @@ function wikiIndexHtml() {
 }
 
 function buildWikiWindow() {
-  const { list } = mkWindow(wikiWinEl, "Справочник", () => closeWikiWindow());
+  const { box, list, top } = mkWindow(wikiWinEl, "Справочник", () =>
+    closeWikiWindow(),
+  );
+  if (wikiKey === WIKI_DIGEST) {
+    // Шапки у страницы выжимок нет (§12.443): «Справочник» и плашка «Новая
+    // запись» говорили то, что окно и так говорит собой, а «Закрыть» и «Ок» —
+    // одно действие под двумя именами (довод «Назад» ниже). Остаётся «Ок»:
+    // он стоит под тем, что прочитано.
+    // `hidden` тут не годится: у `.win-top` свой `display: flex`. Отступ
+    // списка под шапку уходит вместе с ней — класс на коробке.
+    top.style.display = "none";
+    box.classList.add("wiki-digest");
+    list.innerHTML = wikiDigestHtml();
+    return;
+  }
   if (wikiKey === null) {
     const toc = wikiIndexHtml();
     // Пустой справочник — законное состояние: файлы могли не доехать, а игра
@@ -16097,20 +16248,45 @@ function buildWikiWindow() {
     '<div class="wiki-head">' +
     back +
     `<div class="wiki-title">${esc(title)}</div>` +
-    (wikiFresh ? `<div class="wiki-fresh">${wikiFresh}</div>` : "") +
     "</div>" +
     `<div class="wiki-body">${wikiPicture(wikiKey)}${renderArticle(wikiKey, wikiName)}</div>` +
     wikiFacts(wikiKey) +
-    also +
-    // Только у всплывшей статьи: открытой самим игроком отказываться не от
-    // чего. Чекбокс, а не кнопка: окно не закрывается, и передумать можно
-    // тут же. Вернуть потом — тем же чекбоксом в разделе «Партия».
-    (wikiFresh
-      ? '<label class="wiki-mute" data-tip="Новые статьи справочника не будут ' +
-        'всплывать сами. Вернуть можно в разделе «Партия»">' +
-        `<input type="checkbox" class="wiki-mute-box"${wikiPopups ? "" : " checked"}>` +
-        "Больше не показывать</label>"
-      : "");
+    also;
+}
+
+/// Страница «Новые записи» (§12.441): строка на открывшуюся статью — картинка,
+/// имя и выжимка (`::` в тексте статьи), — «Подробнее» у каждой и одно «Ок»
+/// внизу. Всплывшая статья целиком читалась как энциклопедия там, где игрок
+/// ждал уведомления, и её прокликивали не читая; а после первой вылазки их
+/// приходило по пять, и каждая — отдельным модалом.
+function wikiDigestHtml() {
+  const rows = wikiDigest
+    .filter((k) => hasArticle(k))
+    .map(
+      (k) =>
+        '<div class="wiki-gist">' +
+        wikiPicture(k) +
+        '<div class="wiki-gist-main">' +
+        `<div class="wiki-title">${esc(wikiName(k))}</div>` +
+        `<div class="wiki-gist-text">${renderGist(k, wikiName)}</div>` +
+        "</div>" +
+        `<button class="tool wiki-more" data-key="wikimore${esc(k)}" ` +
+        `data-go="${esc(k)}">Подробнее</button>` +
+        "</div>",
+    )
+    .join("");
+  return (
+    rows +
+    // Чекбокс, а не кнопка: окно не закрывается, и передумать можно тут же.
+    // Вернуть потом — тем же чекбоксом в разделе «Партия».
+    '<div class="wiki-gist-foot">' +
+    '<label class="wiki-mute" data-tip="Новые статьи справочника не будут ' +
+    'всплывать сами. Вернуть можно в разделе «Партия»">' +
+    `<input type="checkbox" class="wiki-mute-box"${wikiPopups ? "" : " checked"}>` +
+    "Больше не показывать</label>" +
+    '<button class="tool primary wiki-ok" data-key="wikiok">Ок</button>' +
+    "</div>"
+  );
 }
 
 // Клики внутри справочника — делегированием и парой `mousedown`/`mouseup`, как
@@ -16118,6 +16294,8 @@ function buildWikiWindow() {
 // на одну статью из разных мест поделили бы обработчик.
 onPanelClick(wikiWinEl, ".wiki-link", (b) => openWiki(b.dataset.go));
 onPanelClick(wikiWinEl, ".wiki-back", () => wikiGoBack());
+onPanelClick(wikiWinEl, ".wiki-more", (b) => openWiki(b.dataset.go));
+onPanelClick(wikiWinEl, ".wiki-ok", () => wikiAcknowledge());
 // Окно справочника перестраивается только кликом игрока (`buildWikiWindow`),
 // а не кадром, поэтому родное `change` у чекбокса доходит (§12.84 тут не
 // про него). Слушатель один, на окне.
@@ -16404,12 +16582,10 @@ setArticleTeased((key) => {
 // снимок партии (новой или загруженной) её снимает и новостью не объявляется,
 // ровно как `goalsDoneSeen` и лента §12.120.
 let wikiOpenSeen = null;
-// Статьи, открывшиеся и ещё не показанные. Показываются по одной и только
-// когда никакое окно не открыто: модал поверх штаба стёр бы ответ, за которым
-// игрок туда пошёл (§12.101).
+// Статьи, открывшиеся и ещё не показанные. Показываются **все разом**, одной
+// страницей «Новые записи» (§12.441), и только когда никакое окно не открыто:
+// модал поверх штаба стёр бы ответ, за которым игрок туда пошёл (§12.101).
 let wikiQueue = [];
-// Плашка над открывшейся статьёй: «Новая запись» · «Запись дополнена»; "" — нет.
-let wikiFresh = "";
 // Всплывают ли открывшиеся статьи модалом. Выбор игрока, а не партии: живёт
 // в `localStorage` рядом с видом 3/4 и звуком, новая партия его не сбрасывает.
 // Выключенные модалы не гасят меток «дополнено» в оглавлении: статья
@@ -16449,14 +16625,10 @@ function noteWikiFacets(open) {
       const owner = wikiOwnerOf(f);
       // Статья открылась этим же снимком — её объявит «Новая запись»,
       // и метка поверх неё сказала бы то же второй раз.
-      if (!wikiFacetsSeen.has(f) && wikiOpenSeen?.has(owner)) {
-        wikiAdded.add(f);
-        // Статья всплывает модалом с плашкой «Запись дополнена», как при
-        // понимании вещи: тихая строка фактов прошла бы мимо игрока.
-        if (!wikiQueue.some(([q]) => q === owner)) {
-          wikiQueue.push([owner, "Запись дополнена"]);
-        }
-      }
+      // Модалом дополнение не всплывает (§12.441): оно почти всегда
+      // приходит вместе с новостью о самой вещи, и вторая всплывашка рядом —
+      // шум. Его несёт метка «дополнено» у строки фактов и в оглавлении.
+      if (!wikiFacetsSeen.has(f) && wikiOpenSeen?.has(owner)) wikiAdded.add(f);
     }
   }
   wikiFacetsSeen = now;
@@ -16468,15 +16640,17 @@ function noteWikiOpened() {
   // них, пуста — и доехавшие статьи всплывали бы модалом «Новая запись» все
   // разом на каждой перезагрузке. Линию снимает первый снимок **после** загрузки.
   if (!wikiReady()) return;
-  // Помним и версию: переход «коротко → полно» (вещь поняли) объявляется
-  // так же, как новая статья, но словами «Запись дополнена».
+  // Помним и версию: переход «коротко → полно» (вещь поняли) новой записью
+  // не считается и модалом не всплывает (§12.441), как дополнение гранью.
   const open = new Map(articleKeys().map((k) => [k, articleStage(k)]));
   noteWikiFacets(open);
   if (wikiOpenSeen !== null) {
     for (const [k, stage] of open) {
       const was = wikiOpenSeen.get(k);
-      if (was === stage || wikiQueue.some(([q]) => q === k)) continue;
-      wikiQueue.push([k, was ? "Запись дополнена" : "Новая запись"]);
+      if (was !== undefined || wikiQueue.includes(k)) continue;
+      if (wikiSilent(k)) continue;
+      wikiQueue.push(k);
+      if (wikiPopups) wikiAnnounced.set(k, lastSnap?.tick ?? 0);
     }
   }
   wikiOpenSeen = open;
@@ -16484,9 +16658,10 @@ function noteWikiOpened() {
   // не должны вывалить всё, что открылось за это время.
   if (!wikiPopups) wikiQueue = [];
   if (!wikiQueue.length || WINDOWS.some(([, isOpen]) => isOpen())) return;
-  const [key, fresh] = wikiQueue.shift();
-  wikiFresh = fresh;
-  openWiki(key, null);
+  wikiDigest = wikiQueue;
+  wikiQueue = [];
+  openWiki(WIKI_DIGEST, null);
+  wikiHeld = true;
 }
 
 // Реестр окон: ключ · открыто ли · закрыть · **чем вернуть**.
@@ -18028,7 +18203,6 @@ function outskirtsNode() {
     name: "Окрестности",
     nearby: true,
     auto: -1,
-    auto_on: false,
   };
 }
 
@@ -18520,44 +18694,10 @@ function buildSiteGraph(holder) {
   // стоит в колонке справа. Закрытие окна остаётся вторыми воротами — для
   // участка, на который игрок не кликал, но чью карточку видел.
   marks.forEach((g, i) => {
-    // Плашка правила «↻N» (§12.295) — дорога к отряду, который сюда ходит:
-    // окно переходит на его вкладку. Это осмотр, как сама вкладка, поэтому
-    // мимо `sendAction`. Правил на участке бывает несколько («↻1,2») — тогда
-    // клик листает их по кругу от открытого отряда. Выбор участка при этом
-    // остаётся: событие всплывает до кружка ниже.
-    g.querySelector(".map-rule").onmousedown = (e) => {
-      const list = (e.currentTarget.dataset.nodes || "")
-        .split(";")
-        .filter(Boolean);
-      if (!list.length) return;
-      const now = raidWinAt ? `${raidWinAt.x},${raidWinAt.y}` : "";
-      const [x, y] = list[(list.indexOf(now) + 1) % list.length]
-        .split(",")
-        .map(Number);
-      raidWinAt = { x, y };
-      raidHome = false;
-    };
     g.onmousedown = (e) => {
       // Неразведанный участок не выбирается (§12.320): колонке нечего о нём
       // сказать, а подпись под картой назвала бы его по имени.
       if (g.classList.contains("fog")) return;
-      // Клик по самому участку, куда ходит правило, тоже ведёт к его отряду
-      // (§12.327): плашка «↻N» мала, а смотрят на участок ради заказа, у
-      // которого отряд уже есть. Открыт один из отрядов правила — остаёмся на
-      // нём; листать по кругу — дело плашки, её клик сюда только всплывает.
-      // В «Окрестностях» клик только выбирает участок (§12.349): заказы
-      // свободных котов фильтруются по карте так же, как у отряда.
-      if (!raidHome && !e.target.closest(".map-rule")) {
-        const list = (g.querySelector(".map-rule").dataset.nodes || "")
-          .split(";")
-          .filter(Boolean);
-        const now = raidWinAt ? `${raidWinAt.x},${raidWinAt.y}` : "";
-        if (list.length && !list.includes(now)) {
-          const [x, y] = list[0].split(",").map(Number);
-          raidWinAt = { x, y };
-          raidHome = false;
-        }
-      }
       // Участок без заказов — отправлять туда некого и не на что: выбор
       // отряда и отметки свободных котов снимаются.
       const orders = (meta?.missions ?? []).some(
@@ -18985,14 +19125,13 @@ function crewGroups(sel) {
   const busy = [];
   // Отряды на автомиссии (§12.400) — своей группой между свободными и ушедшими:
   // правило расписало их, на чужой заказ они не идут, — и дома, и в поле.
-  // Усыплённое правило (§12.77) отряд отпускает: он стоит в «Свободны».
   const ruled = [];
   const eta = (m) => (m.away ? m.left : m.total);
   for (const n of nodes) {
     const groups = [];
     const on = sel === n;
     const raid = missionsOut.find((m) => missionHolds(m, n.x, n.y));
-    if (n.auto >= 0 && n.auto_on) ruled.push(groups);
+    if (n.auto >= 0) ruled.push(groups);
     else if (n.busy && raid) busy.push({ eta: eta(raid), groups });
     else idle.push(groups);
     // У отряда в деле заказ, стадия и срок — подписью над шапкой, как у
@@ -19296,7 +19435,7 @@ function syncCrewRows(sel) {
       setHtml(trip, tripHtml(g.trip.m, g.trip.node));
       order.push(trip);
     } else if (g.rule) {
-      // Круг правила и его кнопки — одной строкой: подпись слева, ⏸/▶ и ×
+      // Круг правила и его кнопка — одной строкой: подпись слева, ×
       // справа, как у полосы вылазки.
       const n = g.rule;
       // Правило стоит не по воле игрока (отряд великоват, ждёт сбора, прогноз
@@ -19305,7 +19444,7 @@ function syncCrewRows(sel) {
       const rs = ruleState(n);
       // Имя заказа режется многоточием, а причина — нет: она и есть новость.
       const name =
-        `<span class="crew-rule-label">↻ ${rs.label}${n.auto_on ? "" : " · пауза"}</span>` +
+        `<span class="crew-rule-label">↻ ${rs.label}</span>` +
         (rs.stuck
           ? `<span class="bad"${rs.hold ? ` data-tip="${esc(rs.hold)}"` : rs.blocked ? ' data-tip="Заказ сейчас недоступен — почему, написано у его карточки"' : ""}>${rs.state}</span>`
           : "");
@@ -19354,29 +19493,18 @@ function syncCrewRows(sel) {
 //   заказ в виде одна, значит отзыв адресный). Кнопка стоит справа в той же
 //   полосе, и высота полосы от неё не зависит (`min-height`): на уходе она
 //   пропадает, а соседи по колонке не прыгают (§12.172).
-// * **Правило отряда** (⏸/▶ и ×) — тут же: снять или усыпить его на всё
-//   время похода больше негде.
-// ⏸/▶ и × правила автовылазки отряда (§12.67, §12.77). Стоят у отряда с
-// правилом всегда — и в поле, и дома, на паузе включительно (§12.400):
-// отряд на паузе стоит в «Свободны», и вернуть его на круг надо оттуда же,
-// не выбирая заказ второй раз.
+// * **Правило отряда** (×) — тут же: снять его на всё время похода больше
+//   негде.
+// × правила автовылазки отряда (§12.67). Стоит у отряда с правилом всегда — и
+// в поле, и дома (§12.400). Паузы у правила нет (§12.440): снятое правило
+// возвращает отряд в руки, а вернуть круг — «↻» в карточке заказа.
 function ruleButtons(node) {
   if (node.auto < 0 || autoGateHint("raids")) return "";
   const at = `${node.x},${node.y}`;
   return (
-    `<button class="tool raid-icon raid-pause${node.auto_on ? " on" : ""}"` +
-    ` data-key="pause@${at}" data-on="${node.auto_on ? "" : "1"}"` +
-    ` data-x="${node.x}" data-y="${node.y}"` +
-    ` data-tip="${
-      node.auto_on
-        ? `Отряд ходит на «${esc(missionLabel(node.auto))}» сам — приостановить правило`
-        : "Правило стоит на паузе — вернуть отряд на этот круг"
-    }">` +
-    (node.auto_on ? "⏸" : "▶") +
-    "</button>" +
     `<button class="tool raid-icon raid-auto" data-key="off@${at}" data-def="-1"` +
     ` data-x="${node.x}" data-y="${node.y}"` +
-    ' data-tip="Забыть правило совсем">×</button>'
+    ` data-tip="Отряд ходит на «${esc(missionLabel(node.auto))}» сам — снять правило и вернуть отряд в руки">×</button>`
   );
 }
 
@@ -19777,10 +19905,7 @@ function raidCard(i, node) {
     ? { ...g0, busy: true }
     : g0;
   const at = `${node.x}, ${node.y}`;
-  const on = node.auto === i && node.auto_on;
-  // Усыплённое правило на этом же заказе — не «нет правила»: заказ узел помнит,
-  // и тумблер обязан будить его, а не заводить заново (§12.77).
-  const paused = node.auto === i && !node.auto_on;
+  const on = node.auto === i;
   const rows = [];
 
   // Прогноз — первым и крупно: это ответ на «стоит ли». Провал называем словом,
@@ -20087,25 +20212,14 @@ function raidCard(i, node) {
   // производства ждёт материала, и поставить его заранее — это план (§12.67).
   // А вот до самой технологии тумблера нет вовсе: автоматики в игре ещё не
   // существует, и кнопка обещала бы механику, о которой игрок не знает.
-  // Решений по правилу три, и все три — квадратные значки одного размера
-  // (§12.77): поставить круг (`↻`), приостановить его (`⏸`/`▶`) и забыть
-  // совсем (`×`). Стоят они у самой карточки заказа, к которому относятся, —
+  // Решений по правилу два, и оба — квадратные значки одного размера:
+  // поставить круг (`↻`) и снять его (`×`); паузы с §12.440 нет. Стоят они у самой карточки заказа, к которому относятся, —
   // строкой над колонкой их больше нет: та повторяла имя заказа, уже написанное
   // в карточке, и занимала целый ярус ради двух кнопок.
   const auto = autoGate
     ? ""
-    : on || paused
-      ? `<button class="tool raid-icon raid-pause${on ? " on" : ""}"` +
-        ` data-key="auto${i}@${at}" data-on="${on ? "" : "1"}"` +
-        ` data-x="${node.x}" data-y="${node.y}"` +
-        ` data-tip="${
-          on
-            ? "Отряд ходит сюда сам — приостановить правило"
-            : "Правило стоит на паузе — вернуть отряд на этот круг"
-        }">` +
-        (on ? "⏸" : "▶") +
-        "</button>" +
-        `<button class="tool raid-icon raid-auto" data-key="off${i}@${at}" data-def="-1"` +
+    : on
+      ? `<button class="tool raid-icon raid-auto" data-key="off${i}@${at}" data-def="-1"` +
         ` data-x="${node.x}" data-y="${node.y}"` +
         ' data-tip="Забыть правило совсем">×</button>'
       : `<button class="tool raid-icon raid-auto"` +
@@ -20196,7 +20310,7 @@ function ruleState(node) {
   // правило решает, идти ли (§12.117).
   //
   // Пока отряд в поле, спрашивать не о чем: `busy` вытесняет обе причины.
-  const holding = !blocked && node.auto_on && !node.busy;
+  const holding = !blocked && !node.busy;
   // Третья причина простоя, и она **старше двух остальных**: заказ не уводит
   // больше `squad_max`, и `launch_at` отказывает по длине приписки — молча, до
   // всякого прогноза. Пока строка о ней молчала, лишний кот в отряде выглядел
@@ -20233,25 +20347,19 @@ function ruleState(node) {
     ? "выйти некуда"
     : blocked
       ? "недоступно"
-      : !node.auto_on
-        ? // Названо ровно тем же словом, что и значок под ним (§12.53):
-          // «неактивно» не отвечало на «а что случилось» — правило не сломалось
-          // и не закрылось, его приостановил сам игрок, и вернуть круг можно
-          // тем же значком.
-          "пауза"
-        : over
-          ? "отряд великоват"
-          : gathering
-            ? "ждёт сбора"
-            : naked
-              ? "нечего надеть"
-              : lesson
-                ? "ждёт конца урока"
-                : weak
-                  ? node.auto_fail
-                    ? "прогноз: провал"
-                    : `прогноз: ${node.auto_share} %`
-                  : "автовылазка";
+      : over
+        ? "отряд великоват"
+        : gathering
+          ? "ждёт сбора"
+          : naked
+            ? "нечего надеть"
+            : lesson
+              ? "ждёт конца урока"
+              : weak
+                ? node.auto_fail
+                  ? "прогноз: провал"
+                  : `прогноз: ${node.auto_share} %`
+                : "автовылазка";
   const hold = nogate
     ? nogate
     : over
@@ -20281,14 +20389,14 @@ function ruleState(node) {
               : "";
   // Слово — причина простоя, а не обычное состояние: его стоит показать
   // и у отряда в списке.
-  const stuck = !!nogate || blocked || (node.auto_on && !!hold && !node.busy);
+  const stuck = !!nogate || blocked || (!!hold && !node.busy);
   return { label, state, hold, blocked, nogate, stuck };
 }
 
 function ruleRow(node) {
   const { label, state, hold, blocked, nogate } = ruleState(node);
   return (
-    `<div class="raid-rule${node.auto_on ? "" : " off"}${
+    `<div class="raid-rule${
       blocked || nogate ? " blocked" : ""
     }${hold ? " holding" : ""}">` +
     `<span${

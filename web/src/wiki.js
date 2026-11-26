@@ -82,6 +82,21 @@ export async function loadWiki() {
 // открывается изучением технологии, а не пониманием предмета.
 const UNDERSTOOD = /^---понято(?:\s+([a-z0-9_]+))?---$/;
 
+/// Выжимка (§12.441): строки `:: …` версии статьи. Она стоит во всплывающем
+/// окне «Новые записи» вместо всей статьи — там игрок хочет знать, что
+/// изменилось и что с этим делать, а не читать лор. Из текста статьи строки
+/// выжимки вынимаются: в полном виде она повторяла бы первый абзац.
+function splitGist(lines) {
+  const gist = [];
+  const rest = [];
+  for (const l of lines) {
+    const m = /^::\s?(.*)$/.exec(l);
+    if (m) gist.push(m[1]);
+    else rest.push(l);
+  }
+  return [rest.join("\n").trim(), gist.join(" ").trim()];
+}
+
 /// Разобрать файл раздела. Статья начинается со строки `## ключ | Заголовок`;
 /// заголовок необязателен — без него его даст палитра (`label` записи).
 function parseFile(text) {
@@ -94,13 +109,11 @@ function parseFile(text) {
     // снаружи, пока вещь не понята (§12.131), ниже — полная. Без маркера
     // версия одна, и `teaser` пуст.
     const cut = lines.findIndex((l) => UNDERSTOOD.test(l.trim()));
-    const teaser = cut < 0 ? "" : lines.slice(0, cut).join("\n").trim();
     const tech = cut < 0 ? "" : (UNDERSTOOD.exec(lines[cut].trim())[1] ?? "");
-    const body = lines
-      .slice(cut + 1)
-      .join("\n")
-      .trim();
-    articles.set(key, { title, teaser, body, tech });
+    const [teaser, teaserGist] =
+      cut < 0 ? ["", ""] : splitGist(lines.slice(0, cut));
+    const [body, gist] = splitGist(lines.slice(cut + 1));
+    articles.set(key, { title, teaser, body, tech, gist, teaserGist });
   };
   for (const raw of text.split(/\r?\n/)) {
     const head = /^##\s+([a-z]+:[a-z0-9_]+)\s*(?:\|\s*(.*))?$/i.exec(raw);
@@ -187,6 +200,40 @@ function unlocked(text) {
   );
 }
 
+/// Выжимка статьи в той версии, какая открыта сейчас, — строкой HTML без
+/// абзацев (§12.441). Ссылки в ней — просто слова: окно выжимок их не ведёт,
+/// дорога к статье там одна — «Подробнее». Выжимки нет — первый абзац статьи:
+/// сторож требует её у каждой, но справочник не механика, и пустая строка
+/// хуже, чем длинная.
+export function renderGist(key, nameOf) {
+  const art = articles.get(key);
+  if (!art) return "";
+  const short = art.teaser && teased(key);
+  let text = unlocked(short ? art.teaserGist : art.gist);
+  if (!text.trim()) text = (bodyOf(key).split(/\n\s*\n/)[0] ?? "").trim();
+  return inline(text.replace(/^>\s?/gm, ""), (m, target, word) => {
+    const t = resolve(target.toLowerCase());
+    return esc(word || nameOf(t) || t);
+  });
+}
+
+/// Строчная разметка: выделение, ссылки, переводы строк (§12.204).
+function inline(raw, link) {
+  return (
+    esc(raw)
+      .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+      .replace(/\*(.+?)\*/g, "<i>$1</i>")
+      .replace(/\[\[([a-z]+:[a-z0-9_]+)(?:\|(.+?))?\]\]/gi, link)
+      // Одиночный перевод строки — **пробел**, а не разрыв: файл переносят
+      // по 80 знаков ради чтения глазами в редакторе, и уехавшая в игру
+      // раскладка исходника рвала бы абзац посреди фразы. Жёсткий перенос
+      // просят двумя пробелами в конце строки — как в markdown, чтобы
+      // тот, кто правит текст, не учил ещё один диалект.
+      .replace(/ {2,}\n/g, "<br>")
+      .replace(/\n/g, " ")
+  );
+}
+
 /// Версия статьи как метка: по её смене вид объявляет «Запись дополнена».
 export function articleStage(key) {
   return hasTeaser(key) && teased(key) ? "teaser" : "full";
@@ -240,17 +287,7 @@ export function renderArticle(key, nameOf) {
     .filter((block) => block.trim())
     .map((block) => {
       const quote = block.startsWith("> ");
-      const text = esc(quote ? block.replace(/^>\s?/gm, "") : block)
-        .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
-        .replace(/\*(.+?)\*/g, "<i>$1</i>")
-        .replace(/\[\[([a-z]+:[a-z0-9_]+)(?:\|(.+?))?\]\]/gi, link)
-        // Одиночный перевод строки — **пробел**, а не разрыв: файл переносят
-        // по 80 знаков ради чтения глазами в редакторе, и уехавшая в игру
-        // раскладка исходника рвала бы абзац посреди фразы. Жёсткий перенос
-        // просят двумя пробелами в конце строки — как в markdown, чтобы
-        // тот, кто правит текст, не учил ещё один диалект.
-        .replace(/ {2,}\n/g, "<br>")
-        .replace(/\n/g, " ");
+      const text = inline(quote ? block.replace(/^>\s?/gm, "") : block, link);
       return quote
         ? `<blockquote class="wiki-quote">${text}</blockquote>`
         : `<p>${text}</p>`;

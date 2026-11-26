@@ -316,10 +316,11 @@ pub(crate) struct StateDto {
     /// Пороги автопроизводства по индексу рецепта (§12.65).
     #[serde(default)]
     pub(crate) stocking: Vec<i32>,
-    /// Автовылазки: клетка узла, заказ, на который он ходит сам, и работает ли
-    /// правило прямо сейчас (§12.67, §12.77). Усыплённое правило — такое же
-    /// решение игрока, как активное, и партия обязана его помнить: иначе
-    /// загрузка молча возвращает отряд в поле.
+    /// Автовылазки: клетка узла и заказ, на который он ходит сам (§12.67).
+    /// Четвёртое поле — бывший признак паузы (§12.77); паузы с §12.440 нет,
+    /// пишется всегда `true`, а правило с `false` из старого снимка читается
+    /// снятым. Форму не меняем, чтобы старые автосейвы грузились, и `FORMAT`
+    /// поэтому не двигается.
     #[serde(default)]
     pub(crate) auto_raids: Vec<(i32, i32, usize, bool)>,
     /// Наборы ящиков: клетка и что игрок велел в ней держать (§12.195). Пустых
@@ -992,7 +993,12 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
             auto_tidy: world.resource::<AutoTidy>().0,
             auto_rest: world.resource::<AutoRest>().0,
             stocking: world.resource::<Stocking>().0.clone(),
-            auto_raids: world.resource::<AutoRaids>().0.clone(),
+            auto_raids: world
+                .resource::<AutoRaids>()
+                .0
+                .iter()
+                .map(|&(x, y, def)| (x, y, def, true))
+                .collect(),
             bins: world.resource::<Bins>().0.clone(),
             blights: world
                 .resource::<Blights>()
@@ -1172,7 +1178,12 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
     world.resource_mut::<AutoTidy>().0 = s.auto_tidy;
     world.resource_mut::<AutoRest>().0 = s.auto_rest;
     world.resource_mut::<Stocking>().0 = s.stocking.clone();
-    world.resource_mut::<AutoRaids>().0 = s.auto_raids.clone();
+    world.resource_mut::<AutoRaids>().0 = s
+        .auto_raids
+        .iter()
+        .filter(|&&(.., on)| on)
+        .map(|&(x, y, def, _)| (x, y, def))
+        .collect();
     world.resource_mut::<Bins>().0 = s.bins.clone();
     // Длину держит рулсет, а не снимок: у мира ровно столько участков, сколько
     // их в `sites:`, и приехавший список кладётся поверх — короткий не укоротит

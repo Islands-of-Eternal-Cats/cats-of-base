@@ -2035,24 +2035,13 @@ body.crew-dragging * {
   font-size: 11px;
   color: var(--accent);
 }
-.raid-rule .raid-auto,
-.raid-rule .raid-pause {
+.raid-rule .raid-auto {
   font-size: 11px;
   padding: 2px 8px;
 }
-/* Неактивное правило — тем же тусклым, что и кот, который никуда не идёт
-   (§12.77): «помню, но не веду» обязано читаться со строки, а не из подсказки.
-   Тускнеет только надпись: «Возобновить» — это доступное действие, и
-   приглушённая кнопка читается как запрещённая (тот же довод, что запретил
-   `disabled` в §12.71). */
-.raid-rule.off > span {
-  opacity: 0.55;
-}
 /* Правило живо, а заказ закрылся (§12.78): это не «выключено» и не «идёт» —
-   это тревога, и цвет у неё тот же, что у остальных отказов. Стоит и поверх
-   `.off`: усыплённое правило будят, чтобы отряд пошёл, — и «Возобновить», после
-   которого ничего не происходит, читается как поломка ровно так же. Кнопки не
-   трогаем: «Пауза» и «Снять» остаются доступны. */
+   это тревога, и цвет у неё тот же, что у остальных отказов. Кнопку не
+   трогаем: «Снять» остаётся доступна. */
 .raid-rule.blocked > span {
   color: var(--bad);
   opacity: 1;
@@ -2064,11 +2053,6 @@ body.crew-dragging * {
 .raid-rule.holding > span {
   color: var(--warn);
   opacity: 1;
-}
-.raid-pause {
-  flex: 0 0 auto;
-  padding: 0 8px;
-  font-size: 13px;
 }
 
 /* Штаб вылазок (§12.71): состав и заказы рядом, в одном модальном окне.
@@ -3910,12 +3894,6 @@ body.rail-wide #screenbar .door-label {
   font-weight: 700;
   text-anchor: middle;
 }
-.rule-tag {
-  cursor: pointer;
-}
-.rule-tag.paused {
-  opacity: 0.45;
-}
 /* Участок без дела (§12.319) — тусклым: прозрачностью, а не `filter`, по
    доводу `.map-halo`. Выбранный держит рамку выбора в полную силу. */
 .map-site.idle .map-ring,
@@ -4085,21 +4063,51 @@ body.rail-wide #screenbar .door-label {
   height: 48px;
   color: rgba(0, 0, 0, 0.55) !important;
 }
+/* План объекта-штампа (§12.447): клетки цветом тайла, слоты — стульями. */
+/* Клетка — доля от `--plan` по длинной стороне: размер задан числом, иначе
+   глиф внутри раздувает строки сетки, и план вытягивается в столбы. */
+.wiki-plan {
+  --plan: 72px;
+  --cell: calc(var(--plan) / var(--n));
+  display: inline-grid;
+  grid-template-columns: repeat(var(--cols), var(--cell));
+  grid-template-rows: repeat(var(--rows), var(--cell));
+}
+.wiki-plan-cell,
+.wiki-plan-seat {
+  margin: 1px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+}
+.wiki-plan-seat {
+  background: rgba(255, 255, 255, 0.06);
+}
+.wiki-plan-seat::after {
+  content: "";
+  width: 45%;
+  height: 45%;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.28);
+}
+.wiki-plan-glyph {
+  width: 70%;
+  height: 70%;
+  color: rgba(0, 0, 0, 0.55) !important;
+}
+.wiki-gist .wiki-plan {
+  --plan: 44px;
+}
 .wiki-portrait {
   width: 96px;
   height: 96px;
   object-fit: cover;
   border-radius: 4px;
 }
-.wiki-fresh {
-  margin-left: auto;
-  color: var(--accent);
-  font-size: 11px;
-  border: 1px solid var(--accent);
-  border-radius: 3px;
-  padding: 1px 6px;
-}
-/* Метка поздней грани (§12.265): тот же акцент, что у «Новой записи», но
+/* Метка поздней грани (§12.265): акцентная рамка, но
    мельче — это строка в статье, а не статья. */
 .wiki-added {
   margin-left: 6px;
@@ -4109,6 +4117,78 @@ body.rail-wide #screenbar .door-label {
   border-radius: 3px;
   padding: 0 4px;
 }
+/* Страница «Новые записи» (§12.441): строка на запись — картинка, имя с
+   выжимкой и «Подробнее». Картинка здесь не плавает, как в статье, а стоит
+   колонкой: текста две строки, и обтекать нечего. */
+.wiki-gist {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+}
+.wiki-digest .win-list {
+  margin-top: 0;
+}
+.wiki-gist + .wiki-gist {
+  border-top: 1px solid var(--line);
+}
+.wiki-gist .wiki-pic {
+  float: none;
+  margin: 0;
+  padding: 4px;
+}
+.wiki-gist .wiki-pic .wiki-glyph {
+  width: 40px;
+  height: 40px;
+}
+.wiki-gist .wiki-tile {
+  width: 44px;
+  height: 44px;
+}
+.wiki-gist .wiki-tile .wiki-glyph {
+  width: 30px;
+  height: 30px;
+}
+.wiki-gist .wiki-portrait {
+  width: 52px;
+  height: 52px;
+}
+.wiki-gist-main {
+  flex: 1;
+  min-width: 0;
+}
+.wiki-gist-text {
+  margin-top: 2px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.wiki-gist-text b {
+  color: var(--accent);
+  font-weight: 600;
+}
+.wiki-more {
+  flex: none;
+}
+.wiki-gist-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.wiki-gist-foot .wiki-mute {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.wiki-ok {
+  min-width: 64px;
+  justify-content: center;
+}
+
 .wiki-back {
   min-width: 24px;
   padding: 0 6px;

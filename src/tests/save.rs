@@ -714,9 +714,6 @@ fn an_auto_raid_rule_survives_a_save() {
     assert!(!crew.is_empty(), "стартовый отряд гаража");
     live.set_tech("callsigns"); // ворота автоматики (§12.93)
     assert!(live.set_auto_raid(0, node.0, node.1), "правило поставлено");
-    // Пауза — такое же решение игрока, как само правило (§12.77): забудь её
-    // снимок, и загрузка молча вернула бы отряд в поле.
-    assert!(live.set_auto_raid_on(node.0, node.1, false), "и усыплено");
 
     let json = live.save().expect("снимок");
     let mut loaded = Sim::load_from(CORE, &json).expect("загрузка");
@@ -726,14 +723,42 @@ fn an_auto_raid_rule_survives_a_save() {
         Some(0),
         "правило на месте",
     );
-    assert!(
-        !loaded.auto_raid_is_on(node.0, node.1),
-        "и по-прежнему неактивно",
-    );
     assert_eq!(
         loaded.roster_at(node.0, node.1),
         crew,
         "и отряд, которому оно адресовано",
+    );
+}
+
+/// Паузы у правила больше нет (§12.440), а форма снимка прежняя: правило,
+/// стоявшее на паузе в старом автосейве, читается снятым — отряд в руках
+/// игрока, как и был, и в поле сам не уходит.
+#[test]
+fn a_paused_rule_from_an_old_save_loads_lifted() {
+    let mut live = opened(Sim::new(CORE).expect("рулсет"));
+    live.add_squad();
+    live.without_timeline();
+    let node = live
+        .node_cells_of()
+        .first()
+        .copied()
+        .expect("отряд в застройке");
+    live.set_tech("callsigns");
+    assert!(live.set_auto_raid(0, node.0, node.1), "правило поставлено");
+
+    let json = live.save().expect("снимок");
+    let mut file: serde_json::Value = serde_json::from_str(&json).expect("разбор");
+    let rules = file["state"]["auto_raids"]
+        .as_array_mut()
+        .expect("правила в снимке");
+    assert_eq!(rules.len(), 1, "одно правило");
+    rules[0][3] = serde_json::Value::Bool(false); // так старый снимок писал паузу
+    let older = serde_json::to_string(&file).expect("сборка");
+    let mut loaded = Sim::load_from(CORE, &older).expect("загрузка");
+
+    assert!(
+        loaded.auto_raid_at(node.0, node.1).is_none(),
+        "усыплённое правило снято",
     );
 }
 

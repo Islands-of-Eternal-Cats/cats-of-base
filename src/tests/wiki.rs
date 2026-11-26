@@ -699,3 +699,46 @@ fn a_bare_link_never_names_what_opens_later() {
         bad.join("\n")
     );
 }
+
+/// У каждой статьи есть выжимка — строка `:: …` (§12.441), и у статьи с
+/// маркером `---понято---` — у **обеих** версий. Выжимку показывает окно
+/// «Новые записи» вместо всей статьи; без неё вид берёт первый абзац, а тот
+/// обычно лор, а не правило, — и ошибка эта тихая: окно не пустое, просто
+/// снова длинное.
+#[test]
+fn every_article_has_a_gist() {
+    let mut bad = Vec::new();
+    for file in WIKI {
+        let mut key: Option<String> = None;
+        let mut has = false;
+        let close = |key: &Option<String>, has: bool, bad: &mut Vec<String>, part: &str| {
+            if let Some(k) = key
+                && !has
+            {
+                bad.push(format!("{k}{part}"));
+            }
+        };
+        for line in file.lines() {
+            if let Some(k) = article_key(line) {
+                close(&key, has, &mut bad, "");
+                key = Some(k);
+                has = false;
+                continue;
+            }
+            if line.trim().starts_with("---понято") {
+                close(&key, has, &mut bad, " (до понимания)");
+                has = false;
+                continue;
+            }
+            if line.starts_with("::") {
+                has = true;
+            }
+        }
+        close(&key, has, &mut bad, "");
+    }
+    assert!(
+        bad.is_empty(),
+        "статьи без выжимки `::`:\n{}",
+        bad.join("\n")
+    );
+}
