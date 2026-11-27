@@ -32,7 +32,7 @@ use bevy_ecs::system::RunSystemOnce;
 
 use crate::components::*;
 use crate::gear::OutfitPlan;
-use crate::goals::{WorldFacts, built_counts, progress_of};
+use crate::goals::{WorldFacts, built_counts, one_progress, progress_of};
 use crate::hauling::{
     HAND_HOLD, best_tiers, bin_pulls, free_space, plan_spend, stock_grid, stored_counts,
 };
@@ -176,6 +176,13 @@ impl Sim {
         // («был открыт, а теперь закрыт») старый снимок не знает и знать не может.
         sim.note_sites();
         Ok(sim)
+    }
+
+    /// Поставить режим партии (§12.465). Зовут конструктор новой партии и
+    /// тесты — до первого тика: на середине партии смена режима означала бы
+    /// срок, отсчитанный от тика, которого игрок не видел.
+    pub(crate) fn set_mode(&mut self, mode: GameMode) {
+        *self.world.resource_mut::<GameMode>() = mode;
     }
 
     fn in_bounds(&self, x: i32, y: i32) -> bool {
@@ -996,6 +1003,7 @@ impl Sim {
             built,
         };
         let tick = self.world.resource::<SimTime>().tick;
+        let mode = *self.world.resource::<GameMode>();
         let taken = self.world.resource::<Goals>();
         rules
             .iter()
@@ -1015,6 +1023,11 @@ impl Sim {
                 if done.is_none() && rule.after.is_some_and(|prev| taken.taken(prev).is_none()) {
                     return None;
                 }
+                // Цели со сроком в свободной игре нет (§12.465) — тем же
+                // выражением, каким её не берёт `check_goals`.
+                if !mode.keeps(rule) {
+                    return None;
+                }
                 let (have, need) = progress_of(&rule.tests, &facts);
                 Some(GoalSnap {
                     def,
@@ -1032,6 +1045,14 @@ impl Sim {
                     // `check_goals` перестаёт цель брать (инвариант 14).
                     expired: done.is_none() && rule.before.is_some_and(|last| tick > last),
                     parts: done.map(|t| t.parts.clone()).unwrap_or_default(),
+                    // Счёт по каждому условию связки (§12.465): итог испытания
+                    // называет, чего и сколько не хватило, тем же `one_progress`,
+                    // из которого складывается узкое место выше.
+                    steps: rule
+                        .tests
+                        .iter()
+                        .map(|test| one_progress(test, &facts))
+                        .collect(),
                 })
             })
             .collect()
@@ -2224,6 +2245,7 @@ impl Sim {
         ));
         world.insert_resource(Goals::default());
         world.insert_resource(GoalHolds::default());
+        world.insert_resource(GameMode::default());
         world.insert_resource(Raids::default());
         world.insert_resource(RaidTally::default());
         world.insert_resource(Crafted::default());
@@ -2744,6 +2766,19 @@ impl Sim {
         // партия открывается на паузе, и карта штаба до первого тика
         // показала бы одни силуэты.
         sim.note_sites();
+        Ok(sim)
+    }
+
+    /// Новая партия в выбранном режиме (§12.465): `challenge` — испытание
+    /// «месяц изобилия», иначе свободная игра. Режим ставится до первого тика
+    /// и дальше не меняется — команды для этого нет намеренно.
+    pub fn new_game(ruleset_yaml: &str, challenge: bool) -> Result<Sim, JsValue> {
+        let mut sim = Sim::new(ruleset_yaml)?;
+        sim.set_mode(if challenge {
+            GameMode::Challenge
+        } else {
+            GameMode::Free
+        });
         Ok(sim)
     }
 
@@ -9659,6 +9694,10 @@ impl Sim {
         }
 
         let goals_required = self.world.resource::<GoalRules>().required();
+        let mode = match *self.world.resource::<GameMode>() {
+            GameMode::Challenge => "challenge",
+            GameMode::Free => "free",
+        };
         // Лента едет целиком: она ограничена `NEWS_MAX`, а какая новость ещё
         // свежая — решает вид по `tick` и `news` из `meta` (§12.120).
         let news: Vec<NewsSnap> = self
@@ -9746,6 +9785,7 @@ impl Sim {
             notes,
             goals,
             goals_required,
+            mode,
             news,
         })
         .map_err(|e| JsValue::from_str(&e.to_string()))

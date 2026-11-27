@@ -76,7 +76,7 @@ fn narrowest((have, need): &(i32, i32)) -> i32 {
     (have * 100).checked_div(*need).unwrap_or(0)
 }
 
-fn one_progress(test: &GoalTest, w: &WorldFacts) -> (i32, i32) {
+pub(crate) fn one_progress(test: &GoalTest, w: &WorldFacts) -> (i32, i32) {
     match test {
         GoalTest::Tile(tile, count) => (w.tiles_built(*tile), *count),
         // Набор мерится по самому дальнему от цели предмету: пока не хватает
@@ -191,6 +191,7 @@ pub(crate) fn check_goals(
     earned: Res<Earned>,
     standing: Res<Standing>,
     money: Res<Money>,
+    mode: Res<GameMode>,
     mut goals: ResMut<Goals>,
     mut holds: ResMut<GoalHolds>,
     stacks: Query<(&Position, &Stack)>,
@@ -227,6 +228,11 @@ pub(crate) fn check_goals(
     for (def, rule) in rules.0.iter().enumerate() {
         if goals.taken(def).is_some() {
             continue; // взятая цель отметок больше не двигает: они заморожены
+        }
+        // Цели со сроком в свободной игре нет вовсе (§12.465): ни отметок, ни
+        // взятия — как у цели, до которой не дошла очередь.
+        if !mode.keeps(rule) {
+            continue;
         }
         // Цели, до которой очередь не дошла, **не существует** (§12.209): её не
         // видно и её нельзя взять. Второе не строгость ради строгости — «100

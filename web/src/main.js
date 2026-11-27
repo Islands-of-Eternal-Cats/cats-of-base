@@ -386,6 +386,8 @@ const noteEl = document.getElementById("note");
 const goalsEl = document.getElementById("goals");
 const goalsToggleEl = document.getElementById("goals-toggle");
 const finaleEl = document.getElementById("finale");
+const menuEl = document.getElementById("mainmenu");
+const countdownEl = document.getElementById("countdown");
 const raidWinEl = document.getElementById("raidwin");
 raidWinEl.classList.add("screen");
 const stockWinEl = document.getElementById("stockwin");
@@ -1481,9 +1483,10 @@ const worker = new Worker(new URL("./worker.js", import.meta.url), {
 // Сохранение партии (§12.45). Слот один: снимок описывает мир целиком, а
 // выбирать между слотами пока нечем — ни смерти, ни отката в игре нет.
 const SAVE_KEY = "sp.save.v1";
-// Продолжаем ровно один раз за загрузку страницы: `ready` приходит и после
-// самой загрузки снимка, и повторная попытка была бы бесконечной.
-let triedResume = false;
+// Главное меню встаёт ровно один раз за загрузку страницы (§12.465): `ready`
+// приходит и после загрузки снимка, и после новой партии. Автосейв больше не
+// поднимается молча — его продолжает пункт «Продолжить».
+let menuShown = false;
 
 worker.onmessage = (e) => {
   const m = e.data;
@@ -1554,10 +1557,18 @@ worker.onmessage = (e) => {
     layout();
     drawMap(m.map);
     syncRubbleTool();
-    if (!triedResume) {
-      triedResume = true;
-      const saved = localStorage.getItem(SAVE_KEY);
-      if (saved) worker.postMessage({ type: "load", json: saved });
+    // Итог испытания прошлого мира новому ни к чему (§12.465).
+    finaleEl.hidden = true;
+    delete finaleEl.dataset.hold;
+    challengeSeen = null;
+    challengeDue = null;
+    if (worldAsked) {
+      worldAsked = false;
+      gameLive = true;
+    }
+    if (!menuShown) {
+      menuShown = true;
+      showMainMenu();
     }
   } else if (m.type === "map") {
     puffChanged(mapCells, m.map.cells);
@@ -1594,7 +1605,10 @@ worker.onmessage = (e) => {
     // Снимок не подошёл к текущим правилам. Держать его дальше незачем: он
     // не подойдёт и завтра, а базовая партия уже идёт.
     localStorage.removeItem(SAVE_KEY);
-    showError(`Сохранение не загрузилось: ${m.message}. Партия начата заново.`);
+    // Не загрузилось из меню — меню возвращается: за ним мира у игрока нет.
+    worldAsked = false;
+    showError(`Сохранение не загрузилось: ${m.message}.`);
+    if (!gameLive) showMainMenu();
   } else if (m.type === "error") {
     showError(m.message);
   }
@@ -3330,6 +3344,7 @@ function renderSnapshot(snap) {
   // тестами, которые меряют время тиками и ничем другим мерить не могут.
   const day = dayOf(snap.tick);
   tickEl.textContent = day ? `${day}, ${clockOf(snap.tick)}` : snap.tick;
+  syncCountdown(snap);
   liveTitle(tickEl.parentElement, `тик ${snap.tick}`);
   // День и ночь на базе — те же часы, что в шапке; без календаря всегда день.
   if (meta?.day > 0) lighting.setTime((snap.tick % meta.day) / meta.day);
@@ -3774,6 +3789,7 @@ function renderSnapshot(snap) {
   syncRuins();
   renderNotePanel(snap.notes, snap.tick);
   renderGoalsPanel(snap.goals, snap.goals_required, snap);
+  noteChallenge(snap);
   noteSkillUps(snap);
   noteAutoOutings(snap);
   // Последней — подсказка: она читает то, что нарисовали выше, и переприцелится,
@@ -8045,8 +8061,11 @@ function renderGoalsPanel(goals, required, snap) {
   // они не помещаются. Тикер при этом не дублируется: одно событие — одно
   // сообщение. Финал старше и забирает узел себе, но взятая ачивка остаётся
   // кликабельной строкой, так что рассказ не теряется.
-  const award = finale ? null : fresh.find((g) => g.kind === "optional");
-  if (!finale) fresh.forEach((g) => g !== award && showGoalToast(g));
+  // Цель со сроком — это испытание (§12.465): о ней говорит его итог
+  // (`noteChallenge`), а не тикер и не поздравление ачивки.
+  const plain = fresh.filter((g) => !g.before);
+  const award = finale ? null : plain.find((g) => g.kind === "optional");
+  if (!finale) plain.forEach((g) => g !== award && showGoalToast(g));
   if (award) {
     // Фанфара — только на взятии: повторное открытие строкой панели — это
     // перечитывание, а не победа (§12.255).
@@ -8332,9 +8351,311 @@ function showAchievement(g, snap) {
 // Модал живёт вне потока панелей и не перерисовывается каждым кадром, поэтому
 // обычный `click` тут уместен — узел под курсором не сменится (ср. §12.55).
 finaleEl.addEventListener("click", (e) => {
+  const act = e.target.closest("[data-end]")?.dataset.end;
+  if (act) {
+    endChoice(act);
+    return;
+  }
+  // Итог испытания держит экран до выбора (§12.465): клик мимо коробки — не
+  // ответ на «что дальше».
+  if (finaleEl.dataset.hold) return;
   if (!e.target.closest(".finale-close") && e.target !== finaleEl) return;
-  finaleEl.hidden = true;
+  closeFinale();
 });
+
+/// Закрыть модал финала. Итог испытания, отложенный финалом (`challengeDue`),
+/// встаёт следом: два итога в один кадр не помещаются (§12.465).
+function closeFinale() {
+  finaleEl.hidden = true;
+  delete finaleEl.dataset.hold;
+  if (challengeDue && lastSnap) {
+    const due = challengeDue;
+    challengeDue = null;
+    showChallengeEnd(due, lastSnap);
+  }
+}
+
+// --- режим партии: главное меню, отсчёт и итог испытания (§12.465) ----------
+//
+// Режим выбирается один раз, в главном меню, и дальше живёт в ядре
+// (`GameMode`, в снимке). Разница режимов одна: цель со сроком существует только
+// в испытании, — поэтому «испытание» вид находит по самой цели со сроком, а не
+// по своему списку: второй экземпляр правила однажды показал бы отсчёт в
+// свободной игре.
+
+/// Идёт ли за меню настоящая партия. При загрузке страницы воркер поднимает
+/// мир-заглушку, и «Продолжить» тогда значит «поднять автосейв»; после выбора
+/// режима или загрузки — «вернуться к идущей партии».
+let gameLive = false;
+/// Запрошен мир (новая партия или снимок), а `ready` ещё не пришёл. Партия
+/// становится настоящей по ответу воркера, а не по клику: отказ загрузки
+/// оставляет игрока там, откуда он грузил.
+let worldAsked = false;
+/// Состояние испытания в прошлом кадре: `null` — у мира ещё не было кадра
+/// (базовая линия, как у `goalsDoneSeen`), иначе `live` · `won` · `lost` ·
+/// `none` (испытания нет). Итог встаёт только на **переходе** из `live`:
+/// загрузка уже завершённого месяца его не повторяет.
+let challengeSeen = null;
+/// Итог, отложенный финалом партии: оба в один кадр не помещаются, и финал
+/// старше. Встаёт, когда финал закроют (`closeFinale`).
+let challengeDue = null;
+
+/// Цель испытания в этом кадре: первая цель со сроком. В свободной игре ядро
+/// таких не отдаёт вовсе.
+function challengeGoal(snap) {
+  if (snap?.mode !== "challenge") return null;
+  return (snap.goals ?? []).find((g) => g.before > 0) ?? null;
+}
+
+/// Цель испытания по палитре — для подписи пункта меню, когда мира ещё нет.
+function challengeDef() {
+  return (meta?.goals ?? []).find((g) => g.before > 0) ?? null;
+}
+
+function challengeState(g) {
+  if (!g) return "none";
+  if (g.done) return "won";
+  if (g.expired) return "lost";
+  return "live";
+}
+
+/// Отсчёт в шапке: «осталось N дней», за неделю — жёлтый, в последние сутки —
+/// красный. Виден, только пока месяц идёт: после итога шапка говорит обычным
+/// «день N», он и так стоит рядом.
+function syncCountdown(snap) {
+  const g = challengeGoal(snap);
+  const len = meta?.day ?? 0;
+  const live = challengeState(g) === "live";
+  if (countdownEl.hidden === live) countdownEl.hidden = !live;
+  if (!live) return;
+  // `before` — последний тик, на котором цель ещё берётся. Дни округляем
+  // вверх: «осталось 0 дней» при живом сроке читалось бы концом, а на нулевом
+  // тике месяц обязан читаться тридцатью днями, а не тридцатью одним.
+  const left = g.before - snap.tick;
+  const n = len > 0 ? Math.max(1, Math.ceil(left / len)) : left;
+  const text = len > 0 ? `осталось ${days(n)}` : `осталось ${left}`;
+  if (countdownEl.textContent !== text) countdownEl.textContent = text;
+  const alarm = len > 0 && left < len;
+  const warn = !alarm && len > 0 && left < 7 * len;
+  countdownEl.classList.toggle("alarm", alarm);
+  countdownEl.classList.toggle("warn", warn);
+  const def = goalDef(g.def);
+  liveTitle(
+    countdownEl,
+    `Испытание «${def.label || def.id}»: ${def.hint || ""}`,
+  );
+}
+
+/// Итог испытания — на переходе из «месяц идёт» в «собрано» или «истёк».
+function noteChallenge(snap) {
+  const g = challengeGoal(snap);
+  const now = challengeState(g);
+  const was = challengeSeen;
+  challengeSeen = now;
+  if (was !== "live" || now === "live" || now === "none") return;
+  // Финал партии старше и забирает узел (§12.159): итог встанет следом.
+  if (!finaleEl.hidden) {
+    challengeDue = g;
+    return;
+  }
+  showChallengeEnd(g, snap);
+}
+
+/// Экран итога: один на оба исхода, и путей дальше у него четыре —
+/// «Продолжить», «Начать сначала», «Загрузить сохранение», «В главное меню».
+/// Промах по сроку не кончает партию (§12.158): «Продолжить» оставляет мир
+/// целым, и отсчёт уступает обычному дню.
+function showChallengeEnd(g, snap) {
+  const def = goalDef(g.def);
+  const parts = def.parts ?? [];
+  const won = g.done;
+  play(won ? "victory" : "goal");
+  const lines = parts
+    .map((part, i) => {
+      let right;
+      if (won) {
+        const at = g.parts?.[i];
+        right = at !== undefined && dayOf(at) ? `день ${dayOf(at)}` : "✓";
+      } else {
+        // Чего и сколько не хватило — поусловно, тем же счётом, что и
+        // узкое место в панели (`GoalSnap::steps`).
+        const [have, need] = g.steps?.[i] ?? [0, 0];
+        right =
+          have >= need
+            ? "✓"
+            : `<b class="short">${Math.max(0, have)} / ${need}</b>`;
+        return `<div class="cat-row"><span>${esc(goalPartLabel(part))}</span>${right}</div>`;
+      }
+      return `<div class="cat-row"><span>${esc(goalPartLabel(part))}</span><b>${right}</b></div>`;
+    })
+    .join("");
+  const title = won ? esc(def.label || def.id) : "Месяц истёк";
+  const sub = won
+    ? `уложились за ${days(dayOf(g.at) || 1)}`
+    : `«${esc(def.label || def.id)}» не собран — вот чего не хватило`;
+  finaleEl.innerHTML =
+    `<div class="finale-box"><div class="finale-title">${title}</div>` +
+    `<div class="cat-sub">${sub}</div>` +
+    `<div class="finale-list">${lines}</div>` +
+    (won
+      ? ""
+      : `<div class="cat-sub">партия цела: можно играть дальше без срока</div>`) +
+    `<div class="finale-actions">` +
+    `<button class="finale-close" data-end="go">Продолжить</button>` +
+    `<button class="finale-close minor" data-end="again">Начать сначала</button>` +
+    `<button class="finale-close minor" data-end="load">Загрузить сохранение</button>` +
+    `<button class="finale-close minor" data-end="menu">В главное меню</button>` +
+    `</div></div>`;
+  finaleEl.dataset.hold = "1";
+  finaleEl.hidden = false;
+  // Паузу ставит общий `syncModalPause`, как у любого модала.
+}
+
+function endChoice(act) {
+  if (act === "go") {
+    closeFinale();
+  } else if (act === "again") {
+    // Выбор на итоге и есть согласие: спрашивать второй раз незачем.
+    closeFinale();
+    startGame("challenge");
+  } else if (act === "load") {
+    // Итог стоит, пока снимок не загрузится: отменённый выбор файла
+    // возвращает к тем же четырём путям. Закроет его `ready` нового мира.
+    pickSaveFile();
+  } else if (act === "menu") {
+    closeFinale();
+    showMainMenu();
+  }
+}
+
+/// Выбор файла снимка — один на настройки, итог испытания и главное меню:
+/// второй `<input type=file>` разошёлся бы с первым поведением.
+const savePicker = document.createElement("input");
+savePicker.type = "file";
+savePicker.accept = ".json,application/json";
+savePicker.hidden = true;
+document.body.appendChild(savePicker);
+savePicker.addEventListener("change", async () => {
+  const file = savePicker.files?.[0];
+  if (!file) return;
+  const json = await file.text();
+  savePicker.value = ""; // иначе тот же файл второй раз не выберется
+  hideMainMenu();
+  worldAsked = true;
+  worker.postMessage({ type: "load", json });
+});
+
+function pickSaveFile() {
+  savePicker.click();
+}
+
+/// Новая партия в режиме `free` или `challenge`. Чистит автосейв и прочитанные
+/// новости: у новой партии своя лента, а старые ключи гасили бы в ней новости,
+/// которых игрок не видел (§12.120).
+function startGame(mode) {
+  localStorage.removeItem(SAVE_KEY);
+  localStorage.removeItem(NEWS_SEEN_KEY);
+  newsSeen = new Set();
+  worker.postMessage({ type: "newGame", mode });
+  hideMainMenu();
+  worldAsked = true;
+  // Темп сбрасывается вместе с базой: на ×10 первые сутки пролетают, пока
+  // игрок читает записку, а на паузе новая партия выглядит сломанной.
+  setSpeed(1);
+}
+
+function hideMainMenu() {
+  menuEl.hidden = true;
+}
+
+/// Главное меню. Строится при каждом открытии и кадром не перерисовывается,
+/// поэтому обычный `click` тут законен (ср. §12.84).
+function showMainMenu() {
+  hideLiveTip();
+  const saved = localStorage.getItem(SAVE_KEY) !== null;
+  const cdef = challengeDef();
+  const month =
+    cdef && meta?.day > 0 ? days(Math.round(cdef.before / meta.day)) : "";
+  const items = [];
+  if (gameLive) {
+    items.push([
+      "resume",
+      "Вернуться к партии",
+      "продолжить с того же места",
+      true,
+    ]);
+  } else if (saved) {
+    items.push(["continue", "Продолжить", "последнее автосохранение", true]);
+  }
+  items.push([
+    "free",
+    "Свободная игра",
+    "без сроков: база растёт, как захотите",
+    !gameLive && !saved,
+  ]);
+  if (cdef) {
+    items.push([
+      "challenge",
+      `Испытание: ${(cdef.label || cdef.id).toLowerCase()}`,
+      `${month ? `за ${month}` : "к сроку"}: ${cdef.hint || ""}`,
+      false,
+    ]);
+  }
+  items.push(["load", "Загрузить файл", "снимок партии с диска", false]);
+  menuEl.innerHTML =
+    `<div class="menu-box"><div class="menu-title">SP / Эсперы</div>` +
+    items
+      .map(
+        ([act, label, sub, primary]) =>
+          `<button class="menu-item${primary ? " primary" : ""}" data-menu="${act}">` +
+          `<b>${esc(label)}</b><span>${esc(sub)}</span></button>`,
+      )
+      .join("") +
+    `</div>`;
+  menuEl.hidden = false;
+}
+
+menuEl.addEventListener("click", (e) => {
+  const act = e.target.closest("[data-menu]")?.dataset.menu;
+  if (!act) return;
+  if (act === "resume") {
+    hideMainMenu();
+  } else if (act === "continue") {
+    const saved = localStorage.getItem(SAVE_KEY);
+    hideMainMenu();
+    worldAsked = true;
+    if (saved) worker.postMessage({ type: "load", json: saved });
+  } else if (act === "free" || act === "challenge") {
+    // Партия, которую затрёт новая, — идущая или в автосейве, — спрашивается:
+    // автосохранение перепишет её через десяток секунд.
+    const loses = gameLive || localStorage.getItem(SAVE_KEY) !== null;
+    if (loses && !confirm("Начать новую партию? Текущая будет потеряна.")) {
+      return;
+    }
+    startGame(act);
+  } else if (act === "load") {
+    pickSaveFile();
+  }
+});
+
+// Пока стоит меню или итог испытания, клавиши игры молчат: пробел снял бы
+// паузу за модалом, а цифры увели бы темп. Escape у меню идущей партии —
+// «вернуться к ней».
+window.addEventListener(
+  "keydown",
+  (e) => {
+    const held = !menuEl.hidden || !!finaleEl.dataset.hold;
+    if (!held) return;
+    if (e.key === "Escape" && !menuEl.hidden && gameLive) hideMainMenu();
+    e.stopPropagation();
+    // Enter и пробел по кнопке меню или итога — её законный жест.
+    const onButton =
+      e.target instanceof HTMLButtonElement &&
+      (menuEl.contains(e.target) || finaleEl.contains(e.target));
+    if (e.key !== "Tab" && !onButton) e.preventDefault();
+  },
+  true,
+);
 
 // Рецепт и тема — по индексу палитры, как предмет: их `def` в снапшоте это
 // номер записи, а не имя (в отличие от технологии).
@@ -10859,24 +11180,16 @@ function buildToolbar() {
   // Партия стоит первой: это решения, а звук и свет только подстройка.
   const game = mkSetGroup("Партия", true);
 
+  // Новая партия начинается с выбора режима (§12.465): кнопка ведёт в главное
+  // меню, а спрашивает уже оно — на выборе режима.
   const fresh = mkTool(
-    '<span class="sw sw-cursor"></span><span>Новая партия</span>',
+    '<span class="sw sw-cursor"></span><span>Главное меню</span>',
     folds(() => {
-      // Спрашиваем: действие разрушительное и необратимое — автосохранение
-      // затрёт старую партию через десяток секунд.
-      if (!confirm("Начать новую партию? Текущая будет потеряна.")) return;
-      localStorage.removeItem(SAVE_KEY);
-      // ...и прочитанные новости: у новой партии своя лента, а старые ключи
-      // гасили бы в ней новости, которых игрок не видел (§12.120).
-      localStorage.removeItem(NEWS_SEEN_KEY);
-      newsSeen = new Set();
-      worker.postMessage({ type: "newGame" });
-      // Темп сбрасывается вместе с базой: на ×10 первые сутки пролетают, пока
-      // игрок читает записку, а на паузе новая партия выглядит сломанной.
-      setSpeed(1);
+      closeOtherWindows();
+      showMainMenu();
     }),
   );
-  liveTitle(fresh, "Сбросить базу к началу");
+  liveTitle(fresh, "Новая партия, режим, загрузка");
   game.appendChild(fresh);
 
   const dump = mkTool(
@@ -10886,23 +11199,12 @@ function buildToolbar() {
   liveTitle(dump, "Скачать снимок партии");
   game.appendChild(dump);
 
-  const picker = document.createElement("input");
-  picker.type = "file";
-  picker.accept = ".json,application/json";
-  picker.hidden = true;
-  picker.addEventListener("change", async () => {
-    const file = picker.files?.[0];
-    if (!file) return;
-    worker.postMessage({ type: "load", json: await file.text() });
-    picker.value = ""; // иначе тот же файл второй раз не выберется
-  });
   const restore = mkTool(
     '<span class="sw sw-scrap"></span><span>Загрузить файл</span>',
-    folds(() => picker.click()),
+    folds(() => pickSaveFile()),
   );
   liveTitle(restore, "Открыть снимок партии");
   game.appendChild(restore);
-  game.appendChild(picker);
 
   const trace = mkTool(
     '<span class="sw sw-hire"></span><span>Скачать трейс</span>',
@@ -16587,7 +16889,9 @@ function wikiDigestHtml() {
   const rows = shown
     .filter(
       (k) =>
-        !shown.some((j) => j !== k && links.get(j).has(k) && !links.get(k).has(j)),
+        !shown.some(
+          (j) => j !== k && links.get(j).has(k) && !links.get(k).has(j),
+        ),
     )
     .map(
       (k) =>
@@ -20997,7 +21301,8 @@ let modalResume = null;
 function syncModalPause() {
   const open =
     WINDOWS.some(([key, isOpen]) => !RUNNING_WINDOWS.has(key) && isOpen()) ||
-    !finaleEl.hidden;
+    !finaleEl.hidden ||
+    !menuEl.hidden;
   if (open === modalWas) return;
   modalWas = open;
   if (open) {

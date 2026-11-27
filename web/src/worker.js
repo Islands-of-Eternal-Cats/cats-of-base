@@ -398,7 +398,9 @@ onmessage = (e) => {
       });
     }
   } else if (m.type === "newGame" && yamlText) {
-    sim = new Sim(yamlText);
+    // Режим партии (§12.465): `challenge` — испытание со сроком, иначе
+    // свободная игра. Ставится до первого тика и дальше не меняется.
+    sim = Sim.new_game(yamlText, m.mode === "challenge");
     announce();
   } else if (m.type === "trace" && sim) {
     postMessage({ type: "traced", text: sim.trace() });

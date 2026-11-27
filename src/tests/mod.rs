@@ -178,6 +178,7 @@ fn sim_from(rows: &[&str]) -> Sim {
     world.insert_resource(Mastery::default());
     world.insert_resource(Reached::default());
     world.insert_resource(RubbleMet::default());
+    world.insert_resource(GameMode::default());
     world.insert_resource(PerkRules::default());
     world.insert_resource(AbilityRules::default());
     // Лента новостей (§12.120) заводится всегда, как три журнала целей: она не

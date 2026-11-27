@@ -2083,6 +2083,94 @@ body.crew-dragging * {
 .finale-close:hover {
   background: rgba(224, 192, 96, 0.12);
 }
+/* Итог испытания (§12.465): четыре пути дальше, «Продолжить» — главный. */
+.finale-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.finale-actions .finale-close {
+  margin-top: 0;
+}
+.finale-actions .finale-close.minor {
+  border-color: var(--line);
+  color: var(--muted, #aaa);
+}
+.finale-list .cat-row b.short {
+  color: #e07060;
+}
+
+/* Главное меню (§12.465). Накрывает и шапку: до выбора режима скорость и
+   двери ничего не значат, а мир за меню — заглушка. */
+#mainmenu {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(14, 15, 19, 0.88);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+}
+#mainmenu[hidden] {
+  display: none;
+}
+.menu-box {
+  width: min(420px, calc(100vw - 32px));
+  padding: 24px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+}
+.menu-title {
+  color: var(--accent);
+  font-size: 22px;
+  font-weight: 600;
+  text-align: center;
+  margin-bottom: 18px;
+}
+.menu-item {
+  display: block;
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.menu-item:hover {
+  border-color: var(--accent);
+  background: rgba(224, 192, 96, 0.08);
+}
+.menu-item.primary {
+  border-color: var(--accent);
+}
+.menu-item b {
+  display: block;
+  color: var(--accent);
+  font-size: 15px;
+}
+.menu-item span {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+/* Отсчёт испытания (§12.465): за неделю жёлтый, в последние сутки красный. */
+.clock.countdown.warn {
+  color: #e0c060;
+}
+.clock.countdown.alarm {
+  color: #e06050;
+  font-weight: 600;
+}
 
 /* Кто из отряда сейчас не уйдёт — спит, ранен или ещё в поле (§12.70). Не
    прячем и не вычёркиваем: он по-прежнему в бригаде, просто эта вылазка идёт

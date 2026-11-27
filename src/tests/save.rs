@@ -996,3 +996,17 @@ fn a_captive_keeps_its_site_through_a_save() {
         "загруженный пленный забыл, где его держат",
     );
 }
+
+/// **Режим партии переживает снимок** (§12.465): загруженное испытание не
+/// становится свободной игрой, и наоборот.
+#[test]
+fn the_game_mode_survives_a_reload() {
+    for mode in [GameMode::Free, GameMode::Challenge] {
+        let mut live = Sim::new(CORE).expect("рулсет");
+        live.set_mode(mode);
+        live.tick_n(3);
+        let json = live.save().expect("снимок");
+        let loaded = Sim::load_from(CORE, &json).expect("загрузка");
+        assert_eq!(*loaded.world.resource::<GameMode>(), mode);
+    }
+}

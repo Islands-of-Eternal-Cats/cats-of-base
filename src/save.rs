@@ -56,7 +56,7 @@ use crate::map::BaseMap;
 /// помнить — чинится тем же приёмом, что и сторож состава: тест считает
 /// отпечаток имён полей всех DTO и сверяет с константой рядом, а расхождение
 /// требует поднять `FORMAT`. На POC решено не заводить (§12.45).
-pub(crate) const FORMAT: u32 = 57;
+pub(crate) const FORMAT: u32 = 58;
 
 /// Что уходит в снимок. Порядок — как в `components.rs`: сперва компоненты,
 /// потом ресурсы состояния.
@@ -190,6 +190,9 @@ pub(crate) const SAVED: &[&str] = &[
     // Разбирали ли завал хоть раз (§12.449): без этого загруженная партия
     // снова спрятала бы инструмент «Расчистить».
     "RubbleMet",
+    // Режим партии (§12.465): без него загруженное испытание стало бы
+    // свободной игрой или наоборот.
+    "GameMode",
     "Chronicle",
     "Goals",
     "Raids",
@@ -399,6 +402,8 @@ pub(crate) struct StateDto {
     /// Разбирали ли завал хоть раз (§12.449). `FORMAT` 57.
     #[serde(default)]
     pub(crate) rubble_met: bool,
+    /// Режим партии (§12.465). `FORMAT` 58.
+    pub(crate) mode: GameMode,
     /// Журнал сработавших событий: `(индекс события, была ли база готова)`.
     pub(crate) chronicle: Vec<(usize, bool)>,
     /// Взятые цели: `(индекс цели, тик взятия)` (§12.58).
@@ -1039,6 +1044,7 @@ pub(crate) fn capture(world: &World, ruleset: u64) -> SaveFile {
             mastery: world.resource::<Mastery>().0.clone(),
             reached: world.resource::<Reached>().0.clone(),
             rubble_met: world.resource::<RubbleMet>().0,
+            mode: *world.resource::<GameMode>(),
             chronicle: chronicle.0.iter().map(|h| (h.def, h.ready)).collect(),
             goals: world
                 .resource::<Goals>()
@@ -1234,6 +1240,7 @@ pub(crate) fn restore(world: &mut World, file: &SaveFile) {
         }
     }
     world.resource_mut::<RubbleMet>().0 = s.rubble_met;
+    *world.resource_mut::<GameMode>() = s.mode;
     {
         let mut reached = world.resource_mut::<Reached>();
         for (tile, &r) in s.reached.iter().enumerate() {

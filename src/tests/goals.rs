@@ -843,3 +843,89 @@ fn the_shipped_ruleset_opens_one_goal_at_a_time() {
     let open = sim.goals().iter().filter(|g| g.kind == "required").count();
     assert_eq!(open, 1, "обязательных целей на старте {open}, а не одна");
 }
+
+// --- режим партии (§12.465) ---------------------------------------------------
+
+/// **В свободной игре цели со сроком нет вовсе**: ни в панели, ни во взятии —
+/// даже когда условие сошлось до срока.
+#[test]
+fn free_play_never_takes_a_dated_goal() {
+    let mut sim = sim_from(&["#####", "#a..#", "#####"]);
+    sim.set_mode(GameMode::Free);
+    sim.set_items(2);
+    sim.set_capacity(0, 100);
+    let goal = sim.set_optional_goal(vec![GoalTest::Stored(vec![(SCRAP, 5)])], Some(50));
+
+    sim.put_item(2, 1, SCRAP, 5);
+    sim.tick_n(5);
+    assert!(!sim.goal_taken(goal), "свободная игра взяла цель со сроком");
+    assert!(
+        !sim.goal_is_visible(goal),
+        "свободная игра показала цель со сроком"
+    );
+}
+
+/// **Цели без срока свободная игра не трогает**: учебная очередь одна на оба
+/// режима, и необязательная без срока остаётся вызовом и там.
+#[test]
+fn free_play_keeps_undated_goals() {
+    let mut sim = sim_from(&["#####", "#a..#", "#####"]);
+    sim.set_mode(GameMode::Free);
+    sim.set_items(2);
+    sim.set_capacity(0, 100);
+    let goal = sim.set_optional_goal(vec![GoalTest::Stored(vec![(SCRAP, 5)])], None);
+
+    sim.put_item(2, 1, SCRAP, 5);
+    sim.tick_n(5);
+    assert!(
+        sim.goal_taken(goal),
+        "свободная игра не взяла цель без срока"
+    );
+}
+
+/// **Итог испытания видит счёт по каждому условию** — тем же выражением, что
+/// и узкое место: строки итога обязаны сходиться со счётчиком панели.
+#[test]
+fn a_goal_reports_every_condition_separately() {
+    let mut sim = sim_from(&["#####", "#a..#", "#####"]);
+    sim.set_items(2);
+    sim.set_capacity(0, 100);
+    let goal = sim.set_optional_goal(
+        vec![GoalTest::Stored(vec![(SCRAP, 5)]), GoalTest::Cats(3)],
+        Some(50),
+    );
+    sim.put_item(2, 1, SCRAP, 2);
+    sim.tick_n(2);
+    let snap = sim.goals().into_iter().find(|g| g.def == goal).unwrap();
+    assert_eq!(snap.steps, vec![(2, 5), (1, 3)]);
+    assert_eq!((snap.have, snap.need), (1, 3), "узкое место — коты");
+}
+
+/// **Боевой рулсет: в свободной игре ни одной цели со сроком, в испытании — есть.**
+///
+/// Первое — обещание меню: «свободная игра» без единого дедлайна. Второе —
+/// само испытание: без цели со сроком пункт меню вёл бы в ту же песочницу.
+#[test]
+fn the_shipped_ruleset_dates_nothing_in_free_play() {
+    let mut sim = shipped();
+    assert!(
+        sim.goal_specs()
+            .iter()
+            .any(|(_, _, before)| before.is_some()),
+        "в рулсете нет цели со сроком — испытанию нечего отсчитывать"
+    );
+    sim.set_mode(GameMode::Free);
+    // Очередь целей открываем целиком: отсеивать обязан режим, а не очередь.
+    let n = sim.goal_specs().len();
+    for def in 0..n {
+        sim.world.resource_mut::<GoalRules>().0[def].after = None;
+    }
+    sim.tick_n(2);
+    for g in sim.goals() {
+        assert_eq!(
+            g.before, 0,
+            "в свободной игре видна цель {} со сроком",
+            g.def
+        );
+    }
+}
