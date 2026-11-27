@@ -12228,6 +12228,64 @@ function raidGate(i, node) {
   };
 }
 
+// Состав заказа кругами (§12.464): влезает ли отряд в этот заказ. Отвечает
+// не на «кто в отряде» — это левая колонка, — а на «сколько ещё можно и не
+// лишний ли кто», поэтому имён на виду нет: портрет в 18 px кота не называет,
+// и ряд работает счётчиком. Имя и вклад — в подсказке круга.
+//
+// Кругов четыре вида: кот отряда (приглушён, если сбор его ждёт), лишний
+// сверх предела (перечёркнут — заказ его не уведёт), пустое место до минимума
+// (сплошной контур: без него доля и срок хуже) и место от минимума до предела
+// (пунктир, тише: можно, но не нужно). Минимум вилки — рекомендация (§12.113),
+// и пунктир не зовёт заполнять. У разведки (`stealth`) каждая лишняя лапа
+// поднимает опасность, поэтому пунктира там нет вовсе — приглашение вредило бы.
+//
+// Круги не нажимаются: состав меняется только слева и только в правке
+// (§12.359). Пока отряд в поле, его в ряду нет (§12.182) — остаётся вилка.
+function crewPips(def, node, g) {
+  const { need, most } = g;
+  const names = g.busy ? [] : (node.crew ?? []);
+  const waits = new Set(node.unfit ?? []);
+  const ents = lastSnap?.entities ?? [];
+  const pips = [];
+  names.forEach((id, k) => {
+    const e = ents.find((u) => u.id === id);
+    const over = k >= most;
+    const off = waits.has(id);
+    const tip = [
+      id,
+      e?.raid_force != null ? `сила ${e.raid_force}` : "",
+      over ? `лишний: больше ${most} этот заказ не уводит` : "",
+      off ? "сбор его ждёт" : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    pips.push(
+      `<span class="pip cat${over ? " over" : ""}${off ? " off" : ""}" data-tip="${esc(tip)}">` +
+        portraitHtml(e?.sprite, "pip-face") +
+        "</span>",
+    );
+  });
+  const lever = (def.work ?? 0) > 0;
+  for (let k = names.length; k < most; k++) {
+    if (k < need) {
+      pips.push(
+        `<span class="pip need" data-tip="${esc(`заказ рассчитан на ${need} — меньшим составом доля и срок хуже`)}"></span>`,
+      );
+    } else if (!def.stealth) {
+      pips.push(
+        `<span class="pip may" data-tip="${esc(
+          lever
+            ? "можно взять ещё: работа поделится на больше лап, но бодрость платит каждый"
+            : "можно взять ещё, но срок от состава не зависит, а бодрость платит каждый",
+        )}"></span>`,
+      );
+    }
+  }
+  const range = need === most ? `${need}` : `${need}—${most}`;
+  return `<span class="pips">${pips.join("")}<em>${range}</em></span>`;
+}
+
 // Добыча «станет» (§12.293): что изменится, когда отряд наденет приписанное, —
 // обычно образцы от пробоотборников. Числа считает ядро (`loots_next`, тот же
 // `loot_count`); здесь только пары, которые разошлись с нынешними.
@@ -20407,10 +20465,7 @@ function raidCard(i, node) {
       ]);
     }
   }
-  facts.push([
-    "состав",
-    g.need === g.most ? `нужно котов ${g.need}` : `котов ${g.need}—${g.most}`,
-  ]);
+  facts.push(["состав", crewPips(def, node, g)]);
   facts.push(...missionCostFacts(def, empty ? null : g.share));
   rows.push(
     '<div class="raid-facts">' +
